@@ -1,0 +1,12 @@
+{
+  "name": "aaa-lookup-service",
+  "version": "1.0.0",
+  "dependencies": [
+    "drogon",
+    "prometheus-cpp",
+    "spdlog",
+    "jwt-cpp",
+    "openssl",
+    "nlohmann-json"
+  ]
+}
