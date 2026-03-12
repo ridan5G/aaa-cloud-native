@@ -141,13 +141,18 @@ void LookupController::lookup(
     // ── 4. Async DB query (read replica only — see Plan 3) ────────────────
     auto dbClient = drogon::app().getDbClient("aaa_replica");
 
-    // Capture apn + imsi by value into the async callbacks.
+    // Wrap callback in shared_ptr — both success and error lambdas need it,
+    // but std::move can only transfer ownership once.
+    auto sharedCb = std::make_shared<std::function<void(const drogon::HttpResponsePtr&)>>(
+        std::move(callback));
+
     dbClient->execSqlAsync(
         HOT_PATH_SQL,
 
         // ── Success callback ──────────────────────────────────────────────
-        [callback = std::move(callback), imsi, apn, t0](
+        [sharedCb, imsi, apn, t0](
                 const drogon::orm::Result& result) mutable {
+            auto& callback = *sharedCb;
 
             auto& metrics = Metrics::instance();
             metrics.decrementInFlight();
@@ -227,8 +232,9 @@ void LookupController::lookup(
         },
 
         // ── DB error callback ─────────────────────────────────────────────
-        [callback = std::move(callback), imsi, t0](
+        [sharedCb, imsi, t0](
                 const drogon::orm::DrogonDbException& ex) mutable {
+            auto& callback = *sharedCb;
 
             auto& metrics = Metrics::instance();
             metrics.decrementInFlight();

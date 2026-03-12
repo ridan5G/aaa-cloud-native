@@ -3,13 +3,16 @@ FROM ubuntu:24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
     build-essential cmake ninja-build git curl zip unzip tar pkg-config \
+    bison flex autoconf automake libtool m4 \
     libssl-dev libpq-dev uuid-dev zlib1g-dev libjsoncpp-dev \
     libbrotli-dev libc-ares-dev libhiredis-dev \
+    && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 # ca config
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates git \
+    ca-certificates git curl bison flex \
  && update-ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 # vcpkg for C++ dependency management
@@ -48,6 +51,10 @@ COPY --from=builder /workspace/build/aaa_lookup_service /usr/local/bin/aaa_looku
 
 # JWT public key mount point (injected at runtime via K8s secret)
 RUN mkdir -p /etc/jwt && chown aaa:aaa /etc/jwt
+
+# Writable working directory — Drogon creates ./uploads/tmp/ on startup
+RUN mkdir -p /app/uploads && chown -R aaa:aaa /app
+WORKDIR /app
 
 USER aaa
 
