@@ -60,6 +60,22 @@ services:
       interval: 5s
       retries: 12
 
+  aaa-radius-server:
+    image: k3d-aaa-registry.localhost:5111/aaa-radius-server:dev
+    environment:
+      RADIUS_PORT: "1812"
+      RADIUS_SECRET: "testing123"
+      LOOKUP_URL: "http://aaa-lookup-service:8081"
+      PROVISIONING_URL: "http://subscriber-profile-api:8080"
+      WORKER_THREADS: "8"
+    ports:
+      - "1812:1812/udp"
+    depends_on:
+      aaa-lookup-service:
+        condition: service_healthy
+      subscriber-profile-api:
+        condition: service_healthy
+
   pushgateway:
     image: prom/pushgateway:v1.8.0
     ports:
@@ -68,15 +84,20 @@ services:
   tester:
     build: .
     environment:
-      PROVISION_URL: "http://subscriber-profile-api:8080/v1"
-      LOOKUP_URL:    "http://aaa-lookup-service:8081/v1"
-      TEST_JWT:      "dev-skip-verify"
+      PROVISION_URL:   "http://subscriber-profile-api:8080/v1"
+      LOOKUP_URL:      "http://aaa-lookup-service:8081/v1"
+      TEST_JWT:        "dev-skip-verify"
       PUSHGATEWAY_URL: "http://pushgateway:9091"
+      RADIUS_HOST:     "aaa-radius-server"
+      RADIUS_PORT:     "1812"
+      RADIUS_SECRET:   "testing123"
     depends_on:
       subscriber-profile-api:
         condition: service_healthy
       aaa-lookup-service:
         condition: service_healthy
+      aaa-radius-server:
+        condition: service_started
     volumes:
       - ./results:/app/results    # JUnit XML + timing CSV written here
 

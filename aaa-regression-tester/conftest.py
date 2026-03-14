@@ -18,6 +18,11 @@ PROVISION_BASE = os.getenv("PROVISION_URL", "http://localhost:8080/v1")
 LOOKUP_BASE    = os.getenv("LOOKUP_URL",    "http://localhost:8081/v1")
 JWT_TOKEN      = os.getenv("TEST_JWT",      "dev-skip-verify")
 
+# ── RADIUS server (test_12) ───────────────────────────────────────────────────
+RADIUS_HOST   = os.getenv("RADIUS_HOST",   "localhost")
+RADIUS_PORT   = int(os.getenv("RADIUS_PORT",   "1812"))
+RADIUS_SECRET = os.getenv("RADIUS_SECRET", "testing123")
+
 # ── Common test data ──────────────────────────────────────────────────────────
 ACCOUNT_NAME   = "TestAccount"
 SUBNET_24      = "100.65.120.0/24"
@@ -58,6 +63,13 @@ def lookup_http() -> Generator[httpx.Client, None, None]:
         timeout=10.0,
     ) as client:
         yield client
+
+
+@pytest.fixture(scope="session")
+def radius_client():
+    """RADIUS client pointed at aaa-radius-server (UDP)."""
+    from fixtures.radius import RadiusClient
+    return RadiusClient(RADIUS_HOST, RADIUS_PORT, RADIUS_SECRET)
 
 
 @pytest.fixture(scope="session")
