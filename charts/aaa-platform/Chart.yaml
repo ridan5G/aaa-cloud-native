@@ -1,0 +1,56 @@
+apiVersion: v2
+name: aaa-platform
+description: >
+  AAA Cloud-Native Platform — umbrella Helm chart.
+  Declares all sub-charts as versioned local dependencies.
+  A single helm upgrade --install with the right values file
+  brings up the complete stack.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+
+dependencies:
+  # ── Core infrastructure ──────────────────────────────────────
+  - name: aaa-database
+    version: "1.0.0"
+    repository: "file://../aaa-database"
+    condition: aaa-database.enabled
+
+  # ── Application services ─────────────────────────────────────
+  - name: aaa-lookup-service
+    version: "1.0.0"
+    repository: "file://../aaa-lookup-service"
+    condition: aaa-lookup-service.enabled
+
+  - name: subscriber-profile-api
+    version: "1.0.0"
+    repository: "file://../subscriber-profile-api"
+    condition: subscriber-profile-api.enabled
+
+  # ── Management UI ────────────────────────────────────────────
+  - name: aaa-management-ui
+    version: "1.0.0"
+    repository: "file://../aaa-management-ui"
+    condition: aaa-management-ui.enabled
+
+  # ── Observability stack ──────────────────────────────────────
+  - name: kube-prometheus-stack
+    version: "55.x.x"
+    repository: "https://prometheus-community.github.io/helm-charts"
+    condition: kube-prometheus-stack.enabled
+
+  - name: prometheus-pushgateway
+    version: "2.x.x"
+    repository: "https://prometheus-community.github.io/helm-charts"
+    condition: prometheus-pushgateway.enabled
+
+  # ── One-time jobs (disabled by default — run manually) ───────
+  - name: aaa-migration
+    version: "1.0.0"
+    repository: "file://../aaa-migration"
+    condition: aaa-migration.enabled
+
+  - name: aaa-regression-tester
+    version: "1.0.0"
+    repository: "file://../aaa-regression-tester"
+    condition: aaa-regression-tester.enabled

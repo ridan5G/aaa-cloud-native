@@ -1,0 +1,102 @@
+# ══════════════════════════════════════════════════════════════════
+# aaa-database — default production values
+# Override per environment via values-dev.yaml / values-oci.yaml
+# ══════════════════════════════════════════════════════════════════
+
+# Override the CNPG Cluster resource name.
+# CNPG appends "-<n>" for pod names, so keep this short (≤ 50 chars).
+# Default (empty): <fullname>-postgres  e.g. "aaa-platform-aaa-database-postgres"
+# Recommended dev override: "aaa-postgres"  → pods: aaa-postgres-1, aaa-postgres-2
+clusterNameOverride: ""
+
+# ── PostgreSQL Cluster ──────────────────────────────────────────
+postgresql:
+  # CNPG PostgreSQL image — must be 15+ for UNIQUE NULLS NOT DISTINCT
+  imageName: ghcr.io/cloudnative-pg/postgresql:15.6
+
+  # Number of instances (1 primary + N-1 sync standbys)
+  instances: 3
+
+  storage:
+    size: 50Gi
+    storageClass: ""          # empty = cluster default storage class
+
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "4Gi"
+
+  # PostgreSQL configuration parameters
+  parameters:
+    max_connections: "200"
+    shared_buffers: "512MB"
+    work_mem: "8MB"
+    maintenance_work_mem: "128MB"
+    effective_cache_size: "1GB"
+    wal_level: logical
+
+  # Application database and user created during initdb bootstrap
+  database: aaa
+  appUser: aaa_app
+
+  # App user password — REQUIRED.
+  # Set via:  --set postgresql.appPassword=<secret>
+  # Or provide a separate values override file (never commit plaintext passwords).
+  appPassword: ""
+
+  # If you pre-create a Kubernetes Secret with keys "username" and "password",
+  # set its name here and leave appPassword empty.
+  # The chart will NOT create a new secret; it will reference this one instead.
+  existingAppSecret: ""
+
+  # Name of the Secret that this chart creates (when appPassword is set).
+  # App sub-charts reference this name via their db.secretName value.
+  appCredentialsSecretName: aaa-db-credentials
+
+  # Prometheus monitoring via CNPG PodMonitor
+  monitoring:
+    enabled: true
+
+# ── PgBouncer Connection Poolers ───────────────────────────────
+pgbouncer:
+
+  # RW pooler — routes to the primary; used by subscriber-profile-api (writes)
+  rw:
+    enabled: true
+    instances: 2
+    poolMode: transaction
+    parameters:
+      max_client_conn: "1000"
+      default_pool_size: "20"
+      reserve_pool_size: "5"
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "64Mi"
+      limits:
+        cpu: "500m"
+        memory: "128Mi"
+
+  # RO pooler — routes to sync standbys; used by aaa-lookup-service (reads)
+  ro:
+    enabled: true
+    instances: 2
+    poolMode: transaction
+    parameters:
+      max_client_conn: "2000"
+      default_pool_size: "20"
+      reserve_pool_size: "5"
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "64Mi"
+      limits:
+        cpu: "500m"
+        memory: "128Mi"
+
+# ── Helm name overrides ─────────────────────────────────────────
+nameOverride: ""
+fullnameOverride: ""

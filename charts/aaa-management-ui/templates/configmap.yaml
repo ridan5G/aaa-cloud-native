@@ -1,0 +1,54 @@
+---
+# nginx vhost — handles SPA routing, API proxy, stub_status, and /health
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aaa-management-ui.fullname" . }}-nginx
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aaa-management-ui.labels" . | nindent 4 }}
+data:
+  default.conf: |
+    server {
+        listen 80;
+        root /usr/share/nginx/html;
+        index index.html;
+
+        location / {
+            try_files $uri $uri/ /index.html;
+        }
+
+        location /v1/ {
+            proxy_pass http://{{ .Values.apiServiceName }}:{{ .Values.apiServicePort }}/v1/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+
+        location /nginx_status {
+            stub_status on;
+            allow 127.0.0.1;
+            deny all;
+        }
+
+        location /health {
+            return 200 "ok\n";
+            add_header Content-Type text/plain;
+        }
+    }
+---
+# Runtime app config — sets window.APP_CONFIG in the browser
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aaa-management-ui.fullname" . }}-appconfig
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aaa-management-ui.labels" . | nindent 4 }}
+data:
+  config.js: |
+    window.APP_CONFIG = {
+      apiBaseUrl: {{ .Values.appConfig.apiBaseUrl | quote }},
+      oidcAuthority: {{ .Values.appConfig.oidcAuthority | quote }},
+      oidcClientId: {{ .Values.appConfig.oidcClientId | quote }}
+    };

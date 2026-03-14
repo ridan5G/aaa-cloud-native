@@ -1,0 +1,9 @@
+apiVersion: v2
+name: subscriber-profile-api
+description: >
+  AAA provisioning REST API. CRUD for subscriber profiles, IP pools,
+  IMSI range configs, and bulk operations. Handles first-connection
+  IP allocation on behalf of FreeRADIUS.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

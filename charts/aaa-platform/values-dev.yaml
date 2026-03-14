@@ -1,0 +1,250 @@
+# ══════════════════════════════════════════════════════════════════
+# values-dev.yaml — local / testing environment overrides
+#
+# Deploy with:
+#   helm upgrade --install aaa-platform ./charts/aaa-platform \
+#     -f ./charts/aaa-platform/values-dev.yaml \
+#     -n aaa-platform --create-namespace
+#
+# Or simply: make deploy
+# ══════════════════════════════════════════════════════════════════
+
+createNamespace: false
+
+# ── Database ─────────────────────────────────────────────────────
+aaa-database:
+  enabled: true
+  clusterNameOverride: aaa-postgres      # pods: aaa-postgres-1
+  postgresql:
+    instances: 1                          # no HA in dev/test
+    imageName: ghcr.io/cloudnative-pg/postgresql:15.6
+    storage:
+      size: 5Gi
+      storageClass: hostpath              # docker desktop default
+    parameters:
+      max_connections: "50"
+      shared_buffers: "128MB"
+      work_mem: "4MB"
+      maintenance_work_mem: "64MB"
+      effective_cache_size: "256MB"
+      wal_level: logical
+    appPassword: devpassword              # dev only — never commit prod passwords
+    appCredentialsSecretName: aaa-db-credentials
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "1"
+        memory: "1Gi"
+    monitoring:
+      enabled: false
+  pgbouncer:
+    rw:
+      enabled: true
+    ro:
+      enabled: false          # no read replicas in single-instance dev
+      instances: 1
+      parameters:
+        max_client_conn: "100"
+        default_pool_size: "10"
+        reserve_pool_size: "5"
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "32Mi"
+        limits:
+          cpu: "200m"
+          memory: "64Mi"
+    ro:
+      enabled: true
+      instances: 1
+      parameters:
+        max_client_conn: "100"
+        default_pool_size: "10"
+        reserve_pool_size: "5"
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "32Mi"
+        limits:
+          cpu: "200m"
+          memory: "64Mi"
+
+# ── AAA Lookup Service ────────────────────────────────────────────
+aaa-lookup-service:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: aaa/aaa-lookup-service
+    tag: "dev"
+    pullPolicy: Never
+  db:
+    secretName: aaa-db-credentials
+  jwt:
+    skipVerify: "true"   # no JWT enforcement in dev
+  autoscaling:
+    enabled: false       # fixed 1 replica
+  podDisruptionBudget:
+    minAvailable: 0      # allow full eviction on single replica
+  monitoring:
+    enabled: false
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+
+# ── Provisioning API ─────────────────────────────────────────────
+subscriber-profile-api:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: ""       # SET THIS: e.g. myregistry.io/aaa/subscriber-profile-api
+    tag: "dev"
+    pullPolicy: Always
+  db:
+    secretName: aaa-db-credentials
+  jwt:
+    skipVerify: "true"
+  bulkJob:
+    workerThreads: 2
+    batchSize: 500
+  autoscaling:
+    enabled: false
+  podDisruptionBudget:
+    minAvailable: 0
+  monitoring:
+    enabled: true
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "512Mi"
+
+# ── Management UI ────────────────────────────────────────────
+aaa-management-ui:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: aaa/aaa-management-ui
+    tag: "dev"
+    pullPolicy: Never
+  ingress:
+    enabled: true
+    className: nginx
+    host: ui.aaa.localhost
+    tls:
+      enabled: false
+  appConfig:
+    apiBaseUrl: "http://provisioning.aaa.localhost/v1"
+    oidcAuthority: "http://auth.aaa.localhost/realms/aaa"
+    oidcClientId: "aaa-management-ui"
+  apiServiceName: "aaa-platform-subscriber-profile-api"
+  apiServicePort: 8080
+  monitoring:
+    enabled: false
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
+
+# ── Prometheus + Grafana (kube-prometheus-stack) ──────────────────
+kube-prometheus-stack:
+  enabled: true
+  grafana:
+    enabled: true
+    adminPassword: "dev-grafana"
+    ingress:
+      enabled: true
+      ingressClassName: nginx
+      hosts:
+        - grafana.aaa.localhost
+      tls: []
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "200m"
+        memory: "256Mi"
+    persistence:
+      enabled: false
+    sidecar:
+      dashboards:
+        enabled: true
+        searchNamespace: aaa-platform
+    additionalDataSources:
+      - name: Prometheus
+        type: prometheus
+        url: http://aaa-platform-kube-prometheus-prometheus:9090
+        access: proxy
+        isDefault: true
+  prometheus:
+    ingress:
+      enabled: true
+      ingressClassName: nginx
+      hosts:
+        - prometheus.aaa.localhost
+      tls: []
+    prometheusSpec:
+      retention: 6h
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "512Mi"
+        limits:
+          cpu: "500m"
+          memory: "1Gi"
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            storageClassName: local-path
+            resources:
+              requests:
+                storage: 5Gi
+      podMonitorSelectorNilUsesHelmValues: false
+      serviceMonitorSelectorNilUsesHelmValues: false
+  alertmanager:
+    enabled: false
+  nodeExporter:
+    enabled: true
+  kubeStateMetrics:
+    enabled: true
+
+# ── Prometheus Pushgateway ─────────────────────────────────────────
+prometheus-pushgateway:
+  enabled: true
+  resources:
+    requests:
+      cpu: "10m"
+      memory: "32Mi"
+    limits:
+      cpu: "100m"
+      memory: "64Mi"
+
+# ── Migration — disabled; run manually ────────────────────────────
+aaa-migration:
+  enabled: false
+  staging:
+    storageClass: local-path
+
+# ── Regression Tester ────────────────────────────────────────────
+aaa-regression-tester:
+  enabled: false        # requires subscriber-profile-api + aaa-test-jwt secret
+  image:
+    repository: aaa/aaa-regression-tester
+    tag: "dev"
+    pullPolicy: Never
+  env:
+    PROVISION_URL: "http://subscriber-profile-api:8080/v1"
+    LOOKUP_URL: "http://aaa-lookup-service:8081/v1"
+    PUSHGATEWAY_URL: "http://prometheus-pushgateway:9091"
+  jwtSecretName: aaa-test-jwt

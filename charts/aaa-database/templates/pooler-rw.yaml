@@ -1,0 +1,47 @@
+{{/*
+CloudNativePG Pooler — Read/Write (primary).
+
+Sits in front of the primary instance only (type: rw).
+Used by:
+  - subscriber-profile-api  (all writes, bulk upserts, first-connection allocation)
+
+Connection: <pooler-name>.<namespace>.svc.cluster.local:5432
+Exposed as Secret key 'host-rw' in {{ appCredentialsSecretName }}.
+
+Ref: https://cloudnative-pg.io/documentation/current/connection_pooling/
+*/}}
+{{- if .Values.pgbouncer.rw.enabled }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: {{ include "aaa-database.poolerRWName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aaa-database.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pgbouncer-rw
+spec:
+  # Target cluster
+  cluster:
+    name: {{ include "aaa-database.clusterName" . }}
+
+  # Number of PgBouncer pod replicas
+  instances: {{ .Values.pgbouncer.rw.instances }}
+
+  # Route only to the primary instance
+  type: rw
+
+  pgbouncer:
+    poolMode: {{ .Values.pgbouncer.rw.poolMode | quote }}
+    parameters:
+      {{- range $key, $val := .Values.pgbouncer.rw.parameters }}
+      {{ $key }}: {{ $val | quote }}
+      {{- end }}
+
+  # Resource requests / limits for each PgBouncer pod
+  template:
+    spec:
+      containers:
+        - name: pgbouncer
+          resources:
+            {{- toYaml .Values.pgbouncer.rw.resources | nindent 12 }}
+{{- end }}

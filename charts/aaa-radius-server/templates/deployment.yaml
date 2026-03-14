@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aaa-radius-server.fullname" . }}
+  labels:
+    {{- include "aaa-radius-server.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "aaa-radius-server.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "aaa-radius-server.selectorLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+      containers:
+        - name: aaa-radius-server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: radius-auth
+              containerPort: 1812
+              protocol: UDP
+          env:
+            - name: RADIUS_PORT
+              value: "1812"
+            - name: RADIUS_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ if .Values.radiusSecret.secretName }}{{ .Values.radiusSecret.secretName }}{{ else }}{{ include "aaa-radius-server.fullname" . }}-secret{{ end }}
+                  key: radius-secret
+            - name: LOOKUP_URL
+              value: {{ .Values.lookupUrl | quote }}
+            - name: PROVISIONING_URL
+              value: {{ .Values.provisioningUrl | quote }}
+            - name: WORKER_THREADS
+              value: {{ .Values.workerThreads | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          # No liveness/readiness probes on UDP — monitor via logs/metrics

@@ -1,0 +1,44 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aaa-load-test
+  namespace: aaa-platform
+  labels:
+    app.kubernetes.io/name: aaa-load-test
+    app.kubernetes.io/component: load-testing
+spec:
+  # Auto-delete 10 min after completion so logs are still accessible
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aaa-load-test
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: k6
+          # Build: make build-all REGISTRY=<reg> TAG=dev
+          # Or override: -e SCRIPT=stress.js
+          image: aaa/aaa-load-tester:dev
+          imagePullPolicy: Never          # local dev image; change for CI
+          args:
+            - run
+            - /scripts/$(SCRIPT)         # resolved via env substitution below
+          env:
+            - name: SCRIPT
+              value: "load.js"           # change to smoke.js / stress.js / spike.js / soak.js
+            - name: TARGET_URL
+              value: "http://aaa-platform-aaa-lookup-service:8081"
+            - name: BEARER_TOKEN
+              value: "dev-load-test"     # JWT_SKIP_VERIFY=true in dev — value irrelevant
+            - name: IMSI_COUNT
+              value: "10000"
+            # k6 output: JSON summary written to stdout (default)
+            # For InfluxDB integration add: --out influxdb=http://influxdb:8086/k6
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "512Mi"

@@ -1,0 +1,45 @@
+replicaCount: 2
+
+image:
+  repository: ""          # REQUIRED — set per environment
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 1812
+  protocol: UDP
+
+# RADIUS shared secret — stored in a Kubernetes Secret.
+# Either set radiusSecret.value directly (dev only) or provide a secretRef.
+radiusSecret:
+  value: "testing123"     # plaintext — use secretRef in production
+  secretName: ""          # if set, overrides value; secret must have key: radius-secret
+
+# aaa-lookup-service base URL (in-cluster)
+lookupUrl: "http://aaa-lookup-service:8081"
+
+# subscriber-profile-api base URL (in-cluster)
+provisioningUrl: "http://subscriber-profile-api:8080"
+
+# Worker thread count — tune based on expected request rate and HTTP call latency
+workerThreads: 8
+
+logLevel: "info"           # trace | debug | info | warn | error
+
+resources:
+  requests:
+    cpu: "200m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m"
+    memory: "256Mi"
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+nameOverride: ""
+fullnameOverride: ""

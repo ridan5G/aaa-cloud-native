@@ -1,0 +1,107 @@
+# ══════════════════════════════════════════════════════════════════
+# aaa-platform — production defaults
+# All sub-charts enabled; regression tester off by default.
+# Override per environment via values-dev.yaml or values-oci.yaml.
+# ══════════════════════════════════════════════════════════════════
+
+createNamespace: true
+
+# ── Database ─────────────────────────────────────────────────────
+aaa-database:
+  enabled: true
+  postgresql:
+    instances: 3
+    storage:
+      size: 50Gi
+      storageClass: ""
+    appPassword: ""        # REQUIRED — override in env-specific values
+    appCredentialsSecretName: aaa-db-credentials
+  pgbouncer:
+    rw:
+      instances: 2
+    ro:
+      instances: 2
+
+# ── AAA Lookup Service ────────────────────────────────────────────
+aaa-lookup-service:
+  enabled: true
+  replicaCount: 3
+  image:
+    repository: ""         # REQUIRED
+    tag: "latest"
+  db:
+    secretName: aaa-db-credentials
+  jwt:
+    skipVerify: "false"
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 6
+  podDisruptionBudget:
+    minAvailable: 2
+  ingress:
+    enabled: false
+
+# ── Provisioning API ─────────────────────────────────────────────
+subscriber-profile-api:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: ""         # REQUIRED
+    tag: "latest"
+  db:
+    secretName: aaa-db-credentials
+  jwt:
+    skipVerify: "false"
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+  podDisruptionBudget:
+    minAvailable: 1
+  ingress:
+    enabled: false
+
+# ── Management UI ────────────────────────────────────────────────────
+aaa-management-ui:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: ""         # REQUIRED
+    tag: "latest"
+  ingress:
+    enabled: false
+  appConfig:
+    apiBaseUrl: "https://provisioning.aaa-platform.example.com/v1"
+    oidcAuthority: "https://auth.example.com/realms/aaa"
+    oidcClientId: "aaa-management-ui"
+  apiServiceName: "subscriber-profile-api"
+  apiServicePort: 8080
+  monitoring:
+    enabled: true
+
+# ── Observability stack ───────────────────────────────────────────────
+kube-prometheus-stack:
+  enabled: true
+
+prometheus-pushgateway:
+  enabled: true
+
+# ── Migration — triggered manually; disabled by default ──────────────
+aaa-migration:
+  enabled: false
+
+# ── Regression Tester — off by default; triggered by CI or make test ──
+aaa-regression-tester:
+  enabled: false
+  image:
+    repository: ""         # REQUIRED when enabled
+    tag: "latest"
+  env:
+    PROVISION_URL: "http://subscriber-profile-api:8080/v1"
+    LOOKUP_URL: "http://aaa-lookup-service:8081/v1"
+    PUSHGATEWAY_URL: "http://prometheus-pushgateway:9091"
+  jwtSecretName: aaa-test-jwt
+
+nameOverride: ""
+fullnameOverride: ""

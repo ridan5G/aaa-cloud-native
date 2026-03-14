@@ -1,0 +1,9 @@
+apiVersion: v2
+name: aaa-lookup-service
+description: >
+  AAA hot-path RADIUS lookup service.
+  Read-only — connects to PostgreSQL read replica only via PgBouncer.
+  Single endpoint: GET /v1/lookup?imsi=&apn=  Target SLA: p99 < 15ms.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

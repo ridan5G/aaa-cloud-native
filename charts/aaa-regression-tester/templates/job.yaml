@@ -1,0 +1,48 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "aaa-regression-tester.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aaa-regression-tester.labels" . | nindent 4 }}
+spec:
+  backoffLimit: {{ .Values.job.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "aaa-regression-tester.selectorLabels" . | nindent 8 }}
+      annotations:
+        # Metrics are pushed to Pushgateway — no scrape needed on the pod
+        prometheus.io/scrape: "false"
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: regression-tester
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Default CMD in the Dockerfile runs run_all.sh (full suite).
+          # Override args here to run a subset, e.g.:
+          #   args: ["pytest", "test_01_pools.py", "-v"]
+          env:
+            - name: PROVISION_URL
+              value: {{ .Values.env.PROVISION_URL | quote }}
+            - name: LOOKUP_URL
+              value: {{ .Values.env.LOOKUP_URL | quote }}
+            - name: PUSHGATEWAY_URL
+              value: {{ .Values.env.PUSHGATEWAY_URL | quote }}
+            - name: TEST_JWT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.jwtSecretName }}
+                  key: token
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: results
+              mountPath: /app/results
+      volumes:
+        # JUnit XML and timing CSV are written here.
+        # Retrieve with: kubectl cp <pod>:/app/results ./results -n <namespace>
+        - name: results
+          emptyDir: {}

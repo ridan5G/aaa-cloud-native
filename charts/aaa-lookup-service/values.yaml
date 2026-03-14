@@ -1,0 +1,65 @@
+# ── Replica count ───────────────────────────────────────────────
+replicaCount: 3
+
+# ── Image ───────────────────────────────────────────────────────
+image:
+  repository: ""          # REQUIRED — set per environment
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# ── Service ─────────────────────────────────────────────────────
+service:
+  type: ClusterIP
+  httpPort: 8081
+  metricsPort: 9090
+
+# ── Ingress ─────────────────────────────────────────────────────
+ingress:
+  enabled: false
+  className: nginx
+  host: lookup.aaa.example.com
+  tls:
+    enabled: true
+    secretName: ""
+
+# ── Database ────────────────────────────────────────────────────
+# Name of the Secret created by charts/aaa-database.
+# Must contain key: uri-ro (read-only PgBouncer URI)
+db:
+  secretName: aaa-db-credentials
+
+# ── JWT ─────────────────────────────────────────────────────────
+jwt:
+  # Set to "true" in dev/test to bypass JWT verification
+  skipVerify: "false"
+  # Name of a Secret with key "public-key" (RS256) or "secret" (HS256).
+  # Ignored when skipVerify=true.
+  secretName: ""
+
+# ── Resources ───────────────────────────────────────────────────
+resources:
+  requests:
+    cpu: "500m"
+    memory: "512Mi"
+  limits:
+    cpu: "1"
+    memory: "512Mi"
+
+# ── Autoscaling ─────────────────────────────────────────────────
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+# ── Pod Disruption Budget ───────────────────────────────────────
+podDisruptionBudget:
+  minAvailable: 2
+
+# ── Prometheus monitoring ────────────────────────────────────────
+monitoring:
+  enabled: true
+
+# ── Helm name overrides ─────────────────────────────────────────
+nameOverride: ""
+fullnameOverride: ""

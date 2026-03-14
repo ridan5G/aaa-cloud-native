@@ -1,0 +1,67 @@
+# ── Replica count ───────────────────────────────────────────────
+replicaCount: 2
+
+# ── Image ───────────────────────────────────────────────────────
+image:
+  repository: ""          # REQUIRED — set per environment
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# ── Service ─────────────────────────────────────────────────────
+service:
+  type: ClusterIP
+  httpPort: 8080
+  metricsPort: 9091
+
+# ── Ingress ─────────────────────────────────────────────────────
+ingress:
+  enabled: false
+  className: nginx
+  host: provisioning.aaa.example.com
+  tls:
+    enabled: true
+    secretName: ""
+
+# ── Database ────────────────────────────────────────────────────
+# Name of the Secret created by charts/aaa-database.
+# Must contain key: uri-rw (read-write PgBouncer URI, primary only)
+db:
+  secretName: aaa-db-credentials
+
+# ── JWT ─────────────────────────────────────────────────────────
+jwt:
+  skipVerify: "false"
+  secretName: ""
+
+# ── Bulk job settings ───────────────────────────────────────────
+bulkJob:
+  workerThreads: 4
+  batchSize: 1000
+
+# ── Resources ───────────────────────────────────────────────────
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "2"
+    memory: "1Gi"
+
+# ── Autoscaling ─────────────────────────────────────────────────
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+
+# ── Pod Disruption Budget ───────────────────────────────────────
+podDisruptionBudget:
+  minAvailable: 1
+
+# ── Prometheus monitoring ────────────────────────────────────────
+monitoring:
+  enabled: true
+
+# ── Helm name overrides ─────────────────────────────────────────
+nameOverride: ""
+fullnameOverride: ""

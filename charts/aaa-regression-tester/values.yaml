@@ -1,0 +1,35 @@
+# ── Image ───────────────────────────────────────────────────────
+image:
+  repository: ""          # REQUIRED — set per environment
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# ── Service URLs ────────────────────────────────────────────────
+env:
+  PROVISION_URL: "http://subscriber-profile-api:8080/v1"
+  LOOKUP_URL: "http://aaa-lookup-service:8081/v1"
+  PUSHGATEWAY_URL: "http://prometheus-pushgateway:9091"
+
+# ── JWT token ────────────────────────────────────────────────────
+# Name of a pre-existing Secret with key "token"
+jwtSecretName: "aaa-test-jwt"
+
+# ── Job settings ─────────────────────────────────────────────────
+job:
+  # Fail immediately — no retries. A single failed test is a failed suite.
+  backoffLimit: 0
+  # Auto-delete the Job 1 hour after completion (pass or fail)
+  ttlSecondsAfterFinished: 3600
+
+# ── Resources ────────────────────────────────────────────────────
+resources:
+  requests:
+    cpu: "500m"
+    memory: "256Mi"
+  limits:
+    cpu: "1"
+    memory: "512Mi"
+
+# ── Helm name overrides ─────────────────────────────────────────
+nameOverride: ""
+fullnameOverride: ""

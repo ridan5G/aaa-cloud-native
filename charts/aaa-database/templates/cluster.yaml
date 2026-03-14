@@ -1,0 +1,78 @@
+{{/*
+CloudNativePG Cluster resource.
+
+Topology:
+  - 1 primary (always writable, receives all writes via pooler-rw)
+  - N-1 synchronous standbys (serve reads via pooler-ro)
+
+Bootstrap:
+  - initdb creates the 'aaa' database owned by 'aaa_app'
+  - postInitApplicationSQLRefs executes the full schema SQL from initdb-configmap
+
+Services created automatically by CNPG:
+  - <cluster-name>-rw   → primary (used internally by pooler-rw)
+  - <cluster-name>-ro   → any healthy instance (used internally by pooler-ro)
+  - <cluster-name>-r    → round-robin across all instances
+
+Ref: https://cloudnative-pg.io/documentation/current/api_reference/#clusterspec
+*/}}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ include "aaa-database.clusterName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aaa-database.labels" . | nindent 4 }}
+spec:
+  # ── Instances ────────────────────────────────────────────────
+  instances: {{ .Values.postgresql.instances }}
+  imageName: {{ .Values.postgresql.imageName | quote }}
+
+  # ── Bootstrap ───────────────────────────────────────────────
+  bootstrap:
+    initdb:
+      database: {{ .Values.postgresql.database | quote }}
+      owner: {{ .Values.postgresql.appUser | quote }}
+      # Reference the Secret that holds the app user password.
+      # CNPG reads the 'password' key (and optionally 'username').
+      secret:
+        name: {{ include "aaa-database.appSecretName" . }}
+      # Execute the full AAA schema after the database is created.
+      # Runs as the app user (aaa_app) against the app database (aaa).
+      postInitApplicationSQLRefs:
+        configMapRefs:
+          - name: {{ include "aaa-database.clusterName" . }}-initdb-sql
+            key: schema.sql
+
+  # ── Storage ─────────────────────────────────────────────────
+  storage:
+    size: {{ .Values.postgresql.storage.size | quote }}
+    {{- if .Values.postgresql.storage.storageClass }}
+    storageClass: {{ .Values.postgresql.storage.storageClass | quote }}
+    {{- end }}
+
+  # ── PostgreSQL parameters ────────────────────────────────────
+  postgresql:
+    parameters:
+      {{- range $key, $val := .Values.postgresql.parameters }}
+      {{ $key }}: {{ $val | quote }}
+      {{- end }}
+
+  # ── Resources ────────────────────────────────────────────────
+  resources:
+    {{- toYaml .Values.postgresql.resources | nindent 4 }}
+
+  # ── High Availability ────────────────────────────────────────
+  # minSyncReplicas / maxSyncReplicas configure synchronous replication.
+  # For instances=1 (dev), both must be 0.
+  # For instances=3 (prod), use 1/1 for single sync standby guarantee.
+  {{- if gt (int .Values.postgresql.instances) 1 }}
+  minSyncReplicas: 1
+  maxSyncReplicas: 1
+  {{- end }}
+
+  # ── Monitoring ───────────────────────────────────────────────
+  # Enables the CNPG metrics exporter on port 9187 and creates a PodMonitor
+  # so Prometheus scrapes each cluster pod automatically.
+  monitoring:
+    enablePodMonitor: {{ .Values.postgresql.monitoring.enabled }}

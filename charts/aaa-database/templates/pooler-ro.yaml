@@ -1,0 +1,51 @@
+{{/*
+CloudNativePG Pooler — Read-Only (sync standbys).
+
+Sits in front of sync standby instances only (type: ro).
+Used by:
+  - aaa-lookup-service  (hot-path IMSI lookups — read-only, latency-sensitive)
+
+Connection: <pooler-name>.<namespace>.svc.cluster.local:5432
+Exposed as Secret key 'host-ro' in {{ appCredentialsSecretName }}.
+
+Note: This pooler is only useful when postgresql.instances > 1.
+For single-instance dev deployments it is safe to enable it — CNPG will
+route it to the primary when no standbys are available.
+
+Ref: https://cloudnative-pg.io/documentation/current/connection_pooling/
+*/}}
+{{- if .Values.pgbouncer.ro.enabled }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: {{ include "aaa-database.poolerROName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aaa-database.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pgbouncer-ro
+spec:
+  # Target cluster
+  cluster:
+    name: {{ include "aaa-database.clusterName" . }}
+
+  # Number of PgBouncer pod replicas
+  instances: {{ .Values.pgbouncer.ro.instances }}
+
+  # Route only to sync standby instances (read-only replicas)
+  type: ro
+
+  pgbouncer:
+    poolMode: {{ .Values.pgbouncer.ro.poolMode | quote }}
+    parameters:
+      {{- range $key, $val := .Values.pgbouncer.ro.parameters }}
+      {{ $key }}: {{ $val | quote }}
+      {{- end }}
+
+  # Resource requests / limits for each PgBouncer pod
+  template:
+    spec:
+      containers:
+        - name: pgbouncer
+          resources:
+            {{- toYaml .Values.pgbouncer.ro.resources | nindent 12 }}
+{{- end }}

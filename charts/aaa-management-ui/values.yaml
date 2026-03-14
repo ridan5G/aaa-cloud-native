@@ -1,0 +1,58 @@
+# ── Replica count ───────────────────────────────────────────────
+replicaCount: 2
+
+# ── Image ───────────────────────────────────────────────────────
+image:
+  repository: ""          # REQUIRED — set per environment
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# ── Service ─────────────────────────────────────────────────────
+service:
+  type: ClusterIP
+  port: 80
+  metricsPort: 9113       # nginx-prometheus-exporter default port
+
+# ── Ingress ─────────────────────────────────────────────────────
+ingress:
+  enabled: true
+  className: nginx
+  host: ui.aaa-platform.example.com
+  tls:
+    enabled: true
+    secretName: aaa-ui-tls
+
+# ── Runtime config — injected as window.APP_CONFIG via /config.js ──
+appConfig:
+  apiBaseUrl: "https://provisioning.aaa.example.com/v1"
+  oidcAuthority: "https://auth.example.com/realms/aaa"
+  oidcClientId: "aaa-management-ui"
+
+# ── API backend for nginx proxy_pass ────────────────────────────
+# Should match the subscriber-profile-api Service name inside the cluster
+apiServiceName: "subscriber-profile-api"
+apiServicePort: 8080
+
+# ── Resources ───────────────────────────────────────────────────
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m"
+    memory: "256Mi"
+
+# ── Autoscaling ─────────────────────────────────────────────────
+autoscaling:
+  enabled: false          # static assets; CPU-based scaling rarely needed
+
+# ── Prometheus monitoring ────────────────────────────────────────
+monitoring:
+  enabled: true
+
+nodeSelector: {}
+tolerations: []
+
+# ── Helm name overrides ─────────────────────────────────────────
+nameOverride: ""
+fullnameOverride: ""

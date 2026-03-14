@@ -1,0 +1,15 @@
+dependencies:
+- name: aaa-database
+  repository: file://../aaa-database
+  version: 1.0.0
+- name: aaa-lookup-service
+  repository: file://../aaa-lookup-service
+  version: 1.0.0
+- name: subscriber-profile-api
+  repository: file://../subscriber-profile-api
+  version: 1.0.0
+- name: aaa-regression-tester
+  repository: file://../aaa-regression-tester
+  version: 1.0.0
+digest: sha256:0f104aa314c167086399ea0315dccc7880d36d27a3e2d462f84e39e6f5ffb2c7
+generated: "2026-03-12T16:15:05.954568732+02:00"

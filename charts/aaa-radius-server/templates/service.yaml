@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aaa-radius-server.fullname" . }}
+  labels:
+    {{- include "aaa-radius-server.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: radius-auth
+      port: {{ .Values.service.port }}
+      targetPort: radius-auth
+      protocol: {{ .Values.service.protocol }}
+  selector:
+    {{- include "aaa-radius-server.selectorLabels" . | nindent 4 }}
