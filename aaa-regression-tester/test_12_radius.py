@@ -14,11 +14,10 @@ verifies the two-stage AAA flow:
     404/503 → Access-Reject
 
 Requires RADIUS_HOST, RADIUS_PORT, RADIUS_SECRET env vars
-(defaults: localhost, 1812, testing123).
+(defaults: localhost, 1812; RADIUS_SECRET from env or .env file).
 
 Test cases 12.1 – 12.10
 """
-import os
 import socket
 import time
 import threading
@@ -26,7 +25,7 @@ import threading
 import httpx
 import pytest
 
-from conftest import ACCOUNT_NAME
+from conftest import ACCOUNT_NAME, PROVISION_BASE, JWT_TOKEN, RADIUS_HOST, RADIUS_PORT, RADIUS_SECRET
 from fixtures.pools import create_pool, delete_pool, get_pool_stats
 from fixtures.profiles import create_profile_imsi, delete_profile
 from fixtures.radius import RadiusClient, CODE_ACCESS_ACCEPT, CODE_ACCESS_REJECT
@@ -79,22 +78,15 @@ class TestRadiusServer:
     @classmethod
     def setup_class(cls):
         """Create fixtures via the provisioning HTTP API before RADIUS tests run."""
-        base = os.getenv("PROVISION_URL", "http://localhost:8080/v1")
-        jwt  = os.getenv("TEST_JWT",      "dev-skip-verify")
-
-        radius_host   = os.getenv("RADIUS_HOST",   "localhost")
-        radius_port   = int(os.getenv("RADIUS_PORT",   "1812"))
-        radius_secret = os.getenv("RADIUS_SECRET", "testing123")
-
-        if not _radius_available(radius_host, radius_port, radius_secret):
+        if not _radius_available(RADIUS_HOST, RADIUS_PORT, RADIUS_SECRET):
             pytest.skip(
-                f"aaa-radius-server not reachable at {radius_host}:{radius_port} — "
+                f"aaa-radius-server not reachable at {RADIUS_HOST}:{RADIUS_PORT} — "
                 "skipping test_12 (set RADIUS_HOST to enable)"
             )
 
         with httpx.Client(
-            base_url=base,
-            headers={"Authorization": f"Bearer {jwt}"},
+            base_url=PROVISION_BASE,
+            headers={"Authorization": f"Bearer {JWT_TOKEN}"},
             timeout=30.0,
         ) as c:
             # ── Pool A + pre-provisioned profile (for tests 12.2–12.5) ────────
@@ -141,11 +133,9 @@ class TestRadiusServer:
 
     @classmethod
     def teardown_class(cls):
-        base = os.getenv("PROVISION_URL", "http://localhost:8080/v1")
-        jwt  = os.getenv("TEST_JWT",      "dev-skip-verify")
         with httpx.Client(
-            base_url=base,
-            headers={"Authorization": f"Bearer {jwt}"},
+            base_url=PROVISION_BASE,
+            headers={"Authorization": f"Bearer {JWT_TOKEN}"},
             timeout=30.0,
         ) as c:
             # Remove profiles created during tests
@@ -168,9 +158,9 @@ class TestRadiusServer:
     def rc(self) -> RadiusClient:
         """Per-test RADIUS client."""
         return RadiusClient(
-            host=os.getenv("RADIUS_HOST",   "localhost"),
-            port=int(os.getenv("RADIUS_PORT",   "1812")),
-            secret=os.getenv("RADIUS_SECRET", "testing123"),
+            host=RADIUS_HOST,
+            port=RADIUS_PORT,
+            secret=RADIUS_SECRET,
         )
 
     # 12.1 ────────────────────────────────────────────────────────────────────

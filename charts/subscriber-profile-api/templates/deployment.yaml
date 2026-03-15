@@ -77,6 +77,8 @@ spec:
             # JWT
             - name: JWT_SKIP_VERIFY
               value: {{ .Values.jwt.skipVerify | quote }}
+            - name: JWT_ALGORITHM
+              value: {{ .Values.jwt.algorithm | quote }}
             {{- if and .Values.jwt.secretName (ne .Values.jwt.skipVerify "true") }}
             - name: JWT_PUBLIC_KEY
               valueFrom:

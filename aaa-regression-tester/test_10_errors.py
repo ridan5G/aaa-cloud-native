@@ -10,7 +10,7 @@ Test cases 10.1 – 10.15  (plan-01 §test_10_errors)
 import httpx
 import pytest
 
-from conftest import make_imsi, make_iccid
+from conftest import make_imsi, make_iccid, PROVISION_BASE, JWT_TOKEN, LOOKUP_BASE
 from fixtures.pools import create_pool, delete_pool
 from fixtures.profiles import (
     create_profile_iccid,
@@ -46,12 +46,9 @@ class TestErrors:
 
     @classmethod
     def setup_class(cls):
-        import os, httpx as _h
-        base = os.getenv("PROVISION_URL", "http://localhost:8080/v1")
-        jwt  = os.getenv("TEST_JWT", "dev-skip-verify")
-        with _h.Client(base_url=base,
-                       headers={"Authorization": f"Bearer {jwt}"},
-                       timeout=30.0) as c:
+        with httpx.Client(base_url=PROVISION_BASE,
+                          headers={"Authorization": f"Bearer {JWT_TOKEN}"},
+                          timeout=30.0) as c:
             p = create_pool(c, subnet=POOL_SUBNET,
                             pool_name="pool-err-10", account_name="TestAccount")
             cls.pool_id = p["pool_id"]
@@ -83,12 +80,9 @@ class TestErrors:
 
     @classmethod
     def teardown_class(cls):
-        import os, httpx as _h
-        base = os.getenv("PROVISION_URL", "http://localhost:8080/v1")
-        jwt  = os.getenv("TEST_JWT", "dev-skip-verify")
-        with _h.Client(base_url=base,
-                       headers={"Authorization": f"Bearer {jwt}"},
-                       timeout=30.0) as c:
+        with httpx.Client(base_url=PROVISION_BASE,
+                          headers={"Authorization": f"Bearer {JWT_TOKEN}"},
+                          timeout=30.0) as c:
             for did in (cls.device_conflict, cls.device_second, cls.device_main):
                 if did:
                     delete_profile(c, did)
@@ -306,10 +300,8 @@ class TestErrors:
             f"Expected 401 on provision API, got {r1.status_code}"
 
         # Lookup service (needs its own unauthed client)
-        import os, httpx as _h
-        base_lookup = os.getenv("LOOKUP_URL", "http://localhost:8081/v1")
-        with _h.Client(
-            base_url=base_lookup,
+        with httpx.Client(
+            base_url=LOOKUP_BASE,
             headers={"Authorization": "Bearer invalid-token"},
             timeout=10.0,
         ) as bad:

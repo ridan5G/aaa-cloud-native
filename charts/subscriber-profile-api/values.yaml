@@ -32,6 +32,7 @@ db:
 jwt:
   skipVerify: "false"
   secretName: ""
+  algorithm: "RS256"  # RS256 | HS256 — must match the signing algorithm of the token issuer
 
 # ── Bulk job settings ───────────────────────────────────────────
 bulkJob:

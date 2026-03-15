@@ -714,6 +714,7 @@ const doc = new Document({
             ["METRICS_PORT", "9091", "Prometheus metrics port (separate thread)"],
             ["JWT_SKIP_VERIFY", "false", "Set to 'true' to bypass JWT verification in development"],
             ["JWT_PUBLIC_KEY", "(required in prod)", "RS256 public key in PEM format"],
+            ["JWT_ALGORITHM", "RS256", "JWT signing algorithm: RS256 (asymmetric) or HS256 (symmetric). Must match the token issuer."],
             ["BULK_WORKER_THREADS", "2", "Thread pool size for async bulk job processing"],
             ["BULK_BATCH_SIZE", "1000", "Number of profiles per database batch in bulk operations"],
           ],
@@ -723,18 +724,35 @@ const doc = new Document({
 
         hdr("8.2 aaa-lookup-service", HeadingLevel.HEADING_2),
         table(
-          ["Environment Variable", "Default", "Description"],
+          ["Environment Variable / Helm Value", "Default", "Description"],
           [
             ["HTTP_PORT", "8081", "HTTP listener port"],
             ["METRICS_PORT", "9090", "Prometheus metrics port"],
             ["DB_HOST", "(required)", "PostgreSQL read-replica hostname"],
-            ["DB_POOL_SIZE", "10", "Database connection pool size"],
-            ["DB_TIMEOUT", "5", "Query timeout in seconds"],
-            ["THREAD_COUNT", "0", "Worker threads; 0 = auto-detect (logical CPU count)"],
+            ["db.poolSize  (Helm)", "8", "Server-side DB connections per replica pod"],
+            ["db.timeoutSec  (Helm)", "1.0", "Query-start deadline in seconds"],
+            ["tuning.threadCount  (Helm)", "0", "Worker threads; 0 = auto-detect (one per logical CPU)"],
+            ["LOG_LEVEL / logLevel  (Helm)", "info", "Log verbosity: trace | debug | info | warn | error"],
             ["JWT_SKIP_VERIFY", "false", "Set to 'true' to bypass JWT verification in development"],
           ],
           [2800, 1600, 4960]
         ),
+        spacer(80),
+
+        hdr("8.3 aaa-radius-server", HeadingLevel.HEADING_2),
+        table(
+          ["Environment Variable", "Default", "Description"],
+          [
+            ["RADIUS_PORT", "1812", "UDP port for RADIUS Access-Request messages"],
+            ["RADIUS_SECRET", "(required — no default)", "Shared secret for RADIUS message authentication. Must match the NAS/client configuration. Set via Kubernetes Secret; never hard-code."],
+            ["LOOKUP_URL", "http://aaa-lookup-service:8081", "Base URL for aaa-lookup-service (Stage 1 hot-path calls)"],
+            ["PROVISIONING_URL", "http://subscriber-profile-api:8080", "Base URL for subscriber-profile-api (Stage 2 first-connection calls)"],
+            ["WORKER_THREADS", "8", "Thread pool size for concurrent RADIUS request handling"],
+          ],
+          [2800, 1600, 4960]
+        ),
+        spacer(60),
+        infoBox("Security Note", "RADIUS_SECRET has no default value and must be explicitly configured. Use a Kubernetes Secret and reference it via secretKeyRef in the Helm chart. Rotate the secret periodically and ensure all NAS devices are updated simultaneously.", ORANGE_BG),
 
         // ── Back matter ──────────────────────────────────────────────────
         new Paragraph({ children: [new PageBreak()] }),

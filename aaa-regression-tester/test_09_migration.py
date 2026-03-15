@@ -16,7 +16,7 @@ import pytest
 
 import httpx
 
-from conftest import make_imsi, make_iccid
+from conftest import make_imsi, make_iccid, PROVISION_BASE, JWT_TOKEN
 
 pytestmark = pytest.mark.migration
 
@@ -76,16 +76,12 @@ class TestMigration:
 
     @classmethod
     def setup_class(cls):
-        import os, httpx as _h
         from fixtures.pools import create_pool
         from fixtures.range_configs import create_range_config
 
-        base = os.getenv("PROVISION_URL", "http://localhost:8080/v1")
-        jwt  = os.getenv("TEST_JWT", "dev-skip-verify")
-
-        with _h.Client(base_url=base,
-                       headers={"Authorization": f"Bearer {jwt}"},
-                       timeout=30.0) as c:
+        with httpx.Client(base_url=PROVISION_BASE,
+                          headers={"Authorization": f"Bearer {JWT_TOKEN}"},
+                          timeout=30.0) as c:
 
             # ── Pool ──────────────────────────────────────────────────────────
             p = create_pool(c, subnet=MIGRATION_POOL_SUBNET,
@@ -177,16 +173,12 @@ class TestMigration:
 
     @classmethod
     def teardown_class(cls):
-        import os, httpx as _h
         from fixtures.pools import delete_pool
         from fixtures.range_configs import delete_range_config
 
-        base = os.getenv("PROVISION_URL", "http://localhost:8080/v1")
-        jwt  = os.getenv("TEST_JWT", "dev-skip-verify")
-
-        with _h.Client(base_url=base,
-                       headers={"Authorization": f"Bearer {jwt}"},
-                       timeout=30.0) as c:
+        with httpx.Client(base_url=PROVISION_BASE,
+                          headers={"Authorization": f"Bearer {JWT_TOKEN}"},
+                          timeout=30.0) as c:
             for did in cls.device_ids:
                 try:
                     c.delete(f"/profiles/{did}")

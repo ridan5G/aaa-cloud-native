@@ -9,6 +9,14 @@ RELEASE     := aaa-platform
 REGISTRY    ?= k3d-aaa-registry.localhost:5111
 TAG         ?= dev
 
+# Database connection — override for non-local environments
+DB_USER     ?= aaa_app
+DB_PASSWORD ?= devpassword
+DB_HOST     ?= localhost
+DB_PORT     ?= 5432
+DB_NAME     ?= aaa
+DB_URL      ?= postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)
+
 SCRIPT      ?= load.js   # override: make load-test-k8s SCRIPT=stress.js
 
 .PHONY: help \
@@ -199,7 +207,7 @@ build-load-tester:              ## Build k6 load-test image (aaa/aaa-load-tester
 	docker build -t aaa/aaa-load-tester:dev ./load-testing/
 
 load-test-seed:                 ## Seed 10k test subscribers (requires: make port-forward-db)
-	psql "postgres://aaa_app:devpassword@localhost:5432/aaa" \
+	psql "$(DB_URL)" \
 	  -f ./load-testing/seed/seed_load_test.sql
 
 load-test-smoke:                ## Smoke test — 1 VU, 1 min (requires: make port-forward-lookup)

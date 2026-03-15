@@ -14,6 +14,15 @@ env:
 # Name of a pre-existing Secret with key "token"
 jwtSecretName: "aaa-test-jwt"
 
+# ── RADIUS server ─────────────────────────────────────────────────────────────
+# Leave host empty ("") to skip RADIUS tests — the suite auto-skips if unreachable.
+# When set, secretName must reference a K8s Secret with key "radius-secret" that
+# contains the same shared secret as the aaa-radius-server deployment.
+radius:
+  host: ""              # e.g. "aaa-radius-server" (in-cluster Service name)
+  port: 1812
+  secretName: ""        # required when host is non-empty; must have key: radius-secret
+
 # ── Job settings ─────────────────────────────────────────────────
 job:
   # Fail immediately — no retries. A single failed test is a failed suite.

@@ -1,5 +1,6 @@
 # Local test stack for running regression outside k3d.
 # Usage:
+#   cp .env.example .env  # then edit .env for your environment
 #   docker compose -f docker-compose.test.yml up -d
 #   docker compose -f docker-compose.test.yml run --rm tester
 #   docker compose -f docker-compose.test.yml down --volumes
@@ -10,66 +11,66 @@ services:
   postgres:
     image: postgres:15-alpine
     environment:
-      POSTGRES_DB: aaa
-      POSTGRES_USER: aaa_app
-      POSTGRES_PASSWORD: devpassword
+      POSTGRES_DB:       ${DB_NAME:-aaa}
+      POSTGRES_USER:     ${DB_USER:-aaa_app}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-devpassword}
     ports:
-      - "5432:5432"
+      - "${DB_PORT:-5432}:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aaa_app -d aaa"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-aaa_app} -d ${DB_NAME:-aaa}"]
       interval: 3s
       retries: 10
 
   subscriber-profile-api:
-    image: k3d-aaa-registry.localhost:5111/subscriber-profile-api:dev
+    image: ${REGISTRY:-k3d-aaa-registry.localhost:5111}/subscriber-profile-api:${TAG:-dev}
     environment:
-      PRIMARY_URL: "postgres://aaa_app:devpassword@postgres:5432/aaa"
+      PRIMARY_URL:  "postgres://${DB_USER:-aaa_app}:${DB_PASSWORD:-devpassword}@postgres:${DB_PORT:-5432}/${DB_NAME:-aaa}"
       JWT_SKIP_VERIFY: "true"
-      HTTP_PORT: "8080"
-      METRICS_PORT: "9091"
+      HTTP_PORT:    "${PROVISION_HTTP_PORT:-8080}"
+      METRICS_PORT: "${PROVISION_METRICS_PORT:-9091}"
     ports:
-      - "8080:8080"
+      - "${PROVISION_HTTP_PORT:-8080}:${PROVISION_HTTP_PORT:-8080}"
     depends_on:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${PROVISION_HTTP_PORT:-8080}/health || exit 1"]
       interval: 5s
       retries: 12
 
   aaa-lookup-service:
-    image: k3d-aaa-registry.localhost:5111/aaa-lookup-service:dev
+    image: ${REGISTRY:-k3d-aaa-registry.localhost:5111}/aaa-lookup-service:${TAG:-dev}
     environment:
-      DB_HOST: postgres
-      DB_PORT: "5432"
-      DB_NAME: aaa
-      DB_USER: aaa_app
-      DB_PASSWORD: devpassword
+      DB_HOST:      postgres
+      DB_PORT:      "${DB_PORT:-5432}"
+      DB_NAME:      "${DB_NAME:-aaa}"
+      DB_USER:      "${DB_USER:-aaa_app}"
+      DB_PASSWORD:  "${DB_PASSWORD:-devpassword}"
       JWT_SKIP_VERIFY: "true"
-      HTTP_PORT: "8081"
-      METRICS_PORT: "9090"
+      HTTP_PORT:    "${LOOKUP_HTTP_PORT:-8081}"
+      METRICS_PORT: "${LOOKUP_METRICS_PORT:-9090}"
     ports:
-      - "8081:8081"
+      - "${LOOKUP_HTTP_PORT:-8081}:${LOOKUP_HTTP_PORT:-8081}"
     depends_on:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${LOOKUP_HTTP_PORT:-8081}/health || exit 1"]
       interval: 5s
       retries: 12
 
   aaa-radius-server:
-    image: k3d-aaa-registry.localhost:5111/aaa-radius-server:dev
+    image: ${REGISTRY:-k3d-aaa-registry.localhost:5111}/aaa-radius-server:${TAG:-dev}
     environment:
-      RADIUS_PORT: "1812"
-      RADIUS_SECRET: "testing123"
-      LOOKUP_URL: "http://aaa-lookup-service:8081"
-      PROVISIONING_URL: "http://subscriber-profile-api:8080"
-      WORKER_THREADS: "8"
+      RADIUS_PORT:       "${RADIUS_PORT:-1812}"
+      RADIUS_SECRET:     "${RADIUS_SECRET:?RADIUS_SECRET must be set in .env}"
+      LOOKUP_URL:        "http://aaa-lookup-service:${LOOKUP_HTTP_PORT:-8081}"
+      PROVISIONING_URL:  "http://subscriber-profile-api:${PROVISION_HTTP_PORT:-8080}"
+      WORKER_THREADS:    "${RADIUS_WORKER_THREADS:-8}"
     ports:
-      - "1812:1812/udp"
+      - "${RADIUS_PORT:-1812}:${RADIUS_PORT:-1812}/udp"
     depends_on:
       aaa-lookup-service:
         condition: service_healthy
@@ -79,18 +80,18 @@ services:
   pushgateway:
     image: prom/pushgateway:v1.8.0
     ports:
-      - "9091:9091"
+      - "${PUSHGATEWAY_PORT:-9091}:9091"
 
   tester:
     build: .
     environment:
-      PROVISION_URL:   "http://subscriber-profile-api:8080/v1"
-      LOOKUP_URL:      "http://aaa-lookup-service:8081/v1"
-      TEST_JWT:        "dev-skip-verify"
+      PROVISION_URL:   "http://subscriber-profile-api:${PROVISION_HTTP_PORT:-8080}/v1"
+      LOOKUP_URL:      "http://aaa-lookup-service:${LOOKUP_HTTP_PORT:-8081}/v1"
+      TEST_JWT:        "${TEST_JWT:-dev-skip-verify}"
       PUSHGATEWAY_URL: "http://pushgateway:9091"
       RADIUS_HOST:     "aaa-radius-server"
-      RADIUS_PORT:     "1812"
-      RADIUS_SECRET:   "testing123"
+      RADIUS_PORT:     "${RADIUS_PORT:-1812}"
+      RADIUS_SECRET:   "${RADIUS_SECRET:?RADIUS_SECRET must be set in .env}"
     depends_on:
       subscriber-profile-api:
         condition: service_healthy

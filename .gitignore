@@ -1,0 +1,47 @@
+# ── Secrets / local config ──────────────────────────────────────
+.env
+*.env
+!*.env.example
+
+# ── Python ──────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# ── C++ build artifacts ─────────────────────────────────────────
+*.o
+*.a
+*.so
+*.out
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile.cmake
+_deps/
+
+# ── Test results ────────────────────────────────────────────────
+aaa-regression-tester/results/
+*.xml
+timing.csv
+
+# ── Docker ──────────────────────────────────────────────────────
+.dockerignore
+
+# ── Helm ────────────────────────────────────────────────────────
+charts/*/charts/
+*.tgz
+
+# ── IDE / OS ────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

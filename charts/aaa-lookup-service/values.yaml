@@ -27,14 +27,23 @@ ingress:
 # Must contain key: uri-ro (read-only PgBouncer URI)
 db:
   secretName: aaa-db-credentials
+  poolSize: 8         # server-side connections per replica pod
+  timeoutSec: "1.0"   # query-start deadline in seconds
+
+# ── Performance tuning ──────────────────────────────────────────
+tuning:
+  threadCount: 0      # 0 = auto (one thread per logical CPU)
 
 # ── JWT ─────────────────────────────────────────────────────────
 jwt:
   # Set to "true" in dev/test to bypass JWT verification
   skipVerify: "false"
-  # Name of a Secret with key "public-key" (RS256) or "secret" (HS256).
+  # Name of a Secret with key "public-key" (RS256 PEM).
   # Ignored when skipVerify=true.
   secretName: ""
+
+# ── Observability ───────────────────────────────────────────────
+logLevel: "info"      # trace | debug | info | warn | error
 
 # ── Resources ───────────────────────────────────────────────────
 resources:

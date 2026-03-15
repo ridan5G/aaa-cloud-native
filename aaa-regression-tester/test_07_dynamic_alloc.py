@@ -14,6 +14,7 @@ import threading
 
 import httpx
 
+from conftest import PROVISION_BASE, JWT_TOKEN
 from fixtures.pools import create_pool, delete_pool
 from fixtures.range_configs import create_range_config, delete_range_config
 
@@ -44,12 +45,9 @@ class TestDynamicAlloc:
 
     @classmethod
     def setup_class(cls):
-        import os, httpx as _h
-        base = os.getenv("PROVISION_URL", "http://localhost:8080/v1")
-        jwt  = os.getenv("TEST_JWT", "dev-skip-verify")
-        with _h.Client(base_url=base,
-                       headers={"Authorization": f"Bearer {jwt}"},
-                       timeout=30.0) as c:
+        with httpx.Client(base_url=PROVISION_BASE,
+                          headers={"Authorization": f"Bearer {JWT_TOKEN}"},
+                          timeout=30.0) as c:
             p = create_pool(c, subnet=POOL_SUBNET,
                             pool_name="pool-dyn-07", account_name="TestAccount")
             cls.pool_id = p["pool_id"]
@@ -67,12 +65,9 @@ class TestDynamicAlloc:
 
     @classmethod
     def teardown_class(cls):
-        import os, httpx as _h
-        base = os.getenv("PROVISION_URL", "http://localhost:8080/v1")
-        jwt  = os.getenv("TEST_JWT", "dev-skip-verify")
-        with _h.Client(base_url=base,
-                       headers={"Authorization": f"Bearer {jwt}"},
-                       timeout=30.0) as c:
+        with httpx.Client(base_url=PROVISION_BASE,
+                          headers={"Authorization": f"Bearer {JWT_TOKEN}"},
+                          timeout=30.0) as c:
             for did in cls.alloc_device_ids:
                 try:
                     c.delete(f"/profiles/{did}")

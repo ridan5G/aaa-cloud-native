@@ -8,6 +8,7 @@ Test cases 4.1 – 4.9  (plan-01 §test_04_profiles_b)
 """
 import httpx
 
+from conftest import PROVISION_BASE, JWT_TOKEN
 from fixtures.pools import create_pool, delete_pool
 from fixtures.profiles import create_profile_imsi, delete_profile
 
@@ -26,24 +27,18 @@ class TestProfileB:
 
     @classmethod
     def setup_class(cls):
-        import os, httpx as _h
-        base = os.getenv("PROVISION_URL", "http://localhost:8080/v1")
-        jwt  = os.getenv("TEST_JWT", "dev-skip-verify")
-        with _h.Client(base_url=base,
-                       headers={"Authorization": f"Bearer {jwt}"},
-                       timeout=30.0) as c:
+        with httpx.Client(base_url=PROVISION_BASE,
+                          headers={"Authorization": f"Bearer {JWT_TOKEN}"},
+                          timeout=30.0) as c:
             p = create_pool(c, subnet=POOL_SUBNET,
                             pool_name="pool-b-04", account_name="TestAccount")
             cls.pool_id = p["pool_id"]
 
     @classmethod
     def teardown_class(cls):
-        import os, httpx as _h
-        base = os.getenv("PROVISION_URL", "http://localhost:8080/v1")
-        jwt  = os.getenv("TEST_JWT", "dev-skip-verify")
-        with _h.Client(base_url=base,
-                       headers={"Authorization": f"Bearer {jwt}"},
-                       timeout=30.0) as c:
+        with httpx.Client(base_url=PROVISION_BASE,
+                          headers={"Authorization": f"Bearer {JWT_TOKEN}"},
+                          timeout=30.0) as c:
             if cls.device_id:
                 delete_profile(c, cls.device_id)
             if cls.pool_id:

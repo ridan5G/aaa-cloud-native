@@ -15,7 +15,7 @@ import time
 
 import httpx
 
-from conftest import make_imsi, make_iccid, make_ip, poll_until
+from conftest import make_imsi, make_iccid, make_ip, poll_until, PROVISION_BASE, JWT_TOKEN
 from fixtures.pools import create_pool, delete_pool
 
 MODULE = 8
@@ -109,12 +109,9 @@ class TestBulk:
 
     @classmethod
     def setup_class(cls):
-        import os, httpx as _h
-        base = os.getenv("PROVISION_URL", "http://localhost:8080/v1")
-        jwt  = os.getenv("TEST_JWT", "dev-skip-verify")
-        with _h.Client(base_url=base,
-                       headers={"Authorization": f"Bearer {jwt}"},
-                       timeout=30.0) as c:
+        with httpx.Client(base_url=PROVISION_BASE,
+                          headers={"Authorization": f"Bearer {JWT_TOKEN}"},
+                          timeout=30.0) as c:
             pa = create_pool(c, subnet=POOL_A_SUBNET,
                              pool_name="bulk-pool-a", account_name="TestAccount")
             pb = create_pool(c, subnet=POOL_B_SUBNET,
@@ -127,12 +124,9 @@ class TestBulk:
 
     @classmethod
     def teardown_class(cls):
-        import os, httpx as _h
-        base = os.getenv("PROVISION_URL", "http://localhost:8080/v1")
-        jwt  = os.getenv("TEST_JWT", "dev-skip-verify")
-        with _h.Client(base_url=base,
-                       headers={"Authorization": f"Bearer {jwt}"},
-                       timeout=30.0) as c:
+        with httpx.Client(base_url=PROVISION_BASE,
+                          headers={"Authorization": f"Bearer {JWT_TOKEN}"},
+                          timeout=30.0) as c:
             # Pools are deleted; cascading deletes clean up profiles
             for pid in (cls.pool_a_id, cls.pool_b_id, cls.pool_c_id):
                 if pid:

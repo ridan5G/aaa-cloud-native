@@ -6,6 +6,7 @@ Test cases 2.1 – 2.8  (plan-01 §test_02_range_configs)
 import httpx
 import pytest
 
+from conftest import PROVISION_BASE, JWT_TOKEN
 from fixtures.pools import create_pool, delete_pool
 from fixtures.range_configs import create_range_config, delete_range_config
 
@@ -23,12 +24,9 @@ class TestRangeConfigs:
         """Create two pools used across all tests in this module."""
         # Pools created here; http fixture isn't available at class level,
         # so we use a temporary client.
-        import os, httpx as _httpx
-        base = os.getenv("PROVISION_URL", "http://localhost:8080/v1")
-        jwt  = os.getenv("TEST_JWT", "dev-skip-verify")
-        with _httpx.Client(base_url=base,
-                           headers={"Authorization": f"Bearer {jwt}"},
-                           timeout=30.0) as c:
+        with httpx.Client(base_url=PROVISION_BASE,
+                          headers={"Authorization": f"Bearer {JWT_TOKEN}"},
+                          timeout=30.0) as c:
             p1 = create_pool(c, subnet="100.65.130.0/24",
                              pool_name="rc-pool-1", account_name="Melita")
             cls.pool_id  = p1["pool_id"]
@@ -39,12 +37,9 @@ class TestRangeConfigs:
     @classmethod
     def teardown_class(cls):
         """Delete the pools created in setup_class."""
-        import os, httpx as _httpx
-        base = os.getenv("PROVISION_URL", "http://localhost:8080/v1")
-        jwt  = os.getenv("TEST_JWT", "dev-skip-verify")
-        with _httpx.Client(base_url=base,
-                           headers={"Authorization": f"Bearer {jwt}"},
-                           timeout=30.0) as c:
+        with httpx.Client(base_url=PROVISION_BASE,
+                          headers={"Authorization": f"Bearer {JWT_TOKEN}"},
+                          timeout=30.0) as c:
             if cls.config_id:
                 delete_range_config(c, cls.config_id)
             if cls.pool_id:

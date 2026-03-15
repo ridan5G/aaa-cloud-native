@@ -36,6 +36,17 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.jwtSecretName }}
                   key: token
+            - name: RADIUS_HOST
+              value: {{ .Values.radius.host | quote }}
+            - name: RADIUS_PORT
+              value: {{ .Values.radius.port | quote }}
+            {{- if .Values.radius.secretName }}
+            - name: RADIUS_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.radius.secretName }}
+                  key: radius-secret
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:

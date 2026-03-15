@@ -14,7 +14,6 @@ Marked @pytest.mark.slow — excluded from the default CI run; enable with:
 Test cases 11.1 – 11.7  (plan-01 §test_11_performance)
 """
 import asyncio
-import os
 import time
 
 import httpx
@@ -25,6 +24,9 @@ from conftest import (
     make_ip,
     percentile,
     TimingRecorder,
+    PROVISION_BASE,
+    JWT_TOKEN,
+    LOOKUP_BASE,
 )
 from fixtures.pools import create_pool, delete_pool
 
@@ -123,10 +125,8 @@ class TestPerformance:
 
     @classmethod
     def setup_class(cls):
-        base = os.getenv("PROVISION_URL", "http://localhost:8080/v1")
-        jwt  = os.getenv("TEST_JWT", "dev-skip-verify")
-        with httpx.Client(base_url=base,
-                          headers={"Authorization": f"Bearer {jwt}"},
+        with httpx.Client(base_url=PROVISION_BASE,
+                          headers={"Authorization": f"Bearer {JWT_TOKEN}"},
                           timeout=120.0) as c:
             if _is_seeded(c):
                 # Dataset already present — find the pool
@@ -199,15 +199,13 @@ class TestPerformance:
     # 11.2 ────────────────────────────────────────────────────────────────────
     def test_02_concurrent_50_lookup_p99(self, timing: TimingRecorder):
         """50 concurrent GET /lookup → p99 ≤ 15 ms; 0 errors."""
-        lookup_base = os.getenv("LOOKUP_URL", "http://localhost:8081/v1")
-        jwt         = os.getenv("TEST_JWT",   "dev-skip-verify")
         params_list = [
             {"imsi": make_imsi(MODULE, seq), "apn": "internet.operator.com"}
             for seq in range(101, 151)
         ]
 
         results = asyncio.run(
-            self._concurrent_lookups(lookup_base, jwt, params_list)
+            self._concurrent_lookups(LOOKUP_BASE, JWT_TOKEN, params_list)
         )
 
         statuses  = [r[0] for r in results]
@@ -223,15 +221,13 @@ class TestPerformance:
     # 11.3 ────────────────────────────────────────────────────────────────────
     def test_03_concurrent_200_lookup_p99(self, timing: TimingRecorder):
         """200 concurrent GET /lookup (stress) → p99 ≤ 30 ms; 0 errors."""
-        lookup_base = os.getenv("LOOKUP_URL", "http://localhost:8081/v1")
-        jwt         = os.getenv("TEST_JWT",   "dev-skip-verify")
         params_list = [
             {"imsi": make_imsi(MODULE, seq), "apn": "internet.operator.com"}
             for seq in range(151, 351)
         ]
 
         results = asyncio.run(
-            self._concurrent_lookups(lookup_base, jwt, params_list)
+            self._concurrent_lookups(LOOKUP_BASE, JWT_TOKEN, params_list)
         )
 
         statuses  = [r[0] for r in results]
@@ -310,12 +306,10 @@ class TestPerformance:
         import threading
 
         # Use a fresh tiny pool for this sub-test to keep things isolated
-        base = os.getenv("PROVISION_URL", "http://localhost:8080/v1")
-        jwt  = os.getenv("TEST_JWT",      "dev-skip-verify")
         from fixtures.range_configs import create_range_config, delete_range_config
 
-        with httpx.Client(base_url=base,
-                          headers={"Authorization": f"Bearer {jwt}"},
+        with httpx.Client(base_url=PROVISION_BASE,
+                          headers={"Authorization": f"Bearer {JWT_TOKEN}"},
                           timeout=30.0) as c:
             p2 = create_pool(c, subnet="100.67.0.0/28",   # 14 usable IPs
                              pool_name="perf-fc-pool",

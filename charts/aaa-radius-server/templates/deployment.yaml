@@ -23,11 +23,11 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: radius-auth
-              containerPort: 1812
+              containerPort: {{ .Values.service.port }}
               protocol: UDP
           env:
             - name: RADIUS_PORT
-              value: "1812"
+              value: {{ .Values.service.port | quote }}
             - name: RADIUS_SECRET
               valueFrom:
                 secretKeyRef:

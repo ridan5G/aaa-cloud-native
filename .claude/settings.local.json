@@ -92,7 +92,11 @@
       "Bash(PYTHONUTF8=1 PYTHONIOENCODING=utf-8 python3 \"$SKILLBASE/docx/scripts/office/validate.py\" docs/aaa-platform-product-description.docx)",
       "Bash(SKILLBASE=\"C:/Users/rony.idan/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/34638399-fe22-4e4c-9ee1-e526728f2bfe/2a28e510-a10e-4bfa-bdc0-aee0d71e95e9/skills\")",
       "Bash(PYTHONUTF8=1 PYTHONIOENCODING=utf-8 python3 \"/c/Users/rony.idan/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/34638399-fe22-4e4c-9ee1-e526728f2bfe/2a28e510-a10e-4bfa-bdc0-aee0d71e95e9/skills/docx/scripts/office/validate.py\" docs/aaa-platform-product-description.docx)",
-      "Bash(PYTHONUTF8=1 PYTHONIOENCODING=utf-8 python3 -m markitdown docs/aaa-platform-product-description.docx)"
+      "Bash(PYTHONUTF8=1 PYTHONIOENCODING=utf-8 python3 -m markitdown docs/aaa-platform-product-description.docx)",
+      "Bash(grep -r \"PUSHGATEWAY\\\\|pushgateway\\\\|9091\" /c/Users/rony.idan/source/public-repo/aaa-cloud-native/aaa-regression-tester/*.py)",
+      "Bash(while read line)",
+      "Bash(do echo $line)",
+      "Bash(done)"
     ]
   }
 }
