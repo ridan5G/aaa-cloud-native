@@ -4,7 +4,7 @@
 // Architecture:
 //   • Single endpoint: GET /v1/lookup?imsi=&apn=
 //   • Strictly read-only — one connection pool to the local PostgreSQL read replica
-//   • First-connection IMSIs return 404; FreeRADIUS falls through to
+//   • First-connection IMSIs return 404; aaa-radius-server falls through to
 //     subscriber-profile-api (Plan 4) for allocation — not our concern
 //   • SLA: <15ms p99 end-to-end
 //

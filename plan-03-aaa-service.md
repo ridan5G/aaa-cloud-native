@@ -8,12 +8,12 @@ Access-Request flows through it.
 
 This service is **strictly read-only**. It holds no primary DB connection and performs
 no writes under any circumstance. First-connection IP allocation is delegated to
-`subscriber-profile-api` via a FreeRADIUS fallback call (see below).
+`subscriber-profile-api` via a aaa-radius-server fallback call (see below).
 
 | Property | Value |
 |---|---|
 | SLA | <15ms p99 end-to-end |
-| Callers | FreeRADIUS (`rlm_rest` module) or custom Diameter peer |
+| Callers | aaa-radius-server (`rlm_rest` module) or custom Diameter peer |
 | Protocol | REST over HTTPS |
 | Scale | 3–6 replicas per region, co-located with AAA nodes |
 | DB connection | LOCAL PostgreSQL read replica **only** — no primary connection |
@@ -39,7 +39,7 @@ This is the **only** endpoint. It handles the hot path only:
 | `apn` param missing | 400 `{"error":"missing_param","param":"apn"}` |
 
 **404 `not_found` is not an error — it is the expected signal for a first-connection IMSI.**
-FreeRADIUS handles it by falling through to `subscriber-profile-api` (see FreeRADIUS
+aaa-radius-server handles it by falling through to `subscriber-profile-api` (see aaa-radius-server
 configuration below). `aaa-lookup-service` is uninvolved in that allocation.
 
 ---
@@ -74,15 +74,15 @@ Step 1 — Execute hot-path SQL query:
          sa.static_ip     AS imsi_static_ip,
          ci.apn           AS iccid_apn,
          ci.static_ip     AS iccid_static_ip
-  FROM        subscriber_imsis    si
-  JOIN        subscriber_profiles sp ON sp.device_id = si.device_id
-  LEFT JOIN   subscriber_apn_ips  sa ON sa.imsi = si.imsi
-  LEFT JOIN   subscriber_iccid_ips ci ON ci.device_id = sp.device_id
+  FROM        imsi2device    si
+  JOIN        device_profiles sp ON sp.device_id = si.device_id
+  LEFT JOIN   imsi_apn_ips  sa ON sa.imsi = si.imsi
+  LEFT JOIN   device_apn_ips ci ON ci.device_id = sp.device_id
   WHERE si.imsi = $1
 
 Step 2 — If NO rows returned:
   → return 404 {"error":"not_found"}
-  (FreeRADIUS fallback calls subscriber-profile-api — not our concern)
+  (aaa-radius-server fallback calls subscriber-profile-api — not our concern)
 
 Step 3 — Rows returned: apply resolution logic:
   if sim_status != 'active' OR imsi_status != 'active'
@@ -119,9 +119,9 @@ The APN is always present in the request but is only used when `ip_resolution` r
 | ip_resolution | APN handling |
 |---|---|
 | `iccid` | Ignored — return the single card-level IP |
-| `iccid_apn` | Exact match in `subscriber_iccid_ips.apn`; fallback to `apn=NULL` wildcard |
+| `iccid_apn` | Exact match in `device_apn_ips.apn`; fallback to `apn=NULL` wildcard |
 | `imsi` | Ignored — return the single IMSI-level IP |
-| `imsi_apn` | Exact match in `subscriber_apn_ips.apn`; fallback to `apn=NULL` wildcard |
+| `imsi_apn` | Exact match in `imsi_apn_ips.apn`; fallback to `apn=NULL` wildcard |
 
 ---
 
@@ -155,7 +155,7 @@ between the service and the read replica endpoint.
 │  Language: Go or Python (FastAPI) — Go preferred for latency  │
 │  Port: 8081                                                   │
 │  Replicas: 3–6 per region                                    │
-│  Deployment: co-located with AAA (FreeRADIUS) nodes          │
+│  Deployment: co-located with AAA (aaa-radius-server) nodes          │
 │  Resources: 512MB RAM / 0.5 CPU per replica                  │
 │  DB: READ_REPLICA_URL only (local to region)                 │
 │  No primary DB connection — no writes of any kind            │
@@ -172,9 +172,9 @@ between the service and the read replica endpoint.
 
 ---
 
-## FreeRADIUS Integration (`rlm_rest`) — Two-Stage Configuration
+## aaa-radius-server Integration (`rlm_rest`) — Two-Stage Configuration
 
-FreeRADIUS calls `aaa-lookup-service` first. On 404, it falls through to
+aaa-radius-server calls `aaa-lookup-service` first. On 404, it falls through to
 `subscriber-profile-api` for first-connection allocation. The caller gets
 a transparent `Framed-IP-Address` in either case.
 
@@ -258,7 +258,7 @@ EU Read Replica      US Read Replica
     │                    │
     ▼                    ▼
 EU aaa-lookup        US aaa-lookup     ← reads only, always local (< 5ms to replica)
-EU FreeRADIUS        US FreeRADIUS
+EU aaa-radius-server        US aaa-radius-server
     │                    │
     └─────────┬──────────┘
               │ 404 → first-connection only
@@ -289,7 +289,7 @@ Every `GET /lookup` call emits a structured log line:
 Metrics (Prometheus):
 - `lookup_latency_ms` histogram (p50, p95, p99)
 - `lookup_result_total` counter by result label
-- `not_found_total` counter (triggers Stage 2 in FreeRADIUS — monitor for spikes)
+- `not_found_total` counter (triggers Stage 2 in aaa-radius-server — monitor for spikes)
 
 Alerts:
 - p99 > 15ms for >2 minutes → page on-call

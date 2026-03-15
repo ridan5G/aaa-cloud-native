@@ -3,7 +3,7 @@
 // ---------------------------------------------------------------------------
 // LookupController — handles GET /v1/lookup?imsi=&apn=
 //
-// This is the ONLY endpoint that FreeRADIUS calls (Stage 1).
+// This is the ONLY endpoint that aaa-radius-server calls (Stage 1).
 // The controller is fully async: the DB query callback resolves the HTTP
 // response without blocking any Drogon event loop thread.
 //

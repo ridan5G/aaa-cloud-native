@@ -33,7 +33,7 @@ The remaining ~7.4M rows are unallocated pool slots and are skipped entirely.
 | Table | Key fields | Approx rows | Disposition |
 |---|---|---|---|
 | `tbl_clients` | id, name | ~20–50 / dump | Build mapping file only — not loaded to PostgreSQL |
-| `tbl_clients_ips` | client_id, imsi, ip, imei | ~8M total (650K non-NULL IMSI) | Core migration — subscriber_profiles + imsis + apn_ips |
+| `tbl_clients_ips` | client_id, imsi, ip, imei | ~8M total (650K non-NULL IMSI) | Core migration — device_profiles + imsis + apn_ips |
 | `tbl_ip_pools` | id, client_id, name, start_ip, subnet | ~5–20 / dump | → ip_pools + ip_pool_available |
 | `tbl_imsi_range_config` | client_id, f_imsi, t_imsi | ~328 total | → imsi_range_configs |
 | `tbl_snat_dnat` | iccid, internal_ip, external_ip | 0 rows (Melita POC only) | Skip; document as future work |
@@ -68,14 +68,15 @@ All tables are created by the DB plan schema before migration starts.
 
 | Target Table | Populated from |
 |---|---|
-| `subscriber_profiles` | Transform output of `tbl_clients_ips` |
-| `subscriber_imsis` | Transform output of `tbl_clients_ips` |
-| `subscriber_apn_ips` | Transform output of `tbl_clients_ips` |
-| `subscriber_iccid_ips` | Empty at migration time; populated post-cutover if Profile A is adopted |
+| `device_profiles` | Transform output of `tbl_clients_ips` |
+| `imsi2device` | Transform output of `tbl_clients_ips` |
+| `imsi_apn_ips` | Transform output of `tbl_clients_ips` |
+| `device_apn_ips` | Empty at migration time; populated post-cutover if Profile A is adopted |
 | `ip_pools` | `tbl_ip_pools` |
 | `ip_pool_available` | Computed from `ip_pools` minus already-allocated IPs |
 | `imsi_range_configs` | `tbl_imsi_range_config` — all rows get `iccid_range_id = NULL` (standalone/single-IMSI mode) |
-| `iccid_range_configs` | **Not populated at migration time.** Multi-IMSI SIM ranges are provisioned post-cutover by operators via `POST /iccid-range-configs` when new multi-IMSI SIM batches are ordered. |
+| `iccid_range_configs` | **Not populated at migration time.** Multi-IMSI SIM ranges are provisioned post-cutover by operators via `POST /iccid-range-configs` when new multi-IMSI SIM batches are ordered. `pool_id` is optional — each child IMSI slot can define its own pool. |
+| `range_config_apn_pools` | **Not populated at migration time.** Operators add APN→pool overrides post-cutover via `POST /range-configs/{id}/apn-pools` when per-APN pool routing is needed. |
 
 ---
 
@@ -83,7 +84,7 @@ All tables are created by the DB plan schema before migration starts.
 
 Complete every item before starting Step 1.
 
-- [ ] PostgreSQL 15+ deployed, schema applied (all 8 tables, indexes, triggers, constraints)
+- [ ] PostgreSQL 15+ deployed, schema applied (all 9 tables, indexes, triggers, constraints)
 - [ ] Both application containers (`subscriber-profile-api`, `aaa-lookup-service`) deployed and `/health` returning 200
 - [ ] Regression test suite passing against the empty PostgreSQL instance
 - [ ] All 7 MariaDB dump files available and MD5-checksummed
@@ -91,7 +92,7 @@ Complete every item before starting Step 1.
 - [ ] Migration script checked out and tested against a small fixture dump (Athens 1K-row subset)
 - [ ] `client_id_map.csv` consistency confirmed: same `client_id` maps to same `account_name` across all dumps
 - [ ] Staging server has sufficient disk space (source dumps + 4 output CSVs + PostgreSQL data)
-- [ ] FreeRADIUS two-stage rlm_rest config prepared and tested in staging (Stage 1 → `aaa-lookup-service`, Stage 2 → `subscriber-profile-api /first-connection`)
+- [ ] aaa-radius-server two-stage rlm_rest config prepared and tested in staging (Stage 1 → `aaa-lookup-service`, Stage 2 → `subscriber-profile-api /first-connection`)
 - [ ] Rollback procedure reviewed and understood by all engineers on-call for cutover
 - [ ] Maintenance window booked (Step 5 cutover): minimum 2-hour window, off-peak
 
@@ -184,7 +185,7 @@ Else:
 ```
 
 This correctly models Multi-IMSI SIM cards: two IMSIs sharing the same ICCID under the
-same client become one `subscriber_profiles` row with two rows in `subscriber_imsis`.
+same client become one `device_profiles` row with two rows in `imsi2device`.
 
 ### Transform Pseudocode
 
@@ -210,7 +211,7 @@ for each dump in sorted(dump_files):
 
         group[card_key][row.imsi] += { ip: row.ip, source: dump_name }
 
-# Emit one subscriber_profiles row per card_key
+# Emit one device_profiles row per card_key
 for each (card_key, imsi_groups) in groups:
     client_id, iccid_or_sentinel = card_key
     iccid        = iccid_or_sentinel if not starts_with("IMSI:") else None
@@ -221,17 +222,17 @@ for each (card_key, imsi_groups) in groups:
                        for entries in imsi_groups.values())
     ip_resolution = "imsi_apn" if any_multi_ip else "imsi"
 
-    emit → out_subscriber_profiles.csv
+    emit → out_device_profiles.csv
 
     for each imsi, entries in imsi_groups.items():
-        emit → out_subscriber_imsis.csv
+        emit → out_imsi2device.csv
 
         unique_ips = deduplicate(entries)   # {source → ip}
         if len(unique_ips) == 1:
-            emit (imsi, apn=NULL, static_ip=unique_ip) → out_subscriber_apn_ips.csv
+            emit (imsi, apn=NULL, static_ip=unique_ip) → out_imsi_apn_ips.csv
         else:
             for n, (source, ip) in enumerate(unique_ips, start=1):
-                emit (imsi, apn="pgw"+n, static_ip=ip) → out_subscriber_apn_ips.csv
+                emit (imsi, apn="pgw"+n, static_ip=ip) → out_imsi_apn_ips.csv
 ```
 
 ### Deduplication Cases
@@ -260,21 +261,21 @@ for each (card_key, imsi_groups) in groups:
 
 | File | Description |
 |---|---|
-| `out_subscriber_profiles.csv` | One row per physical SIM card |
-| `out_subscriber_imsis.csv` | One row per IMSI |
-| `out_subscriber_apn_ips.csv` | One row per IMSI+APN IP entry |
-| `out_subscriber_iccid_ips.csv` | Empty — populated post-cutover if Profile A adopted |
+| `out_device_profiles.csv` | One row per physical SIM card |
+| `out_imsi2device.csv` | One row per IMSI |
+| `out_imsi_apn_ips.csv` | One row per IMSI+APN IP entry |
+| `out_device_apn_ips.csv` | Empty — populated post-cutover if Profile A adopted |
 | `out_ip_pools.csv` | Transformed pool definitions |
 | `out_pool_map.csv` | old_pool_id → new UUID mapping (used in Step 3 and post-cutover) |
 | `out_imsi_range_configs.csv` | Range configs with resolved pool_ids |
 | `migration_audit.log` | Per-row decisions: deduplication, pgw label assignments, skips |
 
 **Go / No-Go gate:**
-- [ ] `out_subscriber_profiles.csv` row count matches expected card count (not IMSI count)
-- [ ] `out_subscriber_imsis.csv` row count ≈ 650K
-- [ ] No duplicate `device_id` in `out_subscriber_profiles.csv`
-- [ ] No duplicate `imsi` in `out_subscriber_imsis.csv`
-- [ ] All `static_ip` values in `out_subscriber_apn_ips.csv` resolve to a `pool_id` in `out_ip_pools.csv`
+- [ ] `out_device_profiles.csv` row count matches expected card count (not IMSI count)
+- [ ] `out_imsi2device.csv` row count ≈ 650K
+- [ ] No duplicate `device_id` in `out_device_profiles.csv`
+- [ ] No duplicate `imsi` in `out_imsi2device.csv`
+- [ ] All `static_ip` values in `out_imsi_apn_ips.csv` resolve to a `pool_id` in `out_ip_pools.csv`
 - [ ] `migration_audit.log` reviewed; unexpected deduplication counts investigated
 
 ---
@@ -312,7 +313,7 @@ FROM    staging_ip_pools
 ON CONFLICT DO NOTHING;
 
 -- Pre-populate ip_pool_available
--- Exclude IPs already assigned (subscriber_apn_ips loaded in 3C)
+-- Exclude IPs already assigned (imsi_apn_ips loaded in 3C)
 -- Run AFTER 3C completes.
 -- (See 3D below)
 ```
@@ -360,9 +361,9 @@ CREATE TEMP TABLE staging_profiles (
     created_at      TIMESTAMPTZ,
     updated_at      TIMESTAMPTZ
 );
-\COPY staging_profiles FROM 'out_subscriber_profiles.csv' WITH (FORMAT csv, HEADER true);
+\COPY staging_profiles FROM 'out_device_profiles.csv' WITH (FORMAT csv, HEADER true);
 
-INSERT INTO subscriber_profiles
+INSERT INTO device_profiles
     (device_id, iccid, account_name, status, ip_resolution, metadata)
     SELECT device_id, iccid, account_name, status, ip_resolution, metadata
     FROM staging_profiles
@@ -376,9 +377,9 @@ CREATE TEMP TABLE staging_imsis (
     status      TEXT,
     priority    SMALLINT
 );
-\COPY staging_imsis FROM 'out_subscriber_imsis.csv' WITH (FORMAT csv, HEADER true);
+\COPY staging_imsis FROM 'out_imsi2device.csv' WITH (FORMAT csv, HEADER true);
 
-INSERT INTO subscriber_imsis (imsi, device_id, status, priority)
+INSERT INTO imsi2device (imsi, device_id, status, priority)
     SELECT imsi, device_id, status, priority
     FROM staging_imsis
     ON CONFLICT (imsi) DO NOTHING;
@@ -390,9 +391,9 @@ CREATE TEMP TABLE staging_apn_ips (
     pool_id     UUID,
     pool_name   TEXT
 );
-\COPY staging_apn_ips FROM 'out_subscriber_apn_ips.csv' WITH (FORMAT csv, HEADER true);
+\COPY staging_apn_ips FROM 'out_imsi_apn_ips.csv' WITH (FORMAT csv, HEADER true);
 
-INSERT INTO subscriber_apn_ips (imsi, apn, static_ip, pool_id, pool_name)
+INSERT INTO imsi_apn_ips (imsi, apn, static_ip, pool_id, pool_name)
     SELECT imsi, NULLIF(apn,''), static_ip, pool_id, pool_name
     FROM staging_apn_ips
     ON CONFLICT (imsi, apn) DO NOTHING;
@@ -403,13 +404,13 @@ INSERT INTO subscriber_apn_ips (imsi, apn, static_ip, pool_id, pool_name)
 Run **after 3C completes** so that already-assigned IPs are correctly excluded.
 
 ```sql
--- Populate available IPs: all IPs in subnet minus those already in subscriber_apn_ips
+-- Populate available IPs: all IPs in subnet minus those already in imsi_apn_ips
 INSERT INTO ip_pool_available (pool_id, ip)
 SELECT p.pool_id, (p.start_ip + n)::INET
 FROM   ip_pools p,
        generate_series(1, p.end_ip - p.start_ip - 1) AS n
 WHERE  (p.start_ip + n)::INET NOT IN (
-           SELECT static_ip FROM subscriber_apn_ips WHERE pool_id = p.pool_id
+           SELECT static_ip FROM imsi_apn_ips WHERE pool_id = p.pool_id
        )
 ON CONFLICT DO NOTHING;
 ```
@@ -419,12 +420,13 @@ ON CONFLICT DO NOTHING;
 **Post-load verification queries:**
 ```sql
 -- Row counts
-SELECT COUNT(*) FROM subscriber_profiles;    -- expect: card count from transform
-SELECT COUNT(*) FROM subscriber_imsis;       -- expect: ~650K
-SELECT COUNT(*) FROM subscriber_apn_ips;     -- expect: ~650K + extra for pgw1/pgw2 profiles
+SELECT COUNT(*) FROM device_profiles;    -- expect: card count from transform
+SELECT COUNT(*) FROM imsi2device;       -- expect: ~650K
+SELECT COUNT(*) FROM imsi_apn_ips;     -- expect: ~650K + extra for pgw1/pgw2 profiles
 SELECT COUNT(*) FROM ip_pools;
 SELECT COUNT(*) FROM imsi_range_configs;     -- expect: ~328
 SELECT COUNT(*) FROM iccid_range_configs;    -- expect: 0 (not populated at migration time)
+SELECT COUNT(*) FROM range_config_apn_pools; -- expect: 0 (populated post-cutover by operators)
 
 -- Confirm all migrated range configs are in standalone mode
 SELECT COUNT(*) FROM imsi_range_configs WHERE iccid_range_id IS NOT NULL;
@@ -432,13 +434,13 @@ SELECT COUNT(*) FROM imsi_range_configs WHERE iccid_range_id IS NOT NULL;
 
 -- Spot-check 10 random IMSIs from core_extract.csv
 SELECT si.imsi, sp.iccid, sp.ip_resolution, sa.apn, sa.static_ip
-FROM subscriber_imsis si
-JOIN subscriber_profiles sp ON sp.device_id = si.device_id
-JOIN subscriber_apn_ips sa  ON sa.imsi = si.imsi
+FROM imsi2device si
+JOIN device_profiles sp ON sp.device_id = si.device_id
+JOIN imsi_apn_ips sa  ON sa.imsi = si.imsi
 WHERE si.imsi IN ('278773000002002', ...);
 
 -- Verify no pool IP is double-allocated
-SELECT static_ip, COUNT(*) FROM subscriber_apn_ips
+SELECT static_ip, COUNT(*) FROM imsi_apn_ips
 GROUP BY static_ip HAVING COUNT(*) > 1;
 -- Expected: 0 rows (each IP belongs to one IMSI+APN combination)
 
@@ -448,7 +450,7 @@ SELECT p.pool_name,
        COUNT(sa.static_ip)          AS allocated,
        COUNT(pa.ip)                 AS available
 FROM ip_pools p
-LEFT JOIN subscriber_apn_ips sa ON sa.pool_id = p.pool_id
+LEFT JOIN imsi_apn_ips sa ON sa.pool_id = p.pool_id
 LEFT JOIN ip_pool_available   pa ON pa.pool_id = p.pool_id
 GROUP BY p.pool_id, p.pool_name, p.start_ip, p.end_ip;
 -- allocated + available should equal total for every pool
@@ -468,7 +470,7 @@ GROUP BY p.pool_id, p.pool_name, p.start_ip, p.end_ip;
 **Duration:** Minimum 1–2 weeks (operator decision based on risk tolerance)
 **When:** After Step 3 Go/No-Go passes
 
-Configure FreeRADIUS with the two-stage `rlm_rest` config (Stage 1 → `aaa-lookup-service`,
+Configure aaa-radius-server with the two-stage `rlm_rest` config (Stage 1 → `aaa-lookup-service`,
 Stage 2 → `subscriber-profile-api /first-connection`), but keep MariaDB as the authoritative
 lookup in parallel:
 
@@ -522,11 +524,11 @@ T-0       BEGIN MAINTENANCE WINDOW
 T+0  min  Notify operations team: "Migration cut-over starting"
 T+2  min  Disable new first-connection allocations in MariaDB
            (set all imsi_range_config rows to status=suspended in MariaDB)
-T+5  min  Switch FreeRADIUS to two-stage PostgreSQL config:
+T+5  min  Switch aaa-radius-server to two-stage PostgreSQL config:
            Stage 1 → aaa-lookup-service (read-only, hot path)
            Stage 2 → subscriber-profile-api /first-connection (new IMSI allocation)
            Remove MariaDB read path entirely.
-T+10 min  Reload FreeRADIUS on all nodes
+T+10 min  Reload aaa-radius-server on all nodes
 T+15 min  Confirm: live Access-Requests are flowing through aaa-lookup-service
            - Check access log: all requests returning 200
            - Check latency: p99 < 15ms
@@ -541,7 +543,7 @@ T+24h     Full review of error rates, latency, mismatch log (now zero expected)
 **T+25 min final checks:**
 ```sql
 -- PostgreSQL: confirm no new first-connection profiles have NULL device_id
-SELECT COUNT(*) FROM subscriber_profiles WHERE device_id IS NULL;  -- expect 0
+SELECT COUNT(*) FROM device_profiles WHERE device_id IS NULL;  -- expect 0
 
 -- Confirm all migrated range configs remain in standalone mode
 SELECT COUNT(*) FROM imsi_range_configs WHERE iccid_range_id IS NOT NULL;  -- expect 0
@@ -560,8 +562,8 @@ SELECT COUNT(*) FROM imsi_range_configs WHERE iccid_range_id IS NOT NULL;  -- ex
 If any check at T+25 fails, or p99 > 50ms, or error rate > 1%:
 
 ```
-1. Immediately revert FreeRADIUS config to MariaDB read path
-2. Reload FreeRADIUS on all nodes
+1. Immediately revert aaa-radius-server config to MariaDB read path
+2. Reload aaa-radius-server on all nodes
 3. Re-enable MariaDB writes
 4. Notify operations: "Migration rolled back — MariaDB is authoritative"
 5. Investigate root cause before scheduling a new cutover window
@@ -587,8 +589,8 @@ any IMSIs not covered by the original `imsi_iccid_map.csv`.
 
 ```sql
 SELECT si.imsi, sp.device_id, sp.account_name
-FROM subscriber_imsis si
-JOIN subscriber_profiles sp ON sp.device_id = si.device_id
+FROM imsi2device si
+JOIN device_profiles sp ON sp.device_id = si.device_id
 WHERE sp.iccid IS NULL
 ORDER BY sp.account_name, si.imsi;
 -- Export result to send to operator for ICCID lookup
@@ -602,14 +604,14 @@ Operator provides `iccid_map_supplement.csv` with columns: `imsi, real_iccid`
 CREATE TEMP TABLE iccid_mapping (imsi TEXT, real_iccid TEXT);
 \COPY iccid_mapping FROM 'iccid_map_supplement.csv' WITH (FORMAT csv, HEADER true);
 
-UPDATE subscriber_profiles sp
+UPDATE device_profiles sp
 SET    iccid = m.real_iccid, updated_at = now()
 FROM   iccid_mapping m
-JOIN   subscriber_imsis si ON si.imsi = m.imsi AND si.device_id = sp.device_id
+JOIN   imsi2device si ON si.imsi = m.imsi AND si.device_id = sp.device_id
 WHERE  sp.iccid IS NULL;
 
 -- Verify
-SELECT COUNT(*) FROM subscriber_profiles WHERE iccid IS NULL;
+SELECT COUNT(*) FROM device_profiles WHERE iccid IS NULL;
 -- Target: 0 (or reduced to only truly unknown ICCIDs)
 ```
 
@@ -652,7 +654,7 @@ These are the automated checks the regression suite runs against migration outpu
 
 | # | Test | Expected |
 |---|---|---|
-| 9.1 | Run migration script on Athens-only sample dump | subscriber_profiles count = distinct ICCID-groups + unmatched IMSIs |
+| 9.1 | Run migration script on Athens-only sample dump | device_profiles count = distinct ICCID-groups + unmatched IMSIs |
 | 9.2 | IMSI in `imsi_iccid_map.csv` → GET /profiles?imsi={imsi} | `iccid` = real ICCID from map |
 | 9.3 | IMSI not in map → GET /profiles?imsi={imsi} | `iccid` = null |
 | 9.4 | IMSI in 2 dumps, different IPs, same client → GET /profiles?imsi={imsi} | ip_resolution=imsi_apn, 2 apn_ips entries: apn=pgw1, apn=pgw2 |
@@ -663,7 +665,7 @@ These are the automated checks the regression suite runs against migration outpu
 | 9.9 | iccid_range_configs table is empty post-migration | SELECT COUNT(*) FROM iccid_range_configs = 0 |
 | 9.10 | Pool stats after load | available = total IPs − allocated; allocated + available = total |
 | 9.11 | GET /lookup?imsi={migrated_imsi}&apn=any via aaa-lookup-service | 200, correct static_ip |
-| 9.12 | GET /lookup?imsi={range_config_imsi_not_in_profiles}&apn=any → 404 from aaa-lookup-service, then POST /first-connection (via FreeRADIUS two-stage) | 200, new IP allocated from pool; profile permanently created |
+| 9.12 | GET /lookup?imsi={range_config_imsi_not_in_profiles}&apn=any → 404 from aaa-lookup-service, then POST /first-connection (via aaa-radius-server two-stage) | 200, new IP allocated from pool; profile permanently created |
 
 ---
 
@@ -677,10 +679,10 @@ These are the automated checks the regression suite runs against migration outpu
 | `core_extract.csv` | Step 1 extract | Step 2 transform |
 | `staging_ranges.csv` | Step 1 extract | Step 2 transform |
 | `pool_map.csv` | Step 2 transform | Step 3 load |
-| `out_subscriber_profiles.csv` | Step 2 transform | Step 3 load |
-| `out_subscriber_imsis.csv` | Step 2 transform | Step 3 load |
-| `out_subscriber_apn_ips.csv` | Step 2 transform | Step 3 load |
-| `out_subscriber_iccid_ips.csv` | Step 2 transform (empty) | Step 3 load (no-op) |
+| `out_device_profiles.csv` | Step 2 transform | Step 3 load |
+| `out_imsi2device.csv` | Step 2 transform | Step 3 load |
+| `out_imsi_apn_ips.csv` | Step 2 transform | Step 3 load |
+| `out_device_apn_ips.csv` | Step 2 transform (empty) | Step 3 load (no-op) |
 | `out_ip_pools.csv` | Step 2 transform | Step 3 load |
 | `out_imsi_range_configs.csv` | Step 2 transform | Step 3 load |
 | `migration_audit.log` | Step 2 transform | Review before Step 3 |

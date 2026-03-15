@@ -23,8 +23,8 @@ SELECT
   ('100.64.' || ((s - 1) / 254) || '.' || ((s - 1) % 254 + 1))::INET AS static_ip
 FROM generate_series(1, 10000) s;
 
--- ── subscriber_profiles ────────────────────────────────────────────
-INSERT INTO subscriber_profiles (device_id, iccid, account_name, status, ip_resolution, metadata)
+-- ── device_profiles ────────────────────────────────────────────
+INSERT INTO device_profiles (device_id, iccid, account_name, status, ip_resolution, metadata)
 SELECT
   device_id,
   iccid,
@@ -35,8 +35,8 @@ SELECT
 FROM _lt_seed
 ON CONFLICT (device_id) DO NOTHING;
 
--- ── subscriber_imsis ───────────────────────────────────────────────
-INSERT INTO subscriber_imsis (imsi, device_id, status, priority)
+-- ── imsi2device ───────────────────────────────────────────────
+INSERT INTO imsi2device (imsi, device_id, status, priority)
 SELECT
   imsi,
   device_id,
@@ -45,8 +45,8 @@ SELECT
 FROM _lt_seed
 ON CONFLICT (imsi) DO NOTHING;
 
--- ── subscriber_apn_ips — 'internet' APN (exact match) ─────────────
-INSERT INTO subscriber_apn_ips (imsi, apn, static_ip, pool_id, pool_name)
+-- ── imsi_apn_ips — 'internet' APN (exact match) ─────────────
+INSERT INTO imsi_apn_ips (imsi, apn, static_ip, pool_id, pool_name)
 SELECT
   imsi,
   'internet',
@@ -56,9 +56,9 @@ SELECT
 FROM _lt_seed
 ON CONFLICT DO NOTHING;
 
--- ── subscriber_apn_ips — wildcard APN (fallback for other APNs) ───
+-- ── imsi_apn_ips — wildcard APN (fallback for other APNs) ───
 -- apn = '' is the catch-all wildcard (matches the existing data convention)
-INSERT INTO subscriber_apn_ips (imsi, apn, static_ip, pool_id, pool_name)
+INSERT INTO imsi_apn_ips (imsi, apn, static_ip, pool_id, pool_name)
 SELECT
   imsi,
   '',
@@ -74,13 +74,13 @@ COMMIT;
 SELECT
   COUNT(*) FILTER (WHERE account_name = 'LoadTestAccount') AS profiles,
   COUNT(*) AS total_profiles
-FROM subscriber_profiles;
+FROM device_profiles;
 
 SELECT COUNT(*) AS imsis
-FROM subscriber_imsis
+FROM imsi2device
 WHERE imsi LIKE '00101%';
 
 SELECT COUNT(*) AS apn_ips
-FROM subscriber_apn_ips sa
-JOIN subscriber_imsis si ON si.imsi = sa.imsi
+FROM imsi_apn_ips sa
+JOIN imsi2device si ON si.imsi = sa.imsi
 WHERE si.imsi LIKE '00101%';

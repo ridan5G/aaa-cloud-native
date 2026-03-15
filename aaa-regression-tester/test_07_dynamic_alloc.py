@@ -2,7 +2,7 @@
 test_07_dynamic_alloc.py — First-connection two-stage allocation.
 
 The aaa-lookup-service is STRICTLY READ-ONLY (no primary DB connection).
-FreeRADIUS follows a two-stage flow:
+aaa-radius-server follows a two-stage flow:
   Stage 1 → GET /lookup on aaa-lookup-service
   Stage 2 → POST /profiles/first-connection on subscriber-profile-api (only on 404)
 
@@ -82,7 +82,7 @@ class TestDynamicAlloc:
 
     @staticmethod
     def _first_connection(http: httpx.Client, imsi: str, apn: str) -> httpx.Response:
-        """Simulate FreeRADIUS Stage 2: POST /profiles/first-connection."""
+        """Simulate aaa-radius-server Stage 2: POST /profiles/first-connection."""
         return http.post(
             "/profiles/first-connection",
             json={"imsi": imsi, "apn": apn},

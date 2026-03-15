@@ -1,5 +1,5 @@
 """
-fixtures/profiles.py — helpers for subscriber_profiles (all three modes).
+fixtures/profiles.py — helpers for device_profiles (all three modes).
 """
 import httpx
 
@@ -118,6 +118,45 @@ def create_profile_imsi_apn(
     resp = http.post("/profiles", json=body)
     assert resp.status_code == 201, (
         f"create_profile_imsi_apn failed: {resp.status_code} {resp.text}"
+    )
+    return resp.json()
+
+
+def create_profile_iccid_apn(
+    http: httpx.Client,
+    *,
+    iccid: str,
+    account_name: str = "TestAccount",
+    imsis: list[str],
+    apn_ips: list[dict],   # [{"apn": str, "static_ip": str, "pool_id": str}]
+    pool_name: str = "test-pool",
+) -> dict:
+    """POST /profiles with ip_resolution=iccid_apn (Profile D / S4).
+
+    All IMSIs on the card share card-level IPs, one per APN.
+    """
+    body = {
+        "iccid":         iccid,
+        "account_name":  account_name,
+        "status":        "active",
+        "ip_resolution": "iccid_apn",
+        "imsis": [
+            {"imsi": imsi, "apn_ips": []}
+            for imsi in imsis
+        ],
+        "iccid_ips": [
+            {
+                "apn":       entry["apn"],
+                "static_ip": entry["static_ip"],
+                "pool_id":   entry["pool_id"],
+                "pool_name": pool_name,
+            }
+            for entry in apn_ips
+        ],
+    }
+    resp = http.post("/profiles", json=body)
+    assert resp.status_code == 201, (
+        f"create_profile_iccid_apn failed: {resp.status_code} {resp.text}"
     )
     return resp.json()
 

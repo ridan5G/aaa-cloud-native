@@ -244,7 +244,7 @@ function sectionLine(slide, y) {
   s.addText("How we achieve < 15ms", { x: 0.4, y: 2.55, w: 9, h: 0.35, fontSize: 14, bold: true, color: C.accent, margin: 0 });
 
   const perf = [
-    { t: "Index-only B-tree seek", d: "subscriber_imsis.imsi is a PK — single-page lookup, no full-table scan" },
+    { t: "Index-only B-tree seek", d: "imsi2device.imsi is a PK — single-page lookup, no full-table scan" },
     { t: "Near 100% cache hit", d: "~80MB index fits entirely in PostgreSQL shared_buffers at steady state" },
     { t: "Async C++ Drogon", d: "Non-blocking I/O with coroutines; zero context-switching overhead per request" },
     { t: "Read replica isolation", d: "Lookup never competes with write transactions on the primary" },
@@ -331,7 +331,7 @@ function sectionLine(slide, y) {
   s.addText([
     { text: "GET /lookup?imsi={imsi}&apn={apn}", options: { breakLine: true } },
     { text: "→ Queries READ REPLICA", options: { breakLine: true } },
-    { text: "→ IMSI not found in subscriber_imsis", options: { breakLine: true } },
+    { text: "→ IMSI not found in imsi2device", options: { breakLine: true } },
     { text: "→ Returns 404 {\"error\": \"not_found\"}", options: {} },
   ], { x: 0.4, y: 1.78, w: 4.1, h: 0.9, fontSize: 10.5, color: C.iceBlue, fontFace: "Courier New", margin: 0 });
 
@@ -375,7 +375,7 @@ function sectionLine(slide, y) {
 {
   const s = pres.addSlide();
   lightSlide(s);
-  titleBar(s, "Multi-IMSI SIM: Zero-Touch Provisioning", "One IP allocated per card; all sibling slots pre-provisioned in a single transaction");
+  titleBar(s, "Multi-IMSI SIM: Zero-Touch Provisioning", "All sibling slots pre-provisioned atomically — each from its own per-slot pool");
 
   // SIM card visual (left)
   s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: 0.3, y: 1.15, w: 2.5, h: 3.5, fill: { color: C.navy }, rectRadius: 0.15, line: { color: C.blue } });
@@ -393,7 +393,7 @@ function sectionLine(slide, y) {
     { num: "1", title: "Slot 1 First Attach", detail: "GET /lookup → 404\nPOST /first-connection\n{imsi: \"278770...042\"}" },
     { num: "2", title: "Compute Offset", detail: "offset = 278770...042\n       - 278770...000\n= 42" },
     { num: "3", title: "Derive ICCID", detail: "8944...000\n+ 42\n= 8944...042" },
-    { num: "4", title: "Atomic Transaction", detail: "1 IP allocated from pool\nSlot 1 + Slot 2 both INSERTed\nSingle COMMIT" },
+    { num: "4", title: "Atomic Transaction", detail: "IP per slot (imsi mode)\nor 1 IP card (iccid mode)\nAll slots INSERTed, 1 COMMIT" },
     { num: "5", title: "Slot 2 Connects Later", detail: "GET /lookup → 200\n(pre-provisioned!)\nStage 2 never runs" },
   ];
   steps.forEach((st, i) => {
@@ -408,7 +408,7 @@ function sectionLine(slide, y) {
 
   // Key insight
   s.addShape(pres.shapes.RECTANGLE, { x: 0.3, y: 4.85, w: W - 0.6, h: 0.52, fill: { color: C.navy }, line: { color: C.accent, width: 1 } });
-  s.addText("Key: ONE IP allocated per physical card, regardless of IMSI count. All slots share the same IP address.", { x: 0.5, y: 4.85, w: W - 1.0, h: 0.52, fontSize: 11.5, bold: true, color: C.white, valign: "middle", margin: 0 });
+  s.addText("Key: All siblings provisioned in ONE transaction (thundering herd protection). imsi mode → IP per slot. iccid mode → 1 shared IP per card.", { x: 0.5, y: 4.85, w: W - 1.0, h: 0.52, fontSize: 11.5, bold: true, color: C.white, valign: "middle", margin: 0 });
   s.addShape(pres.shapes.RECTANGLE, { x: 0.3, y: 4.85, w: 0.06, h: 0.52, fill: { color: C.accent }, line: { color: C.accent } });
 }
 
@@ -418,17 +418,17 @@ function sectionLine(slide, y) {
 {
   const s = pres.addSlide();
   lightSlide(s);
-  titleBar(s, "Data Model: 8 PostgreSQL Tables", "Three logical groups — subscriber data, IP pools, and range configurations");
+  titleBar(s, "Data Model: 9 PostgreSQL Tables", "Three logical groups — subscriber data, IP pools, and range configurations");
 
   // Group 1 — Subscriber
   s.addShape(pres.shapes.RECTANGLE, { x: 0.3, y: 1.1, w: 3.1, h: 0.32, fill: { color: C.navy }, line: { color: C.navy } });
   s.addText("SUBSCRIBER DATA", { x: 0.3, y: 1.1, w: 3.1, h: 0.32, fontSize: 10, bold: true, color: C.white, align: "center", valign: "middle", margin: 0, charSpacing: 2 });
 
   const subTables = [
-    { name: "subscriber_profiles", pk: "device_id (UUID)", desc: "One row per SIM card" },
-    { name: "subscriber_imsis", pk: "imsi (15 digits)", desc: "One row per IMSI" },
-    { name: "subscriber_apn_ips", pk: "id (BIGINT)", desc: "IMSI-level IP assignments" },
-    { name: "subscriber_iccid_ips", pk: "id (BIGINT)", desc: "Card-level IP assignments" },
+    { name: "device_profiles", pk: "device_id (UUID)", desc: "One row per SIM card" },
+    { name: "imsi2device", pk: "imsi (15 digits)", desc: "One row per IMSI" },
+    { name: "imsi_apn_ips", pk: "id (BIGINT)", desc: "IMSI-level IP assignments" },
+    { name: "device_apn_ips", pk: "id (BIGINT)", desc: "Card-level IP assignments" },
   ];
   subTables.forEach((t, i) => {
     const y = 1.48 + i * 0.72;
@@ -459,6 +459,7 @@ function sectionLine(slide, y) {
   const confTables = [
     { name: "imsi_range_configs", pk: "id (BIGINT)", desc: "IMSI ranges for auto-prov" },
     { name: "iccid_range_configs", pk: "id (BIGINT)", desc: "Multi-IMSI SIM parent" },
+    { name: "range_config_apn_pools", pk: "id (BIGINT)", desc: "Per-APN pool overrides" },
     { name: "bulk_jobs", pk: "job_id (UUID)", desc: "Async bulk job tracking" },
   ];
   confTables.forEach((t, i) => {
@@ -508,7 +509,7 @@ function sectionLine(slide, y) {
     },
     {
       title: "Range Configs", color: "1A5C9E",
-      endpoints: ["POST /v1/range-configs", "POST /v1/iccid-range-configs", ".../imsi-slots (multi-IMSI)", "PATCH / DELETE both types"],
+      endpoints: ["POST /v1/range-configs", "GET/POST/DELETE .../apn-pools", "POST /v1/iccid-range-configs", ".../imsi-slots (multi-IMSI)"],
     },
     {
       title: "First-Connection", color: C.green,
@@ -758,7 +759,63 @@ function sectionLine(slide, y) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// SLIDE 14 — SUMMARY / KEY TAKEAWAYS
+// SLIDE 14 — AUTO-ALLOCATION SCENARIOS
+// ══════════════════════════════════════════════════════════════════════════════
+{
+  const s = pres.addSlide();
+  s.addShape(pres.shapes.RECTANGLE, { x: 0, y: 0, w: W, h: 0.7, fill: { color: C.navy }, line: { color: C.navy } });
+  s.addText("Auto-Allocation Scenarios", { x: 0.3, y: 0, w: 7, h: 0.7, fontSize: 22, bold: true, color: C.white, valign: "middle", margin: 0 });
+  s.addText("POST /v1/first-connection", { x: 7.4, y: 0, w: 2.2, h: 0.7, fontSize: 10, color: C.skyBlue, valign: "middle", align: "right", margin: 0 });
+
+  // Scenario matrix table
+  const colW = [0.38, 1.55, 1.1, 1.1, 0.72, 1.5, 1.85];
+  const hx = 0.18;
+  const hy = 0.82;
+  const rowH = 0.36;
+  const headers = ["#", "SIM type", "Mode", "APN catalog", "IPs / SIM", "Config steps", "First connect provisions"];
+  const rows = [
+    ["S1", "Single-IMSI", "imsi",      "—",       "1",   "range-config + pool",                            "1 IP → imsi_apn_ips (apn=NULL)"],
+    ["S2", "Single-IMSI", "imsi_apn",  "N APNs",  "N",   "range-config + apn-pools (×N)",                  "N IPs → imsi_apn_ips per APN"],
+    ["S3", "Single-IMSI", "iccid",     "—",       "1",   "range-config + pool",                            "1 IP → device_apn_ips (apn=NULL)"],
+    ["S4", "Single-IMSI", "iccid_apn", "N APNs",  "N",   "range-config + apn-pools (×N)",                  "N IPs → device_apn_ips per APN"],
+    ["M1", "Multi-IMSI (M)", "imsi",   "—",       "M",   "iccid-range + M slots (per-slot pools opt.)",    "M IPs — 1 per slot, all in 1 COMMIT"],
+    ["M2", "Multi-IMSI (M)", "imsi_apn","N APNs", "M×N", "iccid-range + M slots + apn-pools on each slot", "M×N IPs — per-slot per-APN, 1 COMMIT"],
+    ["M3", "Multi-IMSI (M)", "iccid",  "—",       "1",   "iccid-range + M slots",                          "1 IP shared — all slots, 1 COMMIT"],
+    ["M4", "Multi-IMSI (M)", "iccid_apn","N APNs","N",   "iccid-range + M slots + apn-pools",              "N IPs shared card-level, 1 COMMIT"],
+  ];
+
+  let cx = hx;
+  headers.forEach((h, i) => {
+    s.addShape(pres.shapes.RECTANGLE, { x: cx, y: hy, w: colW[i], h: rowH, fill: { color: C.navy }, line: { color: "FFFFFF", width: 0.3 } });
+    s.addText(h, { x: cx + 0.03, y: hy, w: colW[i] - 0.06, h: rowH, fontSize: 9, bold: true, color: C.white, valign: "middle", margin: 0 });
+    cx += colW[i];
+  });
+
+  rows.forEach((row, ri) => {
+    const bg = ri % 2 === 0 ? "EFF3FB" : "FFFFFF";
+    const isMulti = row[0].startsWith("M");
+    let cx2 = hx;
+    row.forEach((cell, ci) => {
+      s.addShape(pres.shapes.RECTANGLE, { x: cx2, y: hy + rowH + ri * rowH, w: colW[ci], h: rowH, fill: { color: bg }, line: { color: "D0D8E8", width: 0.3 } });
+      const textColor = ci === 2 ? (isMulti ? C.accent : C.blue) : (ci === 4 ? C.green : C.navy);
+      s.addText(cell, { x: cx2 + 0.03, y: hy + rowH + ri * rowH, w: colW[ci] - 0.06, h: rowH, fontSize: 8.5, bold: ci === 0 || ci === 2 || ci === 4, color: textColor, valign: "middle", margin: 0 });
+      cx2 += colW[ci];
+    });
+  });
+
+  // Key notes below table
+  const notesY = hy + rowH * 9 + 0.08;
+  s.addShape(pres.shapes.RECTANGLE, { x: hx, y: notesY, w: W - hx * 2, h: 0.78, fill: { color: C.bgLight }, line: { color: C.blue, width: 0.6 } });
+  s.addText(
+    "N = APN entries in range_config_apn_pools  ·  M = active IMSI slots  ·  All scenarios are idempotent — repeat calls return existing IP with single read, no allocation\n" +
+    "Pool resolution: APN override (range_config_apn_pools) → slot pool (imsi_range_configs) → parent pool (iccid_range_configs)  ·  M2 example: 2 slots × 2 APNs = 4 IPs per SIM in one COMMIT\n" +
+    "Bulk provisioning: all 8 scenarios supported via POST /v1/profiles/bulk — supply static_ip/pool_id per IP entry for pre-provisioned, or omit for auto-allocation via range config",
+    { x: hx + 0.1, y: notesY + 0.02, w: W - hx * 2 - 0.2, h: 0.72, fontSize: 8.5, color: C.navy, valign: "middle", margin: 0 }
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SLIDE 15 — SUMMARY / KEY TAKEAWAYS
 // ══════════════════════════════════════════════════════════════════════════════
 {
   const s = pres.addSlide();

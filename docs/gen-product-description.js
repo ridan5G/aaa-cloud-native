@@ -334,17 +334,17 @@ const doc = new Document({
         // ── 3. Data Model ────────────────────────────────────────────────
         new Paragraph({ children: [new PageBreak()] }),
         hdr("3. Data Model", HeadingLevel.HEADING_1),
-        para("The platform uses 8 PostgreSQL tables organized into three logical groups: subscriber data, IP pool management, and configuration."),
+        para("The platform uses 9 PostgreSQL tables organized into three logical groups: subscriber data, IP pool management, and configuration."),
         spacer(80),
 
         hdr("3.1 Subscriber Tables", HeadingLevel.HEADING_2),
         table(
           ["Table", "Primary Key", "Description"],
           [
-            ["subscriber_profiles", "device_id (UUID)", "One row per physical SIM card. Stores ICCID, account, status, and ip_resolution mode."],
-            ["subscriber_imsis", "imsi (TEXT, 15 digits)", "One row per IMSI. Multiple IMSIs may share the same device_id (Multi-IMSI SIM)."],
-            ["subscriber_apn_ips", "id (BIGINT)", "Per-IMSI static IP assignments. APN may be NULL for wildcard (any APN)."],
-            ["subscriber_iccid_ips", "id (BIGINT)", "Card-level static IP assignments shared by all IMSIs on the card."],
+            ["device_profiles", "device_id (UUID)", "One row per physical SIM card. Stores ICCID, account, status, and ip_resolution mode."],
+            ["imsi2device", "imsi (TEXT, 15 digits)", "One row per IMSI. Multiple IMSIs may share the same device_id (Multi-IMSI SIM)."],
+            ["imsi_apn_ips", "id (BIGINT)", "Per-IMSI static IP assignments. APN may be NULL for wildcard (any APN)."],
+            ["device_apn_ips", "id (BIGINT)", "Card-level static IP assignments shared by all IMSIs on the card."],
           ],
           [2400, 2000, 4960]
         ),
@@ -365,23 +365,24 @@ const doc = new Document({
         table(
           ["Table", "Description"],
           [
-            ["imsi_range_configs", "Defines IMSI ranges eligible for dynamic first-connection allocation. Links to an IP pool."],
-            ["iccid_range_configs", "Parent table for Multi-IMSI SIM ranges. Each ICCID range has 1-10 child IMSI slot ranges."],
+            ["imsi_range_configs", "Defines IMSI ranges eligible for dynamic first-connection allocation. Links to an IP pool (pool_id may be overridden per slot in Multi-IMSI groups)."],
+            ["iccid_range_configs", "Parent table for Multi-IMSI SIM ranges. Each ICCID range has 1-10 child IMSI slot ranges. pool_id is nullable when each slot defines its own pool."],
+            ["range_config_apn_pools", "Per-APN pool overrides for imsi_range_configs. Enables apn1 → pool-A, apn2 → pool-B routing for imsi_apn / iccid_apn resolution modes."],
           ],
           [3000, 6360]
         ),
         spacer(80),
 
         hdr("3.4 IP Resolution Modes", HeadingLevel.HEADING_2),
-        para("The ip_resolution field on subscriber_profiles controls how the lookup service selects the IP address for an Access-Request:"),
+        para("The ip_resolution field on device_profiles controls how the lookup service selects the IP address for an Access-Request:"),
         spacer(60),
         table(
           ["Mode", "IP Storage Table", "Description"],
           [
-            ["imsi", "subscriber_apn_ips", "One IP per IMSI, APN-agnostic. All APNs get the same IP."],
-            ["imsi_apn", "subscriber_apn_ips", "One IP per IMSI per APN. Different APNs may have different IPs."],
-            ["iccid", "subscriber_iccid_ips", "One IP per SIM card, APN-agnostic. All IMSIs on the card share one IP."],
-            ["iccid_apn", "subscriber_iccid_ips", "One IP per SIM card per APN."],
+            ["imsi", "imsi_apn_ips", "One IP per IMSI, APN-agnostic. All APNs get the same IP."],
+            ["imsi_apn", "imsi_apn_ips", "One IP per IMSI per APN. Different APNs may have different IPs."],
+            ["iccid", "device_apn_ips", "One IP per SIM card, APN-agnostic. All IMSIs on the card share one IP."],
+            ["iccid_apn", "device_apn_ips", "One IP per SIM card per APN."],
           ],
           [1600, 2400, 5360]
         ),
@@ -442,8 +443,9 @@ const doc = new Document({
           ["Method", "Path", "Description"],
           [
             ["POST/GET/PATCH/DELETE", "/v1/range-configs", "Standalone IMSI range configs for single-IMSI provisioning"],
-            ["POST/GET/PATCH/DELETE", "/v1/iccid-range-configs", "Parent ICCID ranges for Multi-IMSI SIM provisioning"],
-            ["POST/PATCH/DELETE", "/v1/iccid-range-configs/{id}/imsi-slots", "Child IMSI slot ranges (1-10 per ICCID range)"],
+            ["GET/POST/DELETE", "/v1/range-configs/{id}/apn-pools", "Per-APN pool overrides for imsi_apn / iccid_apn modes (apn → pool_id mapping)"],
+            ["POST/GET/PATCH/DELETE", "/v1/iccid-range-configs", "Parent ICCID ranges for Multi-IMSI SIM provisioning (pool_id optional)"],
+            ["POST/PATCH/DELETE", "/v1/iccid-range-configs/{id}/imsi-slots", "Child IMSI slot ranges (1-10 per ICCID range, each may specify its own pool_id)"],
           ],
           [2400, 2700, 4260]
         ),
@@ -476,7 +478,7 @@ const doc = new Document({
         hdr("Step-by-Step", HeadingLevel.HEADING_3),
         numbered("aaa-radius-server sends: GET /lookup?imsi={imsi}&apn={apn} with Bearer JWT"),
         numbered("aaa-lookup-service validates the JWT (RS256) and queries the READ_REPLICA using the core lookup SQL"),
-        numbered("Resolver applies ip_resolution logic: for mode 'imsi', returns subscriber_apn_ips.static_ip; for 'iccid', returns subscriber_iccid_ips.static_ip"),
+        numbered("Resolver applies ip_resolution logic: for mode 'imsi', returns imsi_apn_ips.static_ip; for 'iccid', returns device_apn_ips.static_ip"),
         numbered("Response 200 {\"static_ip\": \"100.65.120.5\"} is returned"),
         numbered("aaa-radius-server sets Framed-IP-Address attribute and sends Access-Accept"),
         spacer(80),
@@ -499,13 +501,13 @@ const doc = new Document({
         codeBlock("       si.status AS imsi_status,"),
         codeBlock("       sa.apn AS imsi_apn,    sa.static_ip AS imsi_static_ip,"),
         codeBlock("       ci.apn AS iccid_apn,   ci.static_ip AS iccid_static_ip"),
-        codeBlock("FROM   subscriber_imsis si"),
-        codeBlock("JOIN   subscriber_profiles sp ON sp.device_id = si.device_id"),
-        codeBlock("LEFT JOIN subscriber_apn_ips  sa ON sa.imsi = si.imsi"),
-        codeBlock("LEFT JOIN subscriber_iccid_ips ci ON ci.device_id = sp.device_id"),
+        codeBlock("FROM   imsi2device si"),
+        codeBlock("JOIN   device_profiles sp ON sp.device_id = si.device_id"),
+        codeBlock("LEFT JOIN imsi_apn_ips  sa ON sa.imsi = si.imsi"),
+        codeBlock("LEFT JOIN device_apn_ips ci ON ci.device_id = sp.device_id"),
         codeBlock("WHERE  si.imsi = $1;"),
         spacer(60),
-        para("Performance: Index seek on subscriber_imsis.imsi (PK) -> nested loop on subscriber_profiles (PK) -> left-joins on low-cardinality IP tables. Typical: p50 1-3ms, p99 3-8ms on a warm replica.", { italic: true, color: DARK_GRAY }),
+        para("Performance: Index seek on imsi2device.imsi (PK) -> nested loop on device_profiles (PK) -> left-joins on low-cardinality IP tables. Typical: p50 1-3ms, p99 3-8ms on a warm replica.", { italic: true, color: DARK_GRAY }),
 
         // Flow 2
         new Paragraph({ children: [new PageBreak()] }),
@@ -515,20 +517,20 @@ const doc = new Document({
 
         hdr("Stage 1 (aaa-lookup-service) -> 404", HeadingLevel.HEADING_3),
         numbered("aaa-radius-server sends: GET /lookup?imsi=278773000002042&apn=internet.operator.com"),
-        numbered("Query returns 0 rows: IMSI not in subscriber_imsis"),
+        numbered("Query returns 0 rows: IMSI not in imsi2device"),
         numbered("aaa-lookup-service responds: 404 {\"error\": \"not_found\"}"),
         numbered("aaa-radius-server falls through to Stage 2"),
         spacer(80),
 
         hdr("Stage 2 (subscriber-profile-api) - Single-IMSI Path", HeadingLevel.HEADING_3),
         numbered("aaa-radius-server sends: POST /v1/first-connection {\"imsi\": \"278773000002042\", \"apn\": \"internet.operator.com\", \"imei\": \"...\"}"),
-        numbered("Idempotency check: SELECT from subscriber_imsis WHERE imsi=$1. If found, return existing IP immediately."),
+        numbered("Idempotency check: SELECT from imsi2device WHERE imsi=$1. If found, return existing IP immediately."),
         numbered("Range config lookup: SELECT from imsi_range_configs WHERE $imsi BETWEEN f_imsi AND t_imsi AND status='active'"),
         numbered("If no range config found: return 404 (IMSI not authorized for auto-provisioning)"),
         numbered("BEGIN TRANSACTION on PRIMARY"),
         numbered("Claim IP (atomic, race-safe): DELETE FROM ip_pool_available WHERE ip = (SELECT ip ... FOR UPDATE SKIP LOCKED) RETURNING ip"),
         numbered("If pool empty: ROLLBACK, return 503 {\"error\": \"pool_exhausted\"}"),
-        numbered("INSERT subscriber_profiles, subscriber_imsis, subscriber_apn_ips (or iccid_ips based on ip_resolution mode)"),
+        numbered("INSERT device_profiles, imsi2device, imsi_apn_ips (or iccid_ips based on ip_resolution mode)"),
         numbered("COMMIT"),
         numbered("Return 200 {\"device_id\": \"...\", \"static_ip\": \"100.65.120.5\"}"),
         numbered("aaa-radius-server issues Access-Accept with Framed-IP-Address"),
@@ -559,21 +561,56 @@ const doc = new Document({
         numbered("Stage 2: POST /first-connection with slot-1 IMSI"),
         numbered("Range config matched to an iccid_range_config (iccid_range_id IS NOT NULL)"),
         numbered("Compute offset and derive ICCID"),
-        numbered("Lock: SELECT FROM subscriber_profiles WHERE iccid=$derived_iccid FOR UPDATE"),
+        numbered("Lock: SELECT FROM device_profiles WHERE iccid=$derived_iccid FOR UPDATE"),
         numbered("Profile does not exist yet (first slot to connect):"),
-        sub_bullet("Allocate ONE IP from pool (covers all slots on the card)"),
-        sub_bullet("INSERT subscriber_profiles with derived ICCID"),
-        sub_bullet("For each sibling IMSI slot range: compute sibling IMSI (same offset), INSERT subscriber_imsis + IP assignment"),
-        sub_bullet("All inserts in one COMMIT"),
-        numbered("Return 200 with allocated IP"),
-        numbered("Next time slot 2 IMSI connects: Stage 1 returns 200 immediately (pre-provisioned)"),
+        sub_bullet("Allocate connecting IMSI's IP from its own slot pool (pool precedence: slot pool_id → parent pool_id)"),
+        sub_bullet("INSERT device_profiles with derived ICCID"),
+        sub_bullet("For each sibling slot: compute sibling IMSI (same offset), allocate IP from sibling's pool, INSERT imsi2device + IP assignment"),
+        sub_bullet("All inserts in one atomic COMMIT — thundering herd protection: sibling IMSIs are instantly ready on hot-path"),
+        numbered("Return 201 with connecting IMSI's device_id and static_ip"),
+        numbered("Next time slot 2 IMSI connects: Stage 1 returns 200 immediately (already provisioned)"),
         spacer(80),
 
-        infoBox("Key Benefit", "Only ONE IP is allocated per physical SIM card regardless of how many IMSI slots it carries. All slots share the same IP, and only one first-connection transaction ever runs per card.", LIGHT_BLUE),
+        infoBox("Key Benefit", "All sibling slots are provisioned in a single atomic transaction on the first connection of any slot. For iccid/iccid_apn modes, all slots share one card-level IP. For imsi/imsi_apn modes, each slot gets its own IP from its own per-slot pool. Either way, mass IMSI failover (e.g., 10,000 SIMs switching networks simultaneously) hits the fast read-only lookup path — no allocation races.", LIGHT_BLUE),
+        spacer(120),
 
-        // Flow 4
+        // Flow 3b
+        hdr("5.4 Auto-Allocation Scenarios Reference", HeadingLevel.HEADING_2),
+        para("The following table lists all supported auto-allocation scenarios. The platform selects the scenario automatically based on ip_resolution mode and ICCID range group membership. N = number of APN entries in range_config_apn_pools. M = number of active IMSI slots."),
+        spacer(60),
+        table(
+          ["#", "SIM type", "Mode", "APN catalog", "IPs per SIM", "Atomic on first connect"],
+          [
+            ["S1", "Single-IMSI", "imsi",      "—",      "1",    "1 IP"],
+            ["S2", "Single-IMSI", "imsi_apn",  "N APNs", "N",    "N IPs (one per APN)"],
+            ["S3", "Single-IMSI", "iccid",     "—",      "1",    "1 IP"],
+            ["S4", "Single-IMSI", "iccid_apn", "N APNs", "N",    "N IPs (one per APN)"],
+            ["M1", "Multi-IMSI (M slots)", "imsi",      "—",      "M",    "M IPs (one per slot)"],
+            ["M2", "Multi-IMSI (M slots)", "imsi_apn",  "N APNs", "M × N","M × N IPs (per-slot per-APN)"],
+            ["M3", "Multi-IMSI (M slots)", "iccid",     "—",      "1",    "1 IP (all slots share)"],
+            ["M4", "Multi-IMSI (M slots)", "iccid_apn", "N APNs", "N",    "N IPs (all slots share per-APN)"],
+          ],
+          [500, 2200, 1400, 1500, 1200, 2560]
+        ),
+        spacer(60),
+        para("APN catalog = entries in range_config_apn_pools. For imsi_apn / iccid_apn, the catalog defines both the list of APNs to provision and the pool each APN draws from. If empty, only the connecting APN is provisioned (backward-compatible fallback)."),
+        spacer(80),
+
+        hdr("Pool Resolution", HeadingLevel.HEADING_3),
+        para("At first-connection, the effective pool for each (IMSI, APN) pair is resolved in priority order:"),
+        numbered("range_config_apn_pools.pool_id for this range_config_id + APN  (highest — per-APN override)"),
+        numbered("imsi_range_configs.pool_id  (per-slot pool, multi-IMSI)"),
+        numbered("iccid_range_configs.pool_id  (parent card pool, multi-IMSI fallback)"),
+        spacer(80),
+
+        hdr("Idempotency and Crash Recovery", HeadingLevel.HEADING_3),
+        para("All scenarios are idempotent. On any repeat call, the platform detects the IMSI in imsi2device and returns the existing IP with a single indexed read and no allocation. For multi-IMSI SIMs, sibling slots pre-provisioned in the original transaction are served from the fast hot-path on every subsequent connection — zero write pressure at steady state."),
+        spacer(60),
+        infoBox("Thundering Herd Protection", "When 10,000 dual-IMSI SIMs simultaneously failover from slot-1 to slot-2, slot-2 IMSIs are already provisioned (pre-provisioned in the same transaction as slot-1). Every connection hits the 15ms hot-path. No allocation races, no pool contention, no write storms.", GREEN_BG),
+
+        // Flow 4 (renumbered)
         new Paragraph({ children: [new PageBreak()] }),
-        hdr("5.4 Manual Subscriber Provisioning", HeadingLevel.HEADING_2),
+        hdr("5.5 Manual Subscriber Provisioning", HeadingLevel.HEADING_2),
         para("Operators can pre-provision subscribers via the REST API before they connect to the network. This bypasses the two-stage flow entirely."),
         spacer(80),
 
@@ -610,7 +647,7 @@ const doc = new Document({
 
         // Flow 5
         new Paragraph({ children: [new PageBreak()] }),
-        hdr("5.5 Bulk Provisioning Flow", HeadingLevel.HEADING_2),
+        hdr("5.6 Bulk Provisioning Flow", HeadingLevel.HEADING_2),
         para("For batch provisioning of large subscriber datasets (migrations, initial deployments), the bulk API accepts up to 100,000 profiles per job."),
         spacer(80),
 
@@ -647,6 +684,28 @@ const doc = new Document({
         bullet("Processes in batches of BULK_BATCH_SIZE (default 1,000) with INSERT ON CONFLICT (upsert semantics)"),
         bullet("CSV upload is also supported via multipart/form-data file upload"),
         bullet("Final status shows processed count, failed count, and per-row error details"),
+        spacer(80),
+
+        hdr("Profile Object Structure by Scenario", HeadingLevel.HEADING_3),
+        para("The ip_resolution field controls the shape of the profile object. The table below summarises the required JSON structure per scenario for the profiles array."),
+        spacer(80),
+        table(
+          ["Scenario", "ip_resolution", "IPs / SIM", "Profile object key fields"],
+          [
+            ["S1 — Single-IMSI", "imsi",      "1",   "imsis[{imsi, apn_ips[{static_ip, pool_id}]}]"],
+            ["S2 — Single-IMSI", "imsi_apn",  "N",   "imsis[{imsi, apn_ips[{apn, static_ip, pool_id}]}] × N"],
+            ["S3 — Single-IMSI", "iccid",     "1",   "iccid_ips[{static_ip, pool_id}]  +  imsis[{imsi}]"],
+            ["S4 — Single-IMSI", "iccid_apn", "N",   "iccid_ips[{apn, static_ip, pool_id}] × N  +  imsis[{imsi}]"],
+            ["M1 — Multi-IMSI",  "imsi",      "M",   "iccid  +  imsis[{imsi, priority, apn_ips[{static_ip, pool_id}]}] × M"],
+            ["M2 — Multi-IMSI",  "imsi_apn",  "M×N", "iccid  +  imsis[{imsi, priority, apn_ips[{apn, static_ip, pool_id}]}] × M slots × N APNs"],
+            ["M3 — Multi-IMSI",  "iccid",     "1",   "iccid  +  iccid_ips[{static_ip, pool_id}]  +  imsis[{imsi, priority}] × M"],
+            ["M4 — Multi-IMSI",  "iccid_apn", "N",   "iccid  +  iccid_ips[{apn, static_ip, pool_id}] × N  +  imsis[{imsi, priority}] × M"],
+          ],
+          [1900, 1200, 900, 5360],
+        ),
+        spacer(80),
+        infoBox("Pre-provisioned vs Auto-Allocated Bulk Jobs", "All 8 scenario types are supported in bulk jobs. For pre-provisioned profiles, supply static_ip and pool_id in every IP entry. For auto-allocated subscribers, omit those fields and ensure a matching range config with the same ip_resolution is active — IPs will be assigned on first RADIUS attach.", ORANGE_BG),
+        spacer(80),
 
         // ── 6. Security ──────────────────────────────────────────────────
         new Paragraph({ children: [new PageBreak()] }),

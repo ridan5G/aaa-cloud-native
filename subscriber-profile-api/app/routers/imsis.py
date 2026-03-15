@@ -38,7 +38,7 @@ class ImsiPatch(BaseModel):
 
 async def _require_profile(device_id: str, conn):
     row = await conn.fetchrow(
-        "SELECT device_id FROM subscriber_profiles WHERE device_id = $1::uuid", device_id
+        "SELECT device_id FROM device_profiles WHERE device_id = $1::uuid", device_id
     )
     if not row:
         raise HTTPException(
@@ -65,8 +65,8 @@ async def list_imsis(device_id: str, conn=Depends(get_conn)):
                    ) FILTER (WHERE sa.id IS NOT NULL),
                    '[]'::json
                ) AS apn_ips
-        FROM subscriber_imsis si
-        LEFT JOIN subscriber_apn_ips sa ON sa.imsi = si.imsi
+        FROM imsi2device si
+        LEFT JOIN imsi_apn_ips sa ON sa.imsi = si.imsi
         WHERE si.device_id = $1::uuid
         GROUP BY si.imsi, si.status, si.priority
         ORDER BY si.priority, si.imsi
@@ -100,8 +100,8 @@ async def get_imsi(device_id: str, imsi: str, conn=Depends(get_conn)):
                    ) FILTER (WHERE sa.id IS NOT NULL),
                    '[]'::json
                ) AS apn_ips
-        FROM subscriber_imsis si
-        LEFT JOIN subscriber_apn_ips sa ON sa.imsi = si.imsi
+        FROM imsi2device si
+        LEFT JOIN imsi_apn_ips sa ON sa.imsi = si.imsi
         WHERE si.device_id = $1::uuid AND si.imsi = $2
         GROUP BY si.imsi, si.status, si.priority
         """,
@@ -127,7 +127,7 @@ async def add_imsi(device_id: str, body: ImsiCreate, conn=Depends(get_conn)):
         _val_err("imsi", "must be exactly 15 digits")
 
     existing = await conn.fetchval(
-        "SELECT device_id::text FROM subscriber_imsis WHERE imsi = $1", body.imsi
+        "SELECT device_id::text FROM imsi2device WHERE imsi = $1", body.imsi
     )
     if existing:
         raise HTTPException(
@@ -141,12 +141,12 @@ async def add_imsi(device_id: str, body: ImsiCreate, conn=Depends(get_conn)):
 
     async with conn.transaction():
         await conn.execute(
-            "INSERT INTO subscriber_imsis (imsi, device_id, status, priority) VALUES ($1, $2::uuid, 'active', $3)",
+            "INSERT INTO imsi2device (imsi, device_id, status, priority) VALUES ($1, $2::uuid, 'active', $3)",
             body.imsi, device_id, body.priority,
         )
         for aip in body.apn_ips:
             await conn.execute(
-                "INSERT INTO subscriber_apn_ips (imsi, apn, static_ip, pool_id, pool_name) VALUES ($1, $2, $3::inet, $4::uuid, $5)",
+                "INSERT INTO imsi_apn_ips (imsi, apn, static_ip, pool_id, pool_name) VALUES ($1, $2, $3::inet, $4::uuid, $5)",
                 body.imsi, aip.apn, aip.static_ip, aip.pool_id, aip.pool_name,
             )
 
@@ -157,7 +157,7 @@ async def add_imsi(device_id: str, body: ImsiCreate, conn=Depends(get_conn)):
 async def patch_imsi(device_id: str, imsi: str, body: ImsiPatch, conn=Depends(get_conn)):
     await _require_profile(device_id, conn)
     row = await conn.fetchrow(
-        "SELECT imsi FROM subscriber_imsis WHERE device_id = $1::uuid AND imsi = $2",
+        "SELECT imsi FROM imsi2device WHERE device_id = $1::uuid AND imsi = $2",
         device_id, imsi,
     )
     if not row:
@@ -170,22 +170,22 @@ async def patch_imsi(device_id: str, imsi: str, body: ImsiPatch, conn=Depends(ge
         if body.status not in ("active", "suspended"):
             _val_err("status", "must be active or suspended")
         await conn.execute(
-            "UPDATE subscriber_imsis SET status=$1, updated_at=now() WHERE imsi=$2",
+            "UPDATE imsi2device SET status=$1, updated_at=now() WHERE imsi=$2",
             body.status, imsi,
         )
 
     if body.priority is not None:
         await conn.execute(
-            "UPDATE subscriber_imsis SET priority=$1, updated_at=now() WHERE imsi=$2",
+            "UPDATE imsi2device SET priority=$1, updated_at=now() WHERE imsi=$2",
             body.priority, imsi,
         )
 
     if body.apn_ips is not None:
         async with conn.transaction():
-            await conn.execute("DELETE FROM subscriber_apn_ips WHERE imsi = $1", imsi)
+            await conn.execute("DELETE FROM imsi_apn_ips WHERE imsi = $1", imsi)
             for aip in body.apn_ips:
                 await conn.execute(
-                    "INSERT INTO subscriber_apn_ips (imsi, apn, static_ip, pool_id, pool_name) VALUES ($1, $2, $3::inet, $4::uuid, $5)",
+                    "INSERT INTO imsi_apn_ips (imsi, apn, static_ip, pool_id, pool_name) VALUES ($1, $2, $3::inet, $4::uuid, $5)",
                     imsi, aip.apn, aip.static_ip, aip.pool_id, aip.pool_name,
                 )
 
@@ -196,7 +196,7 @@ async def patch_imsi(device_id: str, imsi: str, body: ImsiPatch, conn=Depends(ge
 async def delete_imsi(device_id: str, imsi: str, conn=Depends(get_conn)):
     await _require_profile(device_id, conn)
     row = await conn.fetchrow(
-        "SELECT imsi FROM subscriber_imsis WHERE device_id = $1::uuid AND imsi = $2",
+        "SELECT imsi FROM imsi2device WHERE device_id = $1::uuid AND imsi = $2",
         device_id, imsi,
     )
     if not row:
@@ -204,5 +204,5 @@ async def delete_imsi(device_id: str, imsi: str, conn=Depends(get_conn)):
             status_code=404,
             detail={"error": "not_found", "resource": "subscriber_imsi", "imsi": imsi},
         )
-    # CASCADE removes subscriber_apn_ips
-    await conn.execute("DELETE FROM subscriber_imsis WHERE imsi = $1", imsi)
+    # CASCADE removes imsi_apn_ips
+    await conn.execute("DELETE FROM imsi2device WHERE imsi = $1", imsi)

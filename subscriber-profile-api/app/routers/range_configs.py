@@ -182,3 +182,75 @@ async def delete_range_config(config_id: int, conn=Depends(get_conn)):
             detail={"error": "not_found", "resource": "range_config", "id": config_id},
         )
     await conn.execute("DELETE FROM imsi_range_configs WHERE id = $1", config_id)
+
+
+# ── APN Pool Override endpoints ───────────────────────────────────────────────
+# Allow different APNs to draw IPs from different pools for ip_resolution=imsi_apn/iccid_apn.
+# first-connection checks these overrides before falling back to the range config's pool_id.
+
+
+class ApnPoolCreate(BaseModel):
+    apn: str
+    pool_id: str
+
+
+async def _require_range_config(config_id: int, conn):
+    row = await conn.fetchrow("SELECT id FROM imsi_range_configs WHERE id = $1", config_id)
+    if not row:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "resource": "range_config", "id": config_id},
+        )
+
+
+@router.get("/range-configs/{config_id}/apn-pools", dependencies=[Depends(require_auth)])
+async def list_apn_pools(config_id: int, conn=Depends(get_conn)):
+    await _require_range_config(config_id, conn)
+    rows = await conn.fetch(
+        "SELECT id, apn, pool_id::text, created_at FROM range_config_apn_pools WHERE range_config_id = $1 ORDER BY apn",
+        config_id,
+    )
+    return {"items": [dict(r) for r in rows]}
+
+
+@router.post("/range-configs/{config_id}/apn-pools", status_code=201, dependencies=[Depends(require_auth)])
+async def create_apn_pool(config_id: int, body: ApnPoolCreate, conn=Depends(get_conn)):
+    await _require_range_config(config_id, conn)
+    if not body.apn:
+        _val_err("apn", "apn must not be empty")
+    pool_exists = await conn.fetchval(
+        "SELECT 1 FROM ip_pools WHERE pool_id = $1::uuid", body.pool_id
+    )
+    if not pool_exists:
+        _val_err("pool_id", "pool not found")
+    try:
+        row_id = await conn.fetchval(
+            """
+            INSERT INTO range_config_apn_pools (range_config_id, apn, pool_id)
+            VALUES ($1, $2, $3::uuid)
+            RETURNING id
+            """,
+            config_id, body.apn, body.pool_id,
+        )
+    except Exception as exc:
+        if "uq_range_config_apn" in str(exc):
+            _val_err("apn", f"apn '{body.apn}' already has a pool override for this range config")
+        raise
+    return {"id": row_id, "range_config_id": config_id, "apn": body.apn, "pool_id": body.pool_id}
+
+
+@router.delete("/range-configs/{config_id}/apn-pools/{apn}", status_code=204, dependencies=[Depends(require_auth)])
+async def delete_apn_pool(config_id: int, apn: str, conn=Depends(get_conn)):
+    row = await conn.fetchrow(
+        "SELECT id FROM range_config_apn_pools WHERE range_config_id = $1 AND apn = $2",
+        config_id, apn,
+    )
+    if not row:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "resource": "apn_pool", "range_config_id": config_id, "apn": apn},
+        )
+    await conn.execute(
+        "DELETE FROM range_config_apn_pools WHERE range_config_id = $1 AND apn = $2",
+        config_id, apn,
+    )

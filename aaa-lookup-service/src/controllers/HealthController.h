@@ -10,7 +10,7 @@
 // GET /health/db  → 200 {"status":"ok","replica":"connected"}
 //                   Kubernetes readiness probe.  Fails if the read replica
 //                   is unreachable (removes pod from Service endpoints so
-//                   FreeRADIUS stops sending traffic to a DB-less pod).
+//                   aaa-radius-server stops sending traffic to a DB-less pod).
 // ---------------------------------------------------------------------------
 
 #include <drogon/HttpController.h>

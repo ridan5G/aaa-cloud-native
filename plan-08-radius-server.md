@@ -297,9 +297,9 @@ resources:
 └───────────────────────────────────────────────────────────────────┘
 ```
 
-**Why a custom C++ server instead of FreeRADIUS + rlm_rest:**
+**Why a custom C++ server instead of aaa-radius-server + rlm_rest:**
 
-| Concern | FreeRADIUS + rlm_rest | aaa-radius-server |
+| Concern | aaa-radius-server + rlm_rest | aaa-radius-server |
 |---|---|---|
 | Container size | ~200 MB (full daemon + modules) | ~25 MB (binary + runtime libs) |
 | Configuration | Unlang policy files, complex module config | 6 env vars |

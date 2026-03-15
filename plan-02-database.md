@@ -16,15 +16,15 @@
 
 ---
 
-## Schema — 8 Tables
+## Schema — 9 Tables
 
-### Table 1: subscriber_profiles
+### Table 1: device_profiles
 
 One row per physical SIM card. `device_id` is the immutable primary key.
 `iccid` is optional — NULL for auto-allocated first-connection profiles.
 
 ```sql
-CREATE TABLE subscriber_profiles (
+CREATE TABLE device_profiles (
     device_id       UUID        NOT NULL DEFAULT gen_random_uuid(),
     iccid           TEXT        UNIQUE,                 -- 19-20 digits; NULL allowed (multiple NULLs ok)
     account_name    TEXT,                               -- e.g. "Melita"; not required to be unique
@@ -33,7 +33,7 @@ CREATE TABLE subscriber_profiles (
     metadata        JSONB,                              -- imei, tags, vrf_group_id, etc.
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT subscriber_profiles_pkey PRIMARY KEY (device_id),
+    CONSTRAINT device_profiles_pkey PRIMARY KEY (device_id),
     CONSTRAINT chk_status CHECK (status IN ('active','suspended','terminated')),
     CONSTRAINT chk_ip_resolution CHECK (ip_resolution IN
         ('iccid','iccid_apn','imsi','imsi_apn','multi_imsi_sim','vrf_reuse')),
@@ -41,40 +41,40 @@ CREATE TABLE subscriber_profiles (
         (iccid ~ '^\d{19,20}$'))
 );
 
-CREATE INDEX idx_sp_iccid         ON subscriber_profiles (iccid) WHERE iccid IS NOT NULL;
-CREATE INDEX idx_sp_account_name  ON subscriber_profiles (account_name);
-CREATE INDEX idx_sp_status        ON subscriber_profiles (account_name, status);
+CREATE INDEX idx_sp_iccid         ON device_profiles (iccid) WHERE iccid IS NOT NULL;
+CREATE INDEX idx_sp_account_name  ON device_profiles (account_name);
+CREATE INDEX idx_sp_status        ON device_profiles (account_name, status);
 ```
 
 ---
 
-### Table 2: subscriber_imsis
+### Table 2: imsi2device
 
 One row per IMSI. Multiple rows may share one `device_id` (Multi-IMSI SIM card).
 `imsi` is the B-tree primary key — this is the AAA hot-path entry point.
 
 ```sql
-CREATE TABLE subscriber_imsis (
+CREATE TABLE imsi2device (
     imsi        TEXT        NOT NULL,
     device_id   UUID        NOT NULL,
     status      TEXT        NOT NULL DEFAULT 'active',
     priority    SMALLINT    NOT NULL DEFAULT 1,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT subscriber_imsis_pkey PRIMARY KEY (imsi),
-    CONSTRAINT subscriber_imsis_device_fkey
-        FOREIGN KEY (device_id) REFERENCES subscriber_profiles (device_id)
+    CONSTRAINT imsi2device_pkey PRIMARY KEY (imsi),
+    CONSTRAINT imsi2device_device_fkey
+        FOREIGN KEY (device_id) REFERENCES device_profiles (device_id)
         ON DELETE CASCADE,
     CONSTRAINT chk_imsi_status   CHECK (status IN ('active','suspended')),
     CONSTRAINT chk_imsi_15       CHECK (imsi ~ '^\d{15}$')
 );
 
-CREATE INDEX idx_si_device_id ON subscriber_imsis (device_id);  -- reverse: device → all IMSIs
+CREATE INDEX idx_si_device_id ON imsi2device (device_id);  -- reverse: device → all IMSIs
 ```
 
 ---
 
-### Table 3: subscriber_apn_ips
+### Table 3: imsi_apn_ips
 
 Per-IMSI static IP assignments. Used by `ip_resolution = "imsi"` or `"imsi_apn"`.
 
@@ -83,7 +83,7 @@ Per-IMSI static IP assignments. Used by `ip_resolution = "imsi"` or `"imsi_apn"`
 - `apn = null` entry alongside specific APN entries acts as wildcard fallback
 
 ```sql
-CREATE TABLE subscriber_apn_ips (
+CREATE TABLE imsi_apn_ips (
     id          BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     imsi        TEXT        NOT NULL,
     apn         TEXT,                       -- NULL = APN-agnostic / wildcard
@@ -92,20 +92,20 @@ CREATE TABLE subscriber_apn_ips (
     pool_name   TEXT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT subscriber_apn_ips_imsi_fkey
-        FOREIGN KEY (imsi) REFERENCES subscriber_imsis (imsi)
+    CONSTRAINT imsi_apn_ips_imsi_fkey
+        FOREIGN KEY (imsi) REFERENCES imsi2device (imsi)
         ON DELETE CASCADE,
     CONSTRAINT uq_apn_ips_imsi_apn UNIQUE NULLS NOT DISTINCT (imsi, apn)
     -- UNIQUE NULLS NOT DISTINCT: only one NULL-apn row per imsi is allowed
     -- Requires PostgreSQL 15+
 );
 
-CREATE INDEX idx_sai_imsi ON subscriber_apn_ips (imsi);
+CREATE INDEX idx_sai_imsi ON imsi_apn_ips (imsi);
 ```
 
 ---
 
-### Table 4: subscriber_iccid_ips
+### Table 4: device_apn_ips
 
 Card-level static IP assignments. Used by `ip_resolution = "iccid"` or `"iccid_apn"`.
 All IMSIs on the card share these IPs.
@@ -114,7 +114,7 @@ All IMSIs on the card share these IPs.
 - `apn IS NOT NULL` → ip_resolution = `"iccid_apn"` (IP per card+APN pair)
 
 ```sql
-CREATE TABLE subscriber_iccid_ips (
+CREATE TABLE device_apn_ips (
     id          BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     device_id   UUID        NOT NULL,
     apn         TEXT,                       -- NULL = all APNs
@@ -123,13 +123,13 @@ CREATE TABLE subscriber_iccid_ips (
     pool_name   TEXT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT subscriber_iccid_ips_device_fkey
-        FOREIGN KEY (device_id) REFERENCES subscriber_profiles (device_id)
+    CONSTRAINT device_apn_ips_device_fkey
+        FOREIGN KEY (device_id) REFERENCES device_profiles (device_id)
         ON DELETE CASCADE,
     CONSTRAINT uq_iccid_ips_device_apn UNIQUE NULLS NOT DISTINCT (device_id, apn)
 );
 
-CREATE INDEX idx_sii_device_id ON subscriber_iccid_ips (device_id);
+CREATE INDEX idx_sii_device_id ON device_apn_ips (device_id);
 ```
 
 ---
@@ -211,7 +211,7 @@ CREATE TABLE iccid_range_configs (
     account_name    TEXT,
     f_iccid         TEXT        NOT NULL,   -- from ICCID (inclusive, 19-20 digits)
     t_iccid         TEXT        NOT NULL,   -- to ICCID (inclusive, 19-20 digits)
-    pool_id         UUID        NOT NULL REFERENCES ip_pools (pool_id),
+    pool_id         UUID        REFERENCES ip_pools (pool_id),  -- nullable: each slot may define its own pool
     ip_resolution   TEXT        NOT NULL DEFAULT 'imsi',
     imsi_count      SMALLINT    NOT NULL DEFAULT 1,  -- number of IMSIs per card (1–10)
     description     TEXT,
@@ -254,7 +254,7 @@ CREATE TABLE imsi_range_configs (
     account_name    TEXT,
     f_imsi          TEXT        NOT NULL,   -- from IMSI (inclusive, 15 digits)
     t_imsi          TEXT        NOT NULL,   -- to IMSI (inclusive, 15 digits)
-    pool_id         UUID        NOT NULL REFERENCES ip_pools (pool_id),
+    pool_id         UUID        NOT NULL REFERENCES ip_pools (pool_id),  -- per-slot pool; overrides parent iccid_range_configs.pool_id
     ip_resolution   TEXT        NOT NULL DEFAULT 'imsi',
     iccid_range_id  BIGINT      REFERENCES iccid_range_configs (id) ON DELETE CASCADE,
     imsi_slot       SMALLINT    NOT NULL DEFAULT 1,  -- 1=primary … 10=tenth IMSI on card
@@ -311,6 +311,39 @@ VALUES
 
 ---
 
+### Table 9: range_config_apn_pools
+
+Per-APN pool overrides for a specific `imsi_range_configs` entry. When
+`ip_resolution` is `"imsi_apn"` or `"iccid_apn"`, the first-connection allocation
+looks up this table before using the range config's default `pool_id`. This enables
+different APNs to draw IPs from different pools for the same IMSI range.
+
+**Example:** IMSI range with `ip_resolution = "imsi_apn"`, plus two overrides:
+- `apn = "apn1"` → pool `10.0.0.0/24`
+- `apn = "apn2"` → pool `11.0.0.0/24`
+
+On first-connection, each APN gets an IP from its designated pool automatically.
+
+Also applies per-slot: in a Multi-IMSI SIM group, each `imsi_range_configs` slot can
+independently define APN→pool overrides. The sibling pre-provisioning loop resolves
+the override for each sibling slot independently.
+
+```sql
+CREATE TABLE range_config_apn_pools (
+    id              BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    range_config_id BIGINT      NOT NULL REFERENCES imsi_range_configs (id)
+                                ON DELETE CASCADE,
+    apn             TEXT        NOT NULL,
+    pool_id         UUID        NOT NULL REFERENCES ip_pools (pool_id),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_range_config_apn UNIQUE (range_config_id, apn)
+);
+
+CREATE INDEX idx_rcap_range_config ON range_config_apn_pools (range_config_id);
+```
+
+---
+
 ### Auto-Update Trigger (all tables)
 
 ```sql
@@ -318,10 +351,10 @@ CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN NEW.updated_at = now(); RETURN NEW; END; $$;
 
-CREATE TRIGGER trg_sp_updated_at      BEFORE UPDATE ON subscriber_profiles    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_si_updated_at      BEFORE UPDATE ON subscriber_imsis       FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_sai_updated_at     BEFORE UPDATE ON subscriber_apn_ips     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_sii_updated_at     BEFORE UPDATE ON subscriber_iccid_ips   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_sp_updated_at      BEFORE UPDATE ON device_profiles    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_si_updated_at      BEFORE UPDATE ON imsi2device       FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_sai_updated_at     BEFORE UPDATE ON imsi_apn_ips     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_sii_updated_at     BEFORE UPDATE ON device_apn_ips   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_pools_updated_at   BEFORE UPDATE ON ip_pools                FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_iccid_rc_updated_at BEFORE UPDATE ON iccid_range_configs   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_irc_updated_at     BEFORE UPDATE ON imsi_range_configs      FOR EACH ROW EXECUTE FUNCTION set_updated_at();
@@ -348,18 +381,18 @@ SELECT
     ci.apn              AS iccid_apn,
     ci.static_ip        AS iccid_static_ip,
     ci.pool_id          AS iccid_pool_id
-FROM        subscriber_imsis       si
-JOIN        subscriber_profiles    sp  ON sp.device_id = si.device_id
-LEFT JOIN   subscriber_apn_ips     sa  ON sa.imsi = si.imsi
-LEFT JOIN   subscriber_iccid_ips   ci  ON ci.device_id = sp.device_id
+FROM        imsi2device       si
+JOIN        device_profiles    sp  ON sp.device_id = si.device_id
+LEFT JOIN   imsi_apn_ips     sa  ON sa.imsi = si.imsi
+LEFT JOIN   device_apn_ips   ci  ON ci.device_id = sp.device_id
 WHERE si.imsi = $1;
 ```
 
 **Expected performance:** p50 1–3ms / p99 3–8ms
-Index path: B-tree seek on `subscriber_imsis.imsi` (PK) → nested loop join to
-`subscriber_profiles` (device_id PK) → left-join both IP tables (low cardinality per IMSI).
+Index path: B-tree seek on `imsi2device.imsi` (PK) → nested loop join to
+`device_profiles` (device_id PK) → left-join both IP tables (low cardinality per IMSI).
 
-The entire `subscriber_imsis` index (~80MB for 1M rows) fits in PostgreSQL `shared_buffers`;
+The entire `imsi2device` index (~80MB for 1M rows) fits in PostgreSQL `shared_buffers`;
 near 100% cache-hit rate at steady state.
 
 ---
@@ -367,7 +400,7 @@ near 100% cache-hit rate at steady state.
 ## First-Connection Allocation — Write Transaction
 
 Triggered by `subscriber-profile-api` via `POST /first-connection` when
-`aaa-lookup-service` returns 404 for an unknown IMSI and FreeRADIUS falls
+`aaa-lookup-service` returns 404 for an unknown IMSI and aaa-radius-server falls
 through to the provisioning service.  All writes go to `PRIMARY_URL`.
 `aaa-lookup-service` is read-only and never touches this transaction.
 
@@ -398,17 +431,17 @@ RETURNING ip INTO $allocated_ip;
 -- NULL returned → pool exhausted → ROLLBACK → return 503
 
 -- Step 3: create profile using the range-configured ip_resolution
-INSERT INTO subscriber_profiles (account_name, status, ip_resolution, metadata)
+INSERT INTO device_profiles (account_name, status, ip_resolution, metadata)
 VALUES ($account_name, 'active', $ip_resolution,
         jsonb_build_object('tags', '["auto-allocated"]', 'imei', $imei))
 RETURNING device_id INTO $new_device_id;
 
-INSERT INTO subscriber_imsis (imsi, device_id, status, priority)
+INSERT INTO imsi2device (imsi, device_id, status, priority)
 VALUES ($imsi, $new_device_id, 'active', 1);
 
 -- Step 4: store the IP in the correct table based on ip_resolution
 IF $ip_resolution IN ('imsi', 'imsi_apn'):
-    INSERT INTO subscriber_apn_ips (imsi, apn, static_ip, pool_id)
+    INSERT INTO imsi_apn_ips (imsi, apn, static_ip, pool_id)
     VALUES (
         $imsi,
         CASE $ip_resolution
@@ -420,8 +453,8 @@ IF $ip_resolution IN ('imsi', 'imsi_apn'):
     );
 
 ELSIF $ip_resolution IN ('iccid', 'iccid_apn'):
-    -- Card-level IP: goes into subscriber_iccid_ips, not subscriber_apn_ips
-    INSERT INTO subscriber_iccid_ips (device_id, apn, static_ip, pool_id)
+    -- Card-level IP: goes into device_apn_ips, not imsi_apn_ips
+    INSERT INTO device_apn_ips (device_id, apn, static_ip, pool_id)
     VALUES (
         $new_device_id,
         CASE $ip_resolution
@@ -431,20 +464,20 @@ ELSIF $ip_resolution IN ('iccid', 'iccid_apn'):
         $allocated_ip,
         $pool_id
     );
-    -- No subscriber_apn_ips row needed; aaa-lookup-service reads subscriber_iccid_ips
+    -- No imsi_apn_ips row needed; aaa-lookup-service reads device_apn_ips
 
 COMMIT;
--- Return $allocated_ip to FreeRADIUS → Access-Accept
+-- Return $allocated_ip to aaa-radius-server → Access-Accept
 ```
 
 **`ip_resolution` mapping for first-connection allocation:**
 
 | Range config `ip_resolution` | Profile created with | IP stored in | `apn` value |
 |---|---|---|---|
-| `imsi` | `ip_resolution='imsi'` | `subscriber_apn_ips` | `NULL` (wildcard) |
-| `imsi_apn` | `ip_resolution='imsi_apn'` | `subscriber_apn_ips` | APN from Access-Request |
-| `iccid` | `ip_resolution='iccid'` | `subscriber_iccid_ips` | `NULL` (wildcard) |
-| `iccid_apn` | `ip_resolution='iccid_apn'` | `subscriber_iccid_ips` | APN from Access-Request |
+| `imsi` | `ip_resolution='imsi'` | `imsi_apn_ips` | `NULL` (wildcard) |
+| `imsi_apn` | `ip_resolution='imsi_apn'` | `imsi_apn_ips` | APN from Access-Request |
+| `iccid` | `ip_resolution='iccid'` | `device_apn_ips` | `NULL` (wildcard) |
+| `iccid_apn` | `ip_resolution='iccid_apn'` | `device_apn_ips` | APN from Access-Request |
 
 The created profile is immediately queryable by `aaa-lookup-service` using the same
 hot-path SQL — no schema change to the read path is needed.
@@ -488,32 +521,32 @@ ORDER BY irc.f_imsi LIMIT 1;
 -- derived_iccid = lpad((numeric(ir.f_iccid) + offset)::text, length(ir.f_iccid), '0')
 
 -- Step 3: check if a profile already exists for this derived ICCID
-SELECT device_id FROM subscriber_profiles
+SELECT device_id FROM device_profiles
 WHERE iccid = $derived_iccid
 FOR UPDATE;   -- lock to prevent concurrent creation for same card
 
 IF found:
     -- Card already exists (another IMSI slot connected first).
     -- Register this IMSI on the existing device; reuse the existing IP.
-    INSERT INTO subscriber_imsis (imsi, device_id, status, priority)
+    INSERT INTO imsi2device (imsi, device_id, status, priority)
     VALUES ($imsi, $existing_device_id, 'active', $imsi_slot)
     ON CONFLICT (imsi) DO NOTHING;
 
     -- Copy the existing card IP to this IMSI using the same ip_resolution routing
     IF $ip_resolution IN ('imsi', 'imsi_apn'):
-        INSERT INTO subscriber_apn_ips (imsi, apn, static_ip, pool_id)
+        INSERT INTO imsi_apn_ips (imsi, apn, static_ip, pool_id)
         SELECT $imsi,
                CASE $ip_resolution
                    WHEN 'imsi'     THEN NULL
                    WHEN 'imsi_apn' THEN $apn
                END,
                sa.static_ip, sa.pool_id
-        FROM   subscriber_apn_ips sa
-        JOIN   subscriber_imsis   si ON si.imsi = sa.imsi
+        FROM   imsi_apn_ips sa
+        JOIN   imsi2device   si ON si.imsi = sa.imsi
         WHERE  si.device_id = $existing_device_id LIMIT 1
         ON CONFLICT DO NOTHING;
 
-    -- iccid / iccid_apn: subscriber_iccid_ips already has one card-level row;
+    -- iccid / iccid_apn: device_apn_ips already has one card-level row;
     -- nothing more to insert for this IMSI.
 
 ELSE:
@@ -525,7 +558,7 @@ ELSE:
     RETURNING ip INTO $allocated_ip;
     -- NULL → ROLLBACK → 503
 
-    INSERT INTO subscriber_profiles
+    INSERT INTO device_profiles
         (account_name, status, ip_resolution, iccid, metadata)
     VALUES ($account_name, 'active', $ip_resolution, $derived_iccid,
             jsonb_build_object('tags', '["auto-allocated","multi-imsi"]', 'imei', $imei))
@@ -534,47 +567,76 @@ ELSE:
     -- Store IP at card or IMSI level depending on ip_resolution
     IF $ip_resolution IN ('iccid', 'iccid_apn'):
         -- One card-level row covers all IMSIs on this card
-        INSERT INTO subscriber_iccid_ips (device_id, apn, static_ip, pool_id)
+        INSERT INTO device_apn_ips (device_id, apn, static_ip, pool_id)
         VALUES (
             $new_device_id,
             CASE $ip_resolution WHEN 'iccid' THEN NULL WHEN 'iccid_apn' THEN $apn END,
             $allocated_ip, $pool_id
         );
 
-    -- Pre-provision ALL sibling IMSI slots for this card in the same transaction
-    FOR each sibling_range IN (
-        SELECT f_imsi, imsi_slot FROM imsi_range_configs
-        WHERE  iccid_range_id = $iccid_range_id AND status = 'active'
-    ) LOOP
-        sibling_imsi = lpad((numeric(sibling_range.f_imsi) + offset)::text, 15, '0');
+    -- Register the connecting IMSI and store its IP first.
+    INSERT INTO imsi2device (imsi, device_id, status, priority)
+    VALUES ($imsi, $new_device_id, 'active', $imsi_slot);
 
-        INSERT INTO subscriber_imsis (imsi, device_id, status, priority)
+    IF $ip_resolution IN ('imsi', 'imsi_apn'):
+        INSERT INTO imsi_apn_ips (imsi, apn, static_ip, pool_id)
+        VALUES ($imsi,
+                CASE $ip_resolution WHEN 'imsi' THEN NULL WHEN 'imsi_apn' THEN $apn END,
+                $allocated_ip, $pool_id);
+
+    -- Pre-provision all OTHER sibling IMSI slots for this card.
+    -- Each sibling gets its own IP allocated from its own slot pool.
+    -- Pool precedence: slot pool_id → parent pool_id (fallback).
+    -- APN overrides (range_config_apn_pools) are checked per slot for imsi_apn/iccid_apn.
+    FOR each sibling_range IN (
+        SELECT id, f_imsi, imsi_slot, pool_id FROM imsi_range_configs
+        WHERE  iccid_range_id = $iccid_range_id AND status = 'active'
+          AND  id != $connecting_range_config_id   -- exclude the connecting slot
+    ) LOOP
+        sibling_imsi  = lpad((numeric(sibling_range.f_imsi) + offset)::text, 15, '0');
+        sibling_pool  = COALESCE(sibling_range.pool_id, $pool_id);  -- slot pool or fallback
+
+        -- Apply APN pool override for this sibling slot if defined
+        IF $ip_resolution IN ('imsi_apn', 'iccid_apn'):
+            sibling_pool = COALESCE(
+                (SELECT pool_id FROM range_config_apn_pools
+                 WHERE range_config_id = sibling_range.id AND apn = $apn),
+                sibling_pool);
+
+        INSERT INTO imsi2device (imsi, device_id, status, priority)
         VALUES (sibling_imsi, $new_device_id, 'active', sibling_range.imsi_slot)
         ON CONFLICT (imsi) DO NOTHING;
 
         IF $ip_resolution IN ('imsi', 'imsi_apn'):
-            -- Each sibling IMSI needs its own apn_ips row (they all share one IP)
-            INSERT INTO subscriber_apn_ips (imsi, apn, static_ip, pool_id)
-            VALUES (
-                sibling_imsi,
-                CASE $ip_resolution WHEN 'imsi' THEN NULL WHEN 'imsi_apn' THEN $apn END,
-                $allocated_ip, $pool_id
-            )
+            -- Allocate a fresh IP for this sibling from its own pool.
+            DELETE FROM ip_pool_available
+            WHERE ip = (SELECT ip FROM ip_pool_available
+                        WHERE pool_id = sibling_pool ORDER BY ip LIMIT 1
+                        FOR UPDATE SKIP LOCKED)
+            RETURNING ip INTO $sibling_ip;
+            -- NULL → ROLLBACK → 503
+
+            INSERT INTO imsi_apn_ips (imsi, apn, static_ip, pool_id)
+            VALUES (sibling_imsi,
+                    CASE $ip_resolution WHEN 'imsi' THEN NULL WHEN 'imsi_apn' THEN $apn END,
+                    $sibling_ip, sibling_pool)
             ON CONFLICT DO NOTHING;
-        -- iccid / iccid_apn: the single subscriber_iccid_ips row already covers all IMSIs
+        -- iccid / iccid_apn: the single device_apn_ips row already covers all IMSIs
 
     END LOOP;
 
 COMMIT;
--- Return $allocated_ip to FreeRADIUS → Access-Accept
+-- Return $allocated_ip to aaa-radius-server → Access-Accept
 ```
 
 **Key properties of the multi-IMSI transaction:**
 - `ip_resolution` sourced exclusively from the parent `iccid_range_configs` row — consistent across all slots on the same card
-- One IP allocated per physical SIM card regardless of IMSI count
-- For `iccid`/`iccid_apn` mode: one `subscriber_iccid_ips` row covers all sibling IMSIs — no per-IMSI IP rows needed
-- For `imsi`/`imsi_apn` mode: one `subscriber_apn_ips` row per sibling IMSI, all pointing to the same allocated IP
-- All sibling IMSIs pre-provisioned in the same transaction — subsequent connections always hit the `aaa-lookup-service` fast read path
+- Parent `iccid_range_configs.pool_id` is nullable; each child `imsi_range_configs` slot defines its own `pool_id` (fallback to parent if set)
+- Pool resolution precedence: **slot pool** (`imsi_range_configs.pool_id`) → parent pool (`iccid_range_configs.pool_id`)
+- For `iccid`/`iccid_apn` mode: one IP allocated from the connecting slot's pool; one `device_apn_ips` row covers all IMSIs on the card
+- For `imsi`/`imsi_apn` mode: **each slot gets its own IP allocated from its own pool** — connecting IMSI is handled first, then each sibling gets a fresh allocation from its pool in the same transaction
+- APN pool overrides (`range_config_apn_pools`) are resolved per slot during sibling pre-provisioning
+- All sibling IMSIs pre-provisioned in the same transaction — subsequent connections (including mass failover storms) always hit the `aaa-lookup-service` fast read path (single indexed read, no allocation)
 - `FOR UPDATE` on the ICCID check prevents two concurrent connections from the same card racing to create duplicate profiles
 
 ---
@@ -584,17 +646,17 @@ COMMIT;
 ```sql
 -- Add IMSI to existing SIM (one transaction)
 BEGIN;
-INSERT INTO subscriber_imsis (imsi, device_id, status, priority)
+INSERT INTO imsi2device (imsi, device_id, status, priority)
     VALUES ('278773000002005', '550e8400-e29b-41d4-a716-446655440000', 'active', 2);
-INSERT INTO subscriber_apn_ips (imsi, apn, static_ip, pool_id, pool_name)
+INSERT INTO imsi_apn_ips (imsi, apn, static_ip, pool_id, pool_name)
     VALUES ('278773000002005', NULL, '100.65.120.6', 'pool-uuid-abc', 'Melita-internet-pool');
 COMMIT;
 
--- Remove IMSI (CASCADE removes subscriber_apn_ips automatically)
-DELETE FROM subscriber_imsis WHERE imsi = '278773000002005';
+-- Remove IMSI (CASCADE removes imsi_apn_ips automatically)
+DELETE FROM imsi2device WHERE imsi = '278773000002005';
 
 -- Enrich NULL iccid with real value
-UPDATE subscriber_profiles
+UPDATE device_profiles
 SET iccid = '8944501012345678901', updated_at = now()
 WHERE device_id = '550e8400-e29b-41d4-a716-446655440000';
 ```
@@ -619,13 +681,13 @@ CREATE TEMP TABLE staging_profiles (
 
 \COPY staging_profiles FROM 'batch.csv' WITH (FORMAT csv, HEADER true);
 
-INSERT INTO subscriber_profiles
+INSERT INTO device_profiles
     SELECT * FROM staging_profiles
     ON CONFLICT (device_id) DO UPDATE
     SET status=EXCLUDED.status, ip_resolution=EXCLUDED.ip_resolution,
         metadata=EXCLUDED.metadata, updated_at=now();
 
--- Repeat for subscriber_imsis, subscriber_apn_ips, subscriber_iccid_ips
+-- Repeat for imsi2device, imsi_apn_ips, device_apn_ips
 ```
 
 **Expected time:** ~3–5 minutes for 300K rows across 4 tables.
@@ -663,18 +725,18 @@ Connection pooling:
 
 | Operation | Latency | Mechanism |
 |---|---|---|
-| AAA: IMSI lookup (all profiles) | 1–5ms p50, 3–8ms p99 | PK seek on `subscriber_imsis`, 2-table join |
-| AAA: ICCID lookup (Profile A) | 1–3ms | PK seek on `subscriber_profiles`, left-join `subscriber_iccid_ips` |
+| AAA: IMSI lookup (all profiles) | 1–5ms p50, 3–8ms p99 | PK seek on `imsi2device`, 2-table join |
+| AAA: ICCID lookup (Profile A) | 1–3ms | PK seek on `device_profiles`, left-join `device_apn_ips` |
 | Provisioning: GET full profile | 2–8ms | Same joins, all rows returned |
 | Provisioning: add/remove IMSI | 3–10ms | Transactional INSERT/DELETE |
-| Provisioning: update SIM status | 1–3ms | Single UPDATE on `subscriber_profiles` |
+| Provisioning: update SIM status | 1–3ms | Single UPDATE on `device_profiles` |
 | First-connection allocation | 5–20ms | Write transaction in `subscriber-profile-api` on primary (rare event) |
 | Bulk upsert 300K | ~3–5 min total | COPY + INSERT ON CONFLICT, 4 tables |
-| Pool stats query | <200ms at 300K rows | Aggregate on `subscriber_apn_ips.pool_id` |
+| Pool stats query | <200ms at 300K rows | Aggregate on `imsi_apn_ips.pool_id` |
 
 ## PostgreSQL Version Requirement
 
-**PostgreSQL 15 minimum.** Required for `UNIQUE NULLS NOT DISTINCT` on `subscriber_apn_ips`
-and `subscriber_iccid_ips`. This constraint ensures only one NULL-apn wildcard entry per
+**PostgreSQL 15 minimum.** Required for `UNIQUE NULLS NOT DISTINCT` on `imsi_apn_ips`
+and `device_apn_ips`. This constraint ensures only one NULL-apn wildcard entry per
 IMSI (or per device). Earlier PostgreSQL versions treat all NULLs as distinct in UNIQUE
 indexes, which would allow duplicate wildcard rows.

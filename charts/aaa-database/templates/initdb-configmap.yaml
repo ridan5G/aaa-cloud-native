@@ -35,12 +35,12 @@ data:
     $$;
 
     -- ================================================================
-    -- Table 1: subscriber_profiles
+    -- Table 1: device_profiles
     -- One row per physical SIM card.
     -- device_id is the immutable primary key (UUID).
     -- iccid is optional — NULL for auto-allocated first-connection profiles.
     -- ================================================================
-    CREATE TABLE IF NOT EXISTS subscriber_profiles (
+    CREATE TABLE IF NOT EXISTS device_profiles (
         device_id       UUID        NOT NULL DEFAULT gen_random_uuid(),
         iccid           TEXT        UNIQUE,
         account_name    TEXT,
@@ -49,7 +49,7 @@ data:
         metadata        JSONB,
         created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-        CONSTRAINT subscriber_profiles_pkey
+        CONSTRAINT device_profiles_pkey
             PRIMARY KEY (device_id),
         CONSTRAINT chk_status
             CHECK (status IN ('active', 'suspended', 'terminated')),
@@ -63,37 +63,37 @@ data:
 
     -- Partial index: ICCID lookups (NULL ICCIDs excluded — auto-allocated profiles)
     CREATE INDEX IF NOT EXISTS idx_sp_iccid
-        ON subscriber_profiles (iccid)
+        ON device_profiles (iccid)
         WHERE iccid IS NOT NULL;
 
     CREATE INDEX IF NOT EXISTS idx_sp_account_name
-        ON subscriber_profiles (account_name);
+        ON device_profiles (account_name);
 
     -- Combined index: list by account + filter by status
     CREATE INDEX IF NOT EXISTS idx_sp_status
-        ON subscriber_profiles (account_name, status);
+        ON device_profiles (account_name, status);
 
     CREATE TRIGGER trg_sp_updated_at
-        BEFORE UPDATE ON subscriber_profiles
+        BEFORE UPDATE ON device_profiles
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
     -- ================================================================
-    -- Table 2: subscriber_imsis
+    -- Table 2: imsi2device
     -- One row per IMSI. Multiple rows may share one device_id (Multi-IMSI SIM).
     -- imsi is the B-tree primary key — AAA hot-path entry point.
     -- ================================================================
-    CREATE TABLE IF NOT EXISTS subscriber_imsis (
+    CREATE TABLE IF NOT EXISTS imsi2device (
         imsi        TEXT        NOT NULL,
         device_id   UUID        NOT NULL,
         status      TEXT        NOT NULL DEFAULT 'active',
         priority    SMALLINT    NOT NULL DEFAULT 1,
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-        CONSTRAINT subscriber_imsis_pkey
+        CONSTRAINT imsi2device_pkey
             PRIMARY KEY (imsi),
-        CONSTRAINT subscriber_imsis_device_fkey
+        CONSTRAINT imsi2device_device_fkey
             FOREIGN KEY (device_id)
-            REFERENCES subscriber_profiles (device_id)
+            REFERENCES device_profiles (device_id)
             ON DELETE CASCADE,
         CONSTRAINT chk_imsi_status
             CHECK (status IN ('active', 'suspended')),
@@ -103,21 +103,21 @@ data:
 
     -- Reverse index: device → all its IMSIs
     CREATE INDEX IF NOT EXISTS idx_si_device_id
-        ON subscriber_imsis (device_id);
+        ON imsi2device (device_id);
 
     CREATE TRIGGER trg_si_updated_at
-        BEFORE UPDATE ON subscriber_imsis
+        BEFORE UPDATE ON imsi2device
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
     -- ================================================================
-    -- Table 3: subscriber_apn_ips
+    -- Table 3: imsi_apn_ips
     -- Per-IMSI static IP assignments.
     --   apn IS NULL     → ip_resolution = 'imsi'     (APN-agnostic)
     --   apn IS NOT NULL → ip_resolution = 'imsi_apn' (APN-specific)
     --   apn = NULL alongside specific APN entries acts as wildcard fallback.
     -- UNIQUE NULLS NOT DISTINCT: PostgreSQL 15+ required.
     -- ================================================================
-    CREATE TABLE IF NOT EXISTS subscriber_apn_ips (
+    CREATE TABLE IF NOT EXISTS imsi_apn_ips (
         id          BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         imsi        TEXT        NOT NULL,
         apn         TEXT,
@@ -126,9 +126,9 @@ data:
         pool_name   TEXT,
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-        CONSTRAINT subscriber_apn_ips_imsi_fkey
+        CONSTRAINT imsi_apn_ips_imsi_fkey
             FOREIGN KEY (imsi)
-            REFERENCES subscriber_imsis (imsi)
+            REFERENCES imsi2device (imsi)
             ON DELETE CASCADE,
         -- Only one wildcard (NULL apn) row permitted per IMSI
         CONSTRAINT uq_apn_ips_imsi_apn
@@ -136,20 +136,20 @@ data:
     );
 
     CREATE INDEX IF NOT EXISTS idx_sai_imsi
-        ON subscriber_apn_ips (imsi);
+        ON imsi_apn_ips (imsi);
 
     CREATE TRIGGER trg_sai_updated_at
-        BEFORE UPDATE ON subscriber_apn_ips
+        BEFORE UPDATE ON imsi_apn_ips
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
     -- ================================================================
-    -- Table 4: subscriber_iccid_ips
+    -- Table 4: device_apn_ips
     -- Card-level static IP assignments. All IMSIs on the card share these IPs.
     --   apn IS NULL     → ip_resolution = 'iccid'     (all APNs)
     --   apn IS NOT NULL → ip_resolution = 'iccid_apn' (APN-specific)
     -- UNIQUE NULLS NOT DISTINCT: PostgreSQL 15+ required.
     -- ================================================================
-    CREATE TABLE IF NOT EXISTS subscriber_iccid_ips (
+    CREATE TABLE IF NOT EXISTS device_apn_ips (
         id          BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         device_id   UUID        NOT NULL,
         apn         TEXT,
@@ -158,9 +158,9 @@ data:
         pool_name   TEXT,
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-        CONSTRAINT subscriber_iccid_ips_device_fkey
+        CONSTRAINT device_apn_ips_device_fkey
             FOREIGN KEY (device_id)
-            REFERENCES subscriber_profiles (device_id)
+            REFERENCES device_profiles (device_id)
             ON DELETE CASCADE,
         -- Only one wildcard (NULL apn) row permitted per device
         CONSTRAINT uq_iccid_ips_device_apn
@@ -168,10 +168,10 @@ data:
     );
 
     CREATE INDEX IF NOT EXISTS idx_sii_device_id
-        ON subscriber_iccid_ips (device_id);
+        ON device_apn_ips (device_id);
 
     CREATE TRIGGER trg_sii_updated_at
-        BEFORE UPDATE ON subscriber_iccid_ips
+        BEFORE UPDATE ON device_apn_ips
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
     -- ================================================================
@@ -232,8 +232,7 @@ data:
         account_name    TEXT,
         f_iccid         TEXT        NOT NULL,
         t_iccid         TEXT        NOT NULL,
-        pool_id         UUID        NOT NULL
-                                    REFERENCES ip_pools (pool_id),
+        pool_id         UUID        REFERENCES ip_pools (pool_id),  -- nullable: slots may each define their own pool
         ip_resolution   TEXT        NOT NULL DEFAULT 'imsi',
         imsi_count      SMALLINT    NOT NULL DEFAULT 1,
         description     TEXT,
@@ -325,6 +324,29 @@ data:
     CREATE TRIGGER trg_irc_updated_at
         BEFORE UPDATE ON imsi_range_configs
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+    -- ================================================================
+    -- Table 9: range_config_apn_pools
+    -- Per-APN pool overrides for a specific imsi_range_configs entry.
+    -- When ip_resolution is 'imsi_apn' or 'iccid_apn', first-connection
+    -- checks this table before using the range config's default pool_id.
+    -- Allows different APNs to draw IPs from different pools for the
+    -- same IMSI range (e.g. apn1 → 10.0.0.0/24, apn2 → 11.0.0.0/24).
+    -- ================================================================
+    CREATE TABLE IF NOT EXISTS range_config_apn_pools (
+        id              BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        range_config_id BIGINT      NOT NULL
+                                    REFERENCES imsi_range_configs (id)
+                                    ON DELETE CASCADE,
+        apn             TEXT        NOT NULL,
+        pool_id         UUID        NOT NULL
+                                    REFERENCES ip_pools (pool_id),
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CONSTRAINT uq_range_config_apn UNIQUE (range_config_id, apn)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_rcap_range_config
+        ON range_config_apn_pools (range_config_id);
 
     -- ── Application user grants ──────────────────────────────────────────
     GRANT SELECT                          ON ALL TABLES  IN SCHEMA public TO aaa_app;

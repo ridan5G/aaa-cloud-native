@@ -21,7 +21,7 @@ void HealthController::liveness(
 // GET /health/db — readiness probe (async SELECT 1 on the read replica)
 //
 // A 503 here causes Kubernetes to remove this pod from the Service endpoint
-// slice — FreeRADIUS will not receive traffic until the DB reconnects.
+// slice — aaa-radius-server will not receive traffic until the DB reconnects.
 // ---------------------------------------------------------------------------
 void HealthController::readiness(
         const drogon::HttpRequestPtr& /*req*/,

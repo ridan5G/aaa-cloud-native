@@ -143,13 +143,13 @@ async def get_pool_stats(pool_id: str, conn=Depends(get_conn)):
         SELECT
             (SELECT COUNT(*) FROM ip_pool_available WHERE pool_id = $1::uuid) AS available,
             (
-                SELECT COUNT(*) FROM subscriber_apn_ips sai
-                JOIN subscriber_imsis si ON si.imsi = sai.imsi
-                JOIN subscriber_profiles sp ON sp.device_id = si.device_id
+                SELECT COUNT(*) FROM imsi_apn_ips sai
+                JOIN imsi2device si ON si.imsi = sai.imsi
+                JOIN device_profiles sp ON sp.device_id = si.device_id
                 WHERE sai.pool_id = $1::uuid
             ) +
             (
-                SELECT COUNT(*) FROM subscriber_iccid_ips
+                SELECT COUNT(*) FROM device_apn_ips
                 WHERE pool_id = $1::uuid
             ) AS allocated
         """,
@@ -210,9 +210,9 @@ async def delete_pool(pool_id: str, conn=Depends(get_conn)):
     allocated = await conn.fetchval(
         """
         SELECT COUNT(*) FROM (
-            SELECT 1 FROM subscriber_apn_ips WHERE pool_id = $1::uuid
+            SELECT 1 FROM imsi_apn_ips WHERE pool_id = $1::uuid
             UNION ALL
-            SELECT 1 FROM subscriber_iccid_ips WHERE pool_id = $1::uuid
+            SELECT 1 FROM device_apn_ips WHERE pool_id = $1::uuid
         ) AS combined
         """,
         pool_id,

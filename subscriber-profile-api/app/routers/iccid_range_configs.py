@@ -23,7 +23,7 @@ class IccidRangeCreate(BaseModel):
     account_name: Optional[str] = None
     f_iccid: str
     t_iccid: str
-    pool_id: str
+    pool_id: Optional[str] = None  # nullable: each IMSI slot may define its own pool
     ip_resolution: str = "imsi"
     imsi_count: int = 1
     description: Optional[str] = None
@@ -70,11 +70,12 @@ async def create_iccid_range_config(body: IccidRangeCreate, conn=Depends(get_con
     if body.status not in ("active", "suspended"):
         _val_err("status", "must be active or suspended")
 
-    pool_exists = await conn.fetchval(
-        "SELECT 1 FROM ip_pools WHERE pool_id = $1::uuid", body.pool_id
-    )
-    if not pool_exists:
-        _val_err("pool_id", "pool not found")
+    if body.pool_id is not None:
+        pool_exists = await conn.fetchval(
+            "SELECT 1 FROM ip_pools WHERE pool_id = $1::uuid", body.pool_id
+        )
+        if not pool_exists:
+            _val_err("pool_id", "pool not found")
 
     row_id = await conn.fetchval(
         """

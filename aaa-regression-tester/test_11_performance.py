@@ -150,7 +150,7 @@ class TestPerformance:
         # NOTE: We intentionally do NOT delete the seeded pool/profiles here.
         # The 300K dataset takes ~3 min to seed; destroying it would force a
         # re-seed on the next run.  Clean up manually with:
-        #   DELETE FROM subscriber_profiles WHERE account_name='PerfAccount';
+        #   DELETE FROM device_profiles WHERE account_name='PerfAccount';
         pass
 
     # ── Async helper ──────────────────────────────────────────────────────────

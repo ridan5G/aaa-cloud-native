@@ -64,7 +64,7 @@ async def _build_profile_response(device_id: str, conn) -> dict:
         """
         SELECT device_id::text, iccid, account_name, status, ip_resolution,
                metadata, created_at, updated_at
-        FROM subscriber_profiles WHERE device_id = $1::uuid
+        FROM device_profiles WHERE device_id = $1::uuid
         """,
         device_id,
     )
@@ -86,8 +86,8 @@ async def _build_profile_response(device_id: str, conn) -> dict:
                    ) FILTER (WHERE sa.id IS NOT NULL),
                    '[]'::json
                ) AS apn_ips
-        FROM subscriber_imsis si
-        LEFT JOIN subscriber_apn_ips sa ON sa.imsi = si.imsi
+        FROM imsi2device si
+        LEFT JOIN imsi_apn_ips sa ON sa.imsi = si.imsi
         WHERE si.device_id = $1::uuid
         GROUP BY si.imsi, si.status, si.priority
         ORDER BY si.priority, si.imsi
@@ -98,7 +98,7 @@ async def _build_profile_response(device_id: str, conn) -> dict:
     iccid_ips = await conn.fetch(
         """
         SELECT id, apn, static_ip::text, pool_id::text, pool_name
-        FROM subscriber_iccid_ips WHERE device_id = $1::uuid
+        FROM device_apn_ips WHERE device_id = $1::uuid
         ORDER BY id
         """,
         device_id,
@@ -157,7 +157,7 @@ async def create_profile(body: ProfileCreate, conn=Depends(get_conn)):
         # Check ICCID uniqueness
         if body.iccid:
             existing = await conn.fetchval(
-                "SELECT device_id::text FROM subscriber_profiles WHERE iccid = $1",
+                "SELECT device_id::text FROM device_profiles WHERE iccid = $1",
                 body.iccid,
             )
             if existing:
@@ -173,8 +173,8 @@ async def create_profile(body: ProfileCreate, conn=Depends(get_conn)):
         # Check IMSI uniqueness
         for entry in body.imsis:
             existing = await conn.fetchval(
-                "SELECT device_id::text FROM subscriber_imsis si "
-                "JOIN subscriber_profiles sp ON sp.device_id = si.device_id "
+                "SELECT device_id::text FROM imsi2device si "
+                "JOIN device_profiles sp ON sp.device_id = si.device_id "
                 "WHERE si.imsi = $1 AND sp.status != 'terminated'",
                 entry.imsi,
             )
@@ -191,7 +191,7 @@ async def create_profile(body: ProfileCreate, conn=Depends(get_conn)):
         import datetime
         device_id = await conn.fetchval(
             """
-            INSERT INTO subscriber_profiles (iccid, account_name, status, ip_resolution, metadata)
+            INSERT INTO device_profiles (iccid, account_name, status, ip_resolution, metadata)
             VALUES ($1, $2, $3, $4, $5::jsonb)
             RETURNING device_id::text
             """,
@@ -204,7 +204,7 @@ async def create_profile(body: ProfileCreate, conn=Depends(get_conn)):
 
         for entry in body.imsis:
             await conn.execute(
-                "INSERT INTO subscriber_imsis (imsi, device_id, status, priority) VALUES ($1, $2::uuid, 'active', $3)",
+                "INSERT INTO imsi2device (imsi, device_id, status, priority) VALUES ($1, $2::uuid, 'active', $3)",
                 entry.imsi,
                 device_id,
                 entry.priority,
@@ -212,7 +212,7 @@ async def create_profile(body: ProfileCreate, conn=Depends(get_conn)):
             for aip in entry.apn_ips:
                 await conn.execute(
                     """
-                    INSERT INTO subscriber_apn_ips (imsi, apn, static_ip, pool_id, pool_name)
+                    INSERT INTO imsi_apn_ips (imsi, apn, static_ip, pool_id, pool_name)
                     VALUES ($1, $2, $3::inet, $4::uuid, $5)
                     """,
                     entry.imsi,
@@ -225,7 +225,7 @@ async def create_profile(body: ProfileCreate, conn=Depends(get_conn)):
         for iip in body.iccid_ips:
             await conn.execute(
                 """
-                INSERT INTO subscriber_iccid_ips (device_id, apn, static_ip, pool_id, pool_name)
+                INSERT INTO device_apn_ips (device_id, apn, static_ip, pool_id, pool_name)
                 VALUES ($1::uuid, $2, $3::inet, $4::uuid, $5)
                 """,
                 device_id,
@@ -236,7 +236,7 @@ async def create_profile(body: ProfileCreate, conn=Depends(get_conn)):
             )
 
     created_at = await conn.fetchval(
-        "SELECT created_at FROM subscriber_profiles WHERE device_id = $1::uuid", device_id
+        "SELECT created_at FROM device_profiles WHERE device_id = $1::uuid", device_id
     )
     return {"device_id": device_id, "created_at": created_at}
 
@@ -264,7 +264,7 @@ async def list_profiles(
 ):
     if iccid:
         row = await conn.fetchrow(
-            "SELECT device_id::text FROM subscriber_profiles WHERE iccid = $1", iccid
+            "SELECT device_id::text FROM device_profiles WHERE iccid = $1", iccid
         )
         if not row:
             raise HTTPException(
@@ -276,7 +276,7 @@ async def list_profiles(
 
     if imsi:
         row = await conn.fetchrow(
-            "SELECT device_id::text FROM subscriber_imsis WHERE imsi = $1", imsi
+            "SELECT device_id::text FROM imsi2device WHERE imsi = $1", imsi
         )
         if not row:
             raise HTTPException(
@@ -303,12 +303,12 @@ async def list_profiles(
     offset = (page - 1) * limit
 
     total = await conn.fetchval(
-        f"SELECT COUNT(*) FROM subscriber_profiles {where}", *params
+        f"SELECT COUNT(*) FROM device_profiles {where}", *params
     )
     rows = await conn.fetch(
         f"""
         SELECT device_id::text, iccid, account_name, status, ip_resolution, created_at
-        FROM subscriber_profiles {where}
+        FROM device_profiles {where}
         ORDER BY created_at DESC
         LIMIT ${idx} OFFSET ${idx + 1}
         """,
@@ -323,7 +323,7 @@ async def list_profiles(
 @router.put("/profiles/{device_id}", dependencies=[Depends(require_auth)])
 async def replace_profile(device_id: str, body: ProfileCreate, conn=Depends(get_conn)):
     existing = await conn.fetchrow(
-        "SELECT device_id FROM subscriber_profiles WHERE device_id = $1::uuid", device_id
+        "SELECT device_id FROM device_profiles WHERE device_id = $1::uuid", device_id
     )
     if not existing:
         raise HTTPException(
@@ -349,7 +349,7 @@ async def replace_profile(device_id: str, body: ProfileCreate, conn=Depends(get_
     async with conn.transaction():
         if body.iccid:
             conflict = await conn.fetchval(
-                "SELECT device_id::text FROM subscriber_profiles WHERE iccid = $1 AND device_id != $2::uuid",
+                "SELECT device_id::text FROM device_profiles WHERE iccid = $1 AND device_id != $2::uuid",
                 body.iccid,
                 device_id,
             )
@@ -361,7 +361,7 @@ async def replace_profile(device_id: str, body: ProfileCreate, conn=Depends(get_
 
         await conn.execute(
             """
-            UPDATE subscriber_profiles
+            UPDATE device_profiles
             SET iccid=$1, account_name=$2, status=$3, ip_resolution=$4, metadata=$5::jsonb, updated_at=now()
             WHERE device_id=$6::uuid
             """,
@@ -375,26 +375,26 @@ async def replace_profile(device_id: str, body: ProfileCreate, conn=Depends(get_
 
         # Replace IMSIs
         await conn.execute(
-            "DELETE FROM subscriber_imsis WHERE device_id = $1::uuid", device_id
+            "DELETE FROM imsi2device WHERE device_id = $1::uuid", device_id
         )
         for entry in body.imsis:
             await conn.execute(
-                "INSERT INTO subscriber_imsis (imsi, device_id, status, priority) VALUES ($1, $2::uuid, 'active', $3)",
+                "INSERT INTO imsi2device (imsi, device_id, status, priority) VALUES ($1, $2::uuid, 'active', $3)",
                 entry.imsi, device_id, entry.priority,
             )
             for aip in entry.apn_ips:
                 await conn.execute(
-                    "INSERT INTO subscriber_apn_ips (imsi, apn, static_ip, pool_id, pool_name) VALUES ($1, $2, $3::inet, $4::uuid, $5)",
+                    "INSERT INTO imsi_apn_ips (imsi, apn, static_ip, pool_id, pool_name) VALUES ($1, $2, $3::inet, $4::uuid, $5)",
                     entry.imsi, aip.apn, aip.static_ip, aip.pool_id, aip.pool_name,
                 )
 
         # Replace ICCID IPs
         await conn.execute(
-            "DELETE FROM subscriber_iccid_ips WHERE device_id = $1::uuid", device_id
+            "DELETE FROM device_apn_ips WHERE device_id = $1::uuid", device_id
         )
         for iip in body.iccid_ips:
             await conn.execute(
-                "INSERT INTO subscriber_iccid_ips (device_id, apn, static_ip, pool_id, pool_name) VALUES ($1::uuid, $2, $3::inet, $4::uuid, $5)",
+                "INSERT INTO device_apn_ips (device_id, apn, static_ip, pool_id, pool_name) VALUES ($1::uuid, $2, $3::inet, $4::uuid, $5)",
                 device_id, iip.apn, iip.static_ip, iip.pool_id, iip.pool_name,
             )
 
@@ -404,7 +404,7 @@ async def replace_profile(device_id: str, body: ProfileCreate, conn=Depends(get_
 @router.patch("/profiles/{device_id}", dependencies=[Depends(require_auth)])
 async def patch_profile(device_id: str, body: ProfilePatch, conn=Depends(get_conn)):
     existing = await conn.fetchrow(
-        "SELECT device_id FROM subscriber_profiles WHERE device_id = $1::uuid", device_id
+        "SELECT device_id FROM device_profiles WHERE device_id = $1::uuid", device_id
     )
     if not existing:
         raise HTTPException(
@@ -422,7 +422,7 @@ async def patch_profile(device_id: str, body: ProfilePatch, conn=Depends(get_con
         # Check ICCID uniqueness
         if body.iccid:
             conflict = await conn.fetchval(
-                "SELECT device_id::text FROM subscriber_profiles WHERE iccid = $1 AND device_id != $2::uuid",
+                "SELECT device_id::text FROM device_profiles WHERE iccid = $1 AND device_id != $2::uuid",
                 body.iccid, device_id,
             )
             if conflict:
@@ -454,8 +454,8 @@ async def patch_profile(device_id: str, body: ProfilePatch, conn=Depends(get_con
             has_apn = await conn.fetchval(
                 """
                 SELECT EXISTS(
-                    SELECT 1 FROM subscriber_apn_ips sa
-                    JOIN subscriber_imsis si ON si.imsi = sa.imsi
+                    SELECT 1 FROM imsi_apn_ips sa
+                    JOIN imsi2device si ON si.imsi = sa.imsi
                     WHERE si.device_id = $1::uuid AND sa.apn IS NOT NULL
                 )
                 """,
@@ -476,7 +476,7 @@ async def patch_profile(device_id: str, body: ProfilePatch, conn=Depends(get_con
         updates.append("updated_at = now()")
         params.append(device_id)
         await conn.execute(
-            f"UPDATE subscriber_profiles SET {', '.join(updates)} WHERE device_id = ${idx}::uuid",
+            f"UPDATE device_profiles SET {', '.join(updates)} WHERE device_id = ${idx}::uuid",
             *params,
         )
 
@@ -484,12 +484,12 @@ async def patch_profile(device_id: str, body: ProfilePatch, conn=Depends(get_con
     if body.iccid_ips is not None:
         async with conn.transaction():
             await conn.execute(
-                "DELETE FROM subscriber_iccid_ips WHERE device_id = $1::uuid", device_id
+                "DELETE FROM device_apn_ips WHERE device_id = $1::uuid", device_id
             )
             for iip in body.iccid_ips:
                 await conn.execute(
                     """
-                    INSERT INTO subscriber_iccid_ips (device_id, apn, static_ip, pool_id, pool_name)
+                    INSERT INTO device_apn_ips (device_id, apn, static_ip, pool_id, pool_name)
                     VALUES ($1::uuid, $2, $3::inet, $4::uuid, $5)
                     """,
                     device_id, iip.apn, iip.static_ip, iip.pool_id, iip.pool_name,
@@ -501,7 +501,7 @@ async def patch_profile(device_id: str, body: ProfilePatch, conn=Depends(get_con
 @router.delete("/profiles/{device_id}", status_code=204, dependencies=[Depends(require_auth)])
 async def delete_profile(device_id: str, conn=Depends(get_conn)):
     existing = await conn.fetchrow(
-        "SELECT device_id FROM subscriber_profiles WHERE device_id = $1::uuid", device_id
+        "SELECT device_id FROM device_profiles WHERE device_id = $1::uuid", device_id
     )
     if not existing:
         raise HTTPException(
@@ -510,6 +510,6 @@ async def delete_profile(device_id: str, conn=Depends(get_conn)):
         )
     # Soft-delete: set status=terminated
     await conn.execute(
-        "UPDATE subscriber_profiles SET status='terminated', updated_at=now() WHERE device_id=$1::uuid",
+        "UPDATE device_profiles SET status='terminated', updated_at=now() WHERE device_id=$1::uuid",
         device_id,
     )

@@ -22,7 +22,7 @@ aaa-regression-tester/
 ├── fixtures/
 │   ├── pools.py              # create/teardown ip_pools
 │   ├── range_configs.py      # create/teardown imsi_range_configs
-│   └── profiles.py           # create/teardown subscriber_profiles
+│   └── profiles.py           # create/teardown device_profiles
 ├── test_01_pools.py          # IP pool CRUD + stats
 ├── test_02_range_configs.py  # IMSI range config CRUD
 ├── test_03_profiles_a.py     # Profile A (ip_resolution=iccid) CRUD + lookup
@@ -172,7 +172,7 @@ Allocation is transparent: caller always uses `GET /lookup`, same endpoint as no
 | # | Test | Expected |
 |---|---|---|
 | 7.1 | Setup: pool + active range config covering IMSI range | — |
-| 7.2 | IMSI in range, not yet in subscriber_profiles → GET /lookup?imsi={imsi}&apn=internet.operator.com | 200, `{"static_ip":"..."}` — profile created |
+| 7.2 | IMSI in range, not yet in device_profiles → GET /lookup?imsi={imsi}&apn=internet.operator.com | 200, `{"static_ip":"..."}` — profile created |
 | 7.3 | Same IMSI again → GET /lookup | 200, same IP (existing profile, no re-allocation) |
 | 7.4 | GET /pools/{pool_id}/stats after allocation | `allocated` +1, `available` -1 |
 | 7.5 | GET /profiles?imsi={imsi} — verify auto-created profile | 200, ip_resolution=imsi, iccid=null |
@@ -204,7 +204,7 @@ Runs the migration script against a controlled sample MariaDB dump (fixture data
 
 | # | Test | Expected |
 |---|---|---|
-| 9.1 | Run migration script on Athens-only sample dump | subscriber_profiles count = distinct ICCID-groups + unmatched IMSIs |
+| 9.1 | Run migration script on Athens-only sample dump | device_profiles count = distinct ICCID-groups + unmatched IMSIs |
 | 9.2 | IMSI in imsi_iccid_map.csv → GET /profiles?imsi={imsi} | `iccid` = real ICCID from map |
 | 9.3 | IMSI not in map → GET /profiles?imsi={imsi} | `iccid` = null |
 | 9.4 | IMSI in 2 dumps, different IPs, same client → GET /profiles?imsi={imsi} | ip_resolution=imsi_apn, 2 apn_ips with apn=pgw1 and apn=pgw2 |

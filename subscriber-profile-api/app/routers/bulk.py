@@ -101,7 +101,7 @@ async def _upsert_profile(conn, profile: dict):
     if device_id:
         await conn.execute(
             """
-            INSERT INTO subscriber_profiles (device_id, iccid, account_name, status, ip_resolution, metadata)
+            INSERT INTO device_profiles (device_id, iccid, account_name, status, ip_resolution, metadata)
             VALUES ($1::uuid, $2, $3, $4, $5, $6::jsonb)
             ON CONFLICT (device_id) DO UPDATE
             SET status=EXCLUDED.status, ip_resolution=EXCLUDED.ip_resolution,
@@ -117,7 +117,7 @@ async def _upsert_profile(conn, profile: dict):
     elif iccid:
         device_id = await conn.fetchval(
             """
-            INSERT INTO subscriber_profiles (iccid, account_name, status, ip_resolution, metadata)
+            INSERT INTO device_profiles (iccid, account_name, status, ip_resolution, metadata)
             VALUES ($1, $2, $3, $4, $5::jsonb)
             ON CONFLICT (iccid) DO UPDATE
             SET status=EXCLUDED.status, ip_resolution=EXCLUDED.ip_resolution,
@@ -133,7 +133,7 @@ async def _upsert_profile(conn, profile: dict):
     else:
         device_id = await conn.fetchval(
             """
-            INSERT INTO subscriber_profiles (account_name, status, ip_resolution, metadata)
+            INSERT INTO device_profiles (account_name, status, ip_resolution, metadata)
             VALUES ($1, $2, $3, $4::jsonb)
             RETURNING device_id::text
             """,
@@ -151,7 +151,7 @@ async def _upsert_profile(conn, profile: dict):
         priority = imsi_entry.get("priority", 1)
         await conn.execute(
             """
-            INSERT INTO subscriber_imsis (imsi, device_id, priority)
+            INSERT INTO imsi2device (imsi, device_id, priority)
             VALUES ($1, $2::uuid, $3)
             ON CONFLICT (imsi) DO NOTHING
             """,
@@ -163,7 +163,7 @@ async def _upsert_profile(conn, profile: dict):
                 continue
             await conn.execute(
                 """
-                INSERT INTO subscriber_apn_ips (imsi, apn, static_ip, pool_id, pool_name)
+                INSERT INTO imsi_apn_ips (imsi, apn, static_ip, pool_id, pool_name)
                 VALUES ($1, $2, $3::inet, $4::uuid, $5)
                 ON CONFLICT ON CONSTRAINT uq_apn_ips_imsi_apn DO UPDATE
                 SET static_ip=EXCLUDED.static_ip, pool_id=EXCLUDED.pool_id,
@@ -183,7 +183,7 @@ async def _upsert_profile(conn, profile: dict):
             continue
         await conn.execute(
             """
-            INSERT INTO subscriber_iccid_ips (device_id, apn, static_ip, pool_id, pool_name)
+            INSERT INTO device_apn_ips (device_id, apn, static_ip, pool_id, pool_name)
             VALUES ($1::uuid, $2, $3::inet, $4::uuid, $5)
             ON CONFLICT ON CONSTRAINT uq_iccid_ips_device_apn DO UPDATE
             SET static_ip=EXCLUDED.static_ip, pool_id=EXCLUDED.pool_id,

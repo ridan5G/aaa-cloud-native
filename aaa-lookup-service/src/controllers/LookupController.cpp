@@ -29,10 +29,10 @@ SELECT
     sa.static_ip        AS imsi_static_ip,
     ci.apn              AS iccid_apn,
     ci.static_ip        AS iccid_static_ip
-FROM        subscriber_imsis    si
-JOIN        subscriber_profiles sp ON sp.device_id = si.device_id
-LEFT JOIN   subscriber_apn_ips  sa ON sa.imsi       = si.imsi
-LEFT JOIN   subscriber_iccid_ips ci ON ci.device_id = sp.device_id
+FROM        imsi2device    si
+JOIN        device_profiles sp ON sp.device_id = si.device_id
+LEFT JOIN   imsi_apn_ips  sa ON sa.imsi       = si.imsi
+LEFT JOIN   device_apn_ips ci ON ci.device_id = sp.device_id
 WHERE       si.imsi = $1
 )SQL";
 
@@ -205,7 +205,7 @@ void LookupController::lookup(
                 break;
 
             case ResolveStatus::NotFound:
-                // Expected for first-connection IMSIs — FreeRADIUS falls
+                // Expected for first-connection IMSIs — aaa-radius-server falls
                 // through to subscriber-profile-api.  Not an error.
                 resp = LookupController::errorResponse(
                     drogon::k404NotFound, "not_found");
