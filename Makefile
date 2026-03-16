@@ -6,9 +6,10 @@ CLUSTER     := aaa-dev
 NAMESPACE   := aaa-platform
 CHART_DIR   := ./charts/aaa-platform
 RELEASE     := aaa-platform
-REGISTRY    ?= aaa                            # Docker Desktop: images served locally (pullPolicy: Never)
-                                               # k3d:           use k3d-aaa-registry.localhost:5111
-                                               # Remote:        use your registry prefix
+# REGISTRY: Docker Desktop = aaa (local images, pullPolicy: Never)
+#           k3d            = k3d-aaa-registry.localhost:5111
+#           Remote         = your registry prefix
+REGISTRY    ?= aaa
 TAG         ?= dev
 
 # Database connection — override for non-local environments
