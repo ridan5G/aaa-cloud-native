@@ -20,6 +20,12 @@ DB_PORT     ?= 5432
 DB_NAME     ?= aaa
 DB_URL      ?= postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)
 
+# RADIUS shared secret — single source of truth.
+# aaa-radius-server and aaa-regression-tester both read from the same
+# K8s secret (aaa-radius-secret). Override at the CLI if rotating:
+#   make deploy RADIUS_SECRET=new-value
+RADIUS_SECRET ?= testing123
+
 SCRIPT      ?= load.js   # override: make load-test-k8s SCRIPT=stress.js
 
 .PHONY: help \
@@ -67,7 +73,7 @@ bootstrap: cluster-up hosts build-all push-all dep-update prom-crds deploy db-in
 	@echo "╚══════════════════════════════════════════════════════════╝"
 
 # ── Docker Desktop setup (first time, no k3d needed) ──────────
-setup: cnpg-install nginx-install hosts build-all dep-update prom-crds deploy db-init test-secret radius-secret ## Docker Desktop: install operators, build images, deploy everything
+setup: cnpg-install nginx-install hosts build-all dep-update prom-crds deploy db-init ## Docker Desktop: install operators, build images, deploy everything (secrets created automatically by deploy)
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════╗"
 	@echo "║  AAA Platform is running on Docker Desktop!             ║"
@@ -133,7 +139,7 @@ build-ui:                       ## Build just the aaa-management-ui image (dev, 
 	docker build -t aaa/aaa-management-ui:dev ./aaa-management-ui/
 
 # ── Deploy ────────────────────────────────────────────────────
-deploy:                         ## Deploy/upgrade umbrella chart with values-dev.yaml
+deploy: radius-secret test-secret ## Deploy/upgrade umbrella chart (creates required secrets first, then applies chart)
 	helm upgrade --install $(RELEASE) $(CHART_DIR) \
 	  --namespace $(NAMESPACE) --create-namespace \
 	  -f $(CHART_DIR)/values-dev.yaml \
@@ -168,9 +174,9 @@ test-secret:                    ## Create the JWT secret for regression tester
 	  --from-literal=token="dev-skip-verify" \
 	  -n $(NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
 
-radius-secret:                  ## Create the RADIUS shared-secret for regression tester
+radius-secret:                  ## Create/update aaa-radius-secret from RADIUS_SECRET var (used by radius-server AND regression tester)
 	kubectl create secret generic aaa-radius-secret \
-	  --from-literal=radius-secret="testing123" \
+	  --from-literal=radius-secret="$(RADIUS_SECRET)" \
 	  -n $(NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
 
 test:                           ## Run full regression suite as a Kubernetes Job

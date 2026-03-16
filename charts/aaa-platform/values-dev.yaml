@@ -157,7 +157,7 @@ aaa-radius-server:
     tag: "dev"
     pullPolicy: Never
   radiusSecret:
-    value: "testing123"   # dev only — override with secretRef in production
+    secretName: "aaa-radius-secret"   # created by: make radius-secret (called automatically by make deploy)
   lookupUrl: "http://aaa-platform-aaa-lookup-service:8081"
   provisioningUrl: "http://aaa-platform-subscriber-profile-api:8080"
   workerThreads: 4
