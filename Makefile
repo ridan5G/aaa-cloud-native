@@ -25,7 +25,7 @@ SCRIPT      ?= load.js   # override: make load-test-k8s SCRIPT=stress.js
         cluster-up cluster-down cluster-status cnpg-install nginx-install dep-update prom-crds \
         build-all build-radius-server push-all build-push build-ui \
         hosts bootstrap setup helm-unlock \
-        deploy deploy-dry-run deploy-migration \
+        deploy deploy-dry-run deploy-migration db-init \
         test test-secret radius-secret \
         port-forward-lookup port-forward-api port-forward-db port-forward-ui \
         port-forward-grafana port-forward-prometheus port-forward-pgbouncer \
@@ -54,7 +54,7 @@ hosts:                          ## Update WSL2 /etc/hosts with .aaa.localhost en
 	@bash scripts/hosts-update.sh
 
 # ── Full dev bootstrap — k3d (first time) ─────────────────────
-bootstrap: cluster-up hosts build-all push-all dep-update prom-crds deploy ## k3d: create cluster, push images, deploy everything
+bootstrap: cluster-up hosts build-all push-all dep-update prom-crds deploy db-init ## k3d: create cluster, push images, deploy everything
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════╗"
 	@echo "║  AAA Platform is running!                               ║"
@@ -66,7 +66,7 @@ bootstrap: cluster-up hosts build-all push-all dep-update prom-crds deploy ## k3
 	@echo "╚══════════════════════════════════════════════════════════╝"
 
 # ── Docker Desktop setup (first time, no k3d needed) ──────────
-setup: cnpg-install nginx-install hosts build-all dep-update prom-crds deploy test-secret radius-secret ## Docker Desktop: install operators, build images, deploy everything
+setup: cnpg-install nginx-install hosts build-all dep-update prom-crds deploy db-init test-secret radius-secret ## Docker Desktop: install operators, build images, deploy everything
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════╗"
 	@echo "║  AAA Platform is running on Docker Desktop!             ║"
@@ -157,6 +157,9 @@ deploy-migration:               ## Run migration Jobs (Steps 1–3)
 	  -f $(CHART_DIR)/values-dev.yaml \
 	  --set "aaa-migration.enabled=true" \
 	  --wait
+
+db-init:                        ## Apply DB schema + grants idempotently (auto-called by setup/bootstrap; run manually on existing clusters)
+	@NAMESPACE=$(NAMESPACE) bash scripts/db-init.sh
 
 # ── Regression tests ──────────────────────────────────────────
 test-secret:                    ## Create the JWT secret for regression tester

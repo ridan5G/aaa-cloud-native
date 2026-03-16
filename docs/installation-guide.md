@@ -72,9 +72,19 @@ This single command runs the full chain:
 | `dep-update` | Downloads and vendors Helm sub-chart dependencies |
 | `prom-crds` | Installs Prometheus Operator CRDs from the cached chart tarball |
 | `deploy` | `helm upgrade --install` the umbrella chart with `values-dev.yaml` |
+| `db-init` | Applies the AAA schema + GRANTs to the PostgreSQL primary (idempotent) |
+| `test-secret` | Creates `aaa-test-jwt` K8s Secret |
+| `radius-secret` | Creates `aaa-radius-secret` K8s Secret |
 
 > **Note:** `setup` takes ~10–15 minutes on first run (Prometheus/Grafana images are large).
 > Watch progress in a second terminal: `kubectl get pods -n aaa-platform -w`
+
+> **Why `db-init`?**
+> CloudNativePG runs the initdb SQL only once — at the moment the database cluster is first
+> created (`postInitApplicationSQLRefs`). If the cluster already exists (e.g. from a previous
+> deploy) the SQL never runs automatically. `make db-init` applies the schema idempotently at
+> any time. `make setup` calls it automatically; for day-to-day re-deploys, run it manually
+> whenever you add new tables to the schema.
 
 ### Step 3 — Configure Windows hosts file (one-time)
 
@@ -123,6 +133,25 @@ wsl make deploy
 docker build -t aaa/aaa-management-ui:dev ./aaa-management-ui/
 wsl make deploy
 ```
+
+### Apply / re-apply DB schema and grants
+
+`make db-init` is called automatically by `make setup`. Run it manually if:
+- You added new tables to `charts/aaa-database/templates/initdb-configmap.yaml`
+- You get `relation "..." does not exist` or `permission denied for table ...` errors
+- You're deploying against a cluster that predates the initdb ConfigMap
+
+```bash
+wsl make db-init
+```
+
+Under the hood this script (`scripts/db-init.sh`):
+1. Finds the CNPG primary pod (`cnpg.io/instanceRole=primary`)
+2. Extracts `schema.sql` from the `aaa-postgres-initdb-sql` ConfigMap
+3. Pipes it into psql as the `postgres` superuser (peer auth, no password needed)
+4. Runs `ALTER DEFAULT PRIVILEGES` so future objects are automatically accessible to `aaa_app`
+
+It is fully idempotent — `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, and `GRANT` are safe to re-run.
 
 ### Check status
 
@@ -264,6 +293,25 @@ To re-run tests, call `wsl make test` again — it creates a fresh Job each time
 ---
 
 ## Troubleshooting
+
+### `relation "..." does not exist` or `permission denied for table ...`
+
+The database schema was not initialized. This happens when the CNPG cluster was
+created before the initdb ConfigMap existed — CloudNativePG runs `postInitApplicationSQLRefs`
+only once, at cluster bootstrap.
+
+Fix: apply the schema idempotently:
+```bash
+wsl make db-init
+```
+
+Then restart the API pod so it can reconnect cleanly:
+```bash
+kubectl rollout restart deployment -n aaa-platform -l app.kubernetes.io/name=subscriber-profile-api
+kubectl rollout restart deployment -n aaa-platform -l app.kubernetes.io/name=aaa-lookup-service
+```
+
+---
 
 ### `make` not found in PowerShell
 
