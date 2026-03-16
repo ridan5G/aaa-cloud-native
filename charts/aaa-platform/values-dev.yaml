@@ -196,12 +196,8 @@ kube-prometheus-stack:
       dashboards:
         enabled: true
         searchNamespace: aaa-platform
-    additionalDataSources:
-      - name: Prometheus
-        type: prometheus
-        url: http://aaa-platform-kube-prometheus-prometheus:9090
-        access: proxy
-        isDefault: true
+    # kube-prometheus-stack auto-configures a default Prometheus datasource —
+    # do NOT add additionalDataSources with isDefault: true here (causes crash)
   prometheus:
     ingress:
       enabled: true
@@ -230,7 +226,7 @@ kube-prometheus-stack:
   alertmanager:
     enabled: false
   nodeExporter:
-    enabled: true
+    enabled: false        # Docker Desktop restricts /proc and /sys host paths
   kubeStateMetrics:
     enabled: true
 
@@ -253,13 +249,17 @@ aaa-migration:
 
 # ── Regression Tester ────────────────────────────────────────────
 aaa-regression-tester:
-  enabled: false        # requires subscriber-profile-api + aaa-test-jwt secret
+  enabled: false        # enabled transiently by: wsl make test
   image:
     repository: aaa/aaa-regression-tester
     tag: "dev"
     pullPolicy: Never
   env:
-    PROVISION_URL: "http://subscriber-profile-api:8080/v1"
-    LOOKUP_URL: "http://aaa-lookup-service:8081/v1"
-    PUSHGATEWAY_URL: "http://prometheus-pushgateway:9091"
+    PROVISION_URL:   "http://aaa-platform-subscriber-profile-api:8080/v1"
+    LOOKUP_URL:      "http://aaa-platform-aaa-lookup-service:8081/v1"
+    PUSHGATEWAY_URL: "http://aaa-platform-prometheus-pushgateway:9091"
   jwtSecretName: aaa-test-jwt
+  radius:
+    host:       "aaa-platform-aaa-radius-server"
+    port:       1812
+    secretName: "aaa-radius-secret"   # created by: wsl make radius-secret

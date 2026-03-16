@@ -6,7 +6,9 @@ CLUSTER     := aaa-dev
 NAMESPACE   := aaa-platform
 CHART_DIR   := ./charts/aaa-platform
 RELEASE     := aaa-platform
-REGISTRY    ?= k3d-aaa-registry.localhost:5111
+REGISTRY    ?= aaa                            # Docker Desktop: images served locally (pullPolicy: Never)
+                                               # k3d:           use k3d-aaa-registry.localhost:5111
+                                               # Remote:        use your registry prefix
 TAG         ?= dev
 
 # Database connection — override for non-local environments
@@ -20,11 +22,11 @@ DB_URL      ?= postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_N
 SCRIPT      ?= load.js   # override: make load-test-k8s SCRIPT=stress.js
 
 .PHONY: help \
-        cluster-up cluster-down cluster-status cnpg-install dep-update \
+        cluster-up cluster-down cluster-status cnpg-install nginx-install dep-update prom-crds \
         build-all build-radius-server push-all build-push build-ui \
-        hosts bootstrap \
+        hosts bootstrap setup helm-unlock \
         deploy deploy-dry-run deploy-migration \
-        test test-secret \
+        test test-secret radius-secret \
         port-forward-lookup port-forward-api port-forward-db port-forward-ui \
         port-forward-grafana port-forward-prometheus port-forward-pgbouncer \
         logs logs-lookup logs-api logs-ui \
@@ -51,11 +53,23 @@ cluster-status:                 ## Show cluster node and pod status
 hosts:                          ## Update WSL2 /etc/hosts with .aaa.localhost entries
 	@bash scripts/hosts-update.sh
 
-# ── Full dev bootstrap (first time) ───────────────────────────
-bootstrap: cluster-up hosts build-all push-all dep-update deploy ## Create cluster, push images, deploy everything
+# ── Full dev bootstrap — k3d (first time) ─────────────────────
+bootstrap: cluster-up hosts build-all push-all dep-update prom-crds deploy ## k3d: create cluster, push images, deploy everything
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════╗"
-	@echo "║  AAA Platform is running on k3d!                        ║"
+	@echo "║  AAA Platform is running!                               ║"
+	@echo "║  UI:          http://ui.aaa.localhost                   ║"
+	@echo "║  API:         http://provisioning.aaa.localhost/v1      ║"
+	@echo "║  Lookup:      http://lookup.aaa.localhost/health        ║"
+	@echo "║  Grafana:     http://grafana.aaa.localhost (dev-grafana)║"
+	@echo "║  Prometheus:  http://prometheus.aaa.localhost           ║"
+	@echo "╚══════════════════════════════════════════════════════════╝"
+
+# ── Docker Desktop setup (first time, no k3d needed) ──────────
+setup: cnpg-install nginx-install hosts build-all dep-update prom-crds deploy test-secret radius-secret ## Docker Desktop: install operators, build images, deploy everything
+	@echo ""
+	@echo "╔══════════════════════════════════════════════════════════╗"
+	@echo "║  AAA Platform is running on Docker Desktop!             ║"
 	@echo "║  UI:          http://ui.aaa.localhost                   ║"
 	@echo "║  API:         http://provisioning.aaa.localhost/v1      ║"
 	@echo "║  Lookup:      http://lookup.aaa.localhost/health        ║"
@@ -71,13 +85,30 @@ cnpg-install:                   ## Install CloudNativePG operator (once per clus
 	  --wait
 	@echo "CloudNativePG operator ready."
 
+nginx-install:                  ## Install nginx-ingress controller (once per cluster, Docker Desktop)
+	helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx --force-update
+	helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
+	  --namespace ingress-nginx --create-namespace \
+	  --set controller.service.type=LoadBalancer \
+	  --wait
+	@echo "nginx-ingress controller ready."
+
 # ── Helm dependency management ────────────────────────────────
 dep-update:                     ## Resolve and vendor all sub-chart dependencies
 	helm dependency update $(CHART_DIR)
 
+prom-crds:                      ## Install Prometheus Operator CRDs from cached chart (run once after dep-update)
+	@tar -xzf $(CHART_DIR)/charts/kube-prometheus-stack-*.tgz \
+	  -C /tmp kube-prometheus-stack/charts/crds/crds/
+	kubectl apply --server-side -f /tmp/kube-prometheus-stack/charts/crds/crds/
+	@rm -rf /tmp/kube-prometheus-stack
+	@echo "Prometheus Operator CRDs installed."
+
 # ── Image management ──────────────────────────────────────────
-build-all:                      ## Build all service images (TAG=dev, REGISTRY=k3d by default)
-	@for svc in aaa-lookup-service aaa-radius-server subscriber-profile-api aaa-management-ui aaa-regression-tester aaa-migration; do \
+SERVICES := aaa-lookup-service aaa-radius-server subscriber-profile-api aaa-management-ui aaa-regression-tester
+
+build-all:                      ## Build all service images (REGISTRY=aaa TAG=dev)
+	@for svc in $(SERVICES); do \
 	  [ -d "./$$svc" ] || continue; \
 	  echo "── Building $$svc ──────────────────────────────────"; \
 	  docker build -t $(REGISTRY)/$$svc:$(TAG) ./$$svc/; \
@@ -86,8 +117,8 @@ build-all:                      ## Build all service images (TAG=dev, REGISTRY=k
 build-radius-server:            ## Build just the aaa-radius-server image
 	docker build -t $(REGISTRY)/aaa-radius-server:$(TAG) ./aaa-radius-server/
 
-push-all:                       ## Push all service images to the registry
-	@for svc in aaa-lookup-service aaa-radius-server subscriber-profile-api aaa-management-ui aaa-regression-tester aaa-migration; do \
+push-all:                       ## Push all service images to the registry (k3d / remote only)
+	@for svc in $(SERVICES); do \
 	  [ -d "./$$svc" ] || continue; \
 	  echo "── Pushing $$svc ───────────────────────────────────"; \
 	  docker push $(REGISTRY)/$$svc:$(TAG); \
@@ -105,7 +136,14 @@ deploy:                         ## Deploy/upgrade umbrella chart with values-dev
 	helm upgrade --install $(RELEASE) $(CHART_DIR) \
 	  --namespace $(NAMESPACE) --create-namespace \
 	  -f $(CHART_DIR)/values-dev.yaml \
-	  --wait --timeout 10m
+	  --timeout 10m
+
+helm-unlock:                    ## Clear a stuck Helm lock (run if deploy fails with 'another operation in progress')
+	@echo "Rolling back to last successful release to clear lock..."
+	helm rollback $(RELEASE) -n $(NAMESPACE) 2>/dev/null || \
+	  kubectl delete secret -n $(NAMESPACE) \
+	    -l 'status in (pending-install,pending-upgrade,pending-rollback),owner=helm'
+	@echo "Lock cleared. Re-run: wsl make deploy"
 
 deploy-dry-run:                 ## Render templates without applying (validates chart)
 	helm upgrade --install $(RELEASE) $(CHART_DIR) \
@@ -126,13 +164,23 @@ test-secret:                    ## Create the JWT secret for regression tester
 	  --from-literal=token="dev-skip-verify" \
 	  -n $(NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
 
+radius-secret:                  ## Create the RADIUS shared-secret for regression tester
+	kubectl create secret generic aaa-radius-secret \
+	  --from-literal=radius-secret="testing123" \
+	  -n $(NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
+
 test:                           ## Run full regression suite as a Kubernetes Job
 	$(MAKE) test-secret
+	$(MAKE) radius-secret
 	helm upgrade --install $(RELEASE) $(CHART_DIR) \
 	  --namespace $(NAMESPACE) \
 	  -f $(CHART_DIR)/values-dev.yaml \
 	  --set "aaa-regression-tester.enabled=true" \
-	  --wait --timeout 15m
+	  --timeout 10m
+	@echo "Waiting for regression-tester Job to start..."
+	kubectl wait pod \
+	  -l app.kubernetes.io/name=aaa-regression-tester \
+	  -n $(NAMESPACE) --for=condition=Ready --timeout=120s || true
 	@echo "Waiting for test Job to complete (max 15m)..."
 	kubectl wait --for=condition=complete \
 	  job/$$(kubectl get jobs -n $(NAMESPACE) \
