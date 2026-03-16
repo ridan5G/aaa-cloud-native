@@ -99,6 +99,7 @@ async def _load_apn_pools(
 
 
 @router.post("/first-connection", dependencies=[Depends(require_auth)])
+@router.post("/profiles/first-connection", dependencies=[Depends(require_auth)])
 async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn)):
     if not IMSI_RE.match(body.imsi):
         raise HTTPException(

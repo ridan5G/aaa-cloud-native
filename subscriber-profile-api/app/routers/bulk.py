@@ -74,7 +74,7 @@ async def _process_bulk_job(job_id: str, profiles: list[dict]):
             status,
             processed,
             failed,
-            json.dumps(errors),
+            errors,  # asyncpg's jsonb codec handles json.dumps; pre-encoding causes double-encoding
             job_id,
         )
 

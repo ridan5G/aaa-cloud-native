@@ -15,8 +15,8 @@ USABLE = 253   # plan specifies 253 for a /24 (excludes network + broadcast + .2
 class TestPools:
     pool_id: str | None = None
 
-    def setup_method(self):
-        self.__class__.pool_id = None
+    # pool_id is set by test_01 and shared across tests 02-06 (sequential).
+    # Do NOT add setup_method here — it would wipe the pool_id before each test.
 
     # 1.1 ─────────────────────────────────────────────────────────────────────
     def test_01_create_pool(self, http: httpx.Client):

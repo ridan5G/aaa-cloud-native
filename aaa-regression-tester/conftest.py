@@ -29,9 +29,9 @@ SUBNET_24      = "100.65.120.0/24"
 USABLE_IPS_24  = 253     # /24 minus network (.0) and broadcast (.255) minus .254? → plan says 253
 
 # IMSI ranges — unique prefixes avoid collisions between test modules
-# Format: 278773MMMNNNNN  (M = module index, N = sequence)
+# Format: 27877<MM><NNNNNNNN>  MM=module (2 digits), NNNNNNNN=seq (8 digits) = 15 digits total
 def make_imsi(module: int, seq: int) -> str:
-    return f"27877{module:02d}{seq:09d}"
+    return f"27877{module:02d}{seq:08d}"
 
 def make_iccid(module: int, seq: int) -> str:
     """Return a 19-digit ICCID."""

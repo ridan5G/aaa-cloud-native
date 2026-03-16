@@ -30,7 +30,7 @@ SCRIPT      ?= load.js   # override: make load-test-k8s SCRIPT=stress.js
 
 .PHONY: help \
         cluster-up cluster-down cluster-status cnpg-install nginx-install dep-update prom-crds \
-        build-all build-api build-lookup build-radius-server push-all build-push build-ui \
+        build-all build-api build-lookup build-radius-server build-tester push-all build-push build-ui \
         hosts bootstrap setup helm-unlock \
         deploy deploy-dry-run deploy-migration db-init \
         test test-secret radius-secret \
@@ -133,6 +133,9 @@ build-lookup:                   ## Rebuild aaa-lookup-service and restart its po
 	docker build -t $(REGISTRY)/aaa-lookup-service:$(TAG) ./aaa-lookup-service/
 	kubectl rollout restart deployment/$(RELEASE)-aaa-lookup-service -n $(NAMESPACE)
 	kubectl rollout status deployment/$(RELEASE)-aaa-lookup-service -n $(NAMESPACE)
+
+build-tester:                   ## Rebuild aaa-regression-tester image (picks up pytest.ini / test changes; next make test uses new image)
+	docker build -t $(REGISTRY)/aaa-regression-tester:$(TAG) ./aaa-regression-tester/
 
 push-all:                       ## Push all service images to the registry (k3d / remote only)
 	@for svc in $(SERVICES); do \

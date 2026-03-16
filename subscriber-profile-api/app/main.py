@@ -10,7 +10,7 @@ Env vars (see app/config.py for full list):
 import logging
 import uvicorn
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from app.config import HTTP_PORT, METRICS_PORT
 from app.db import init_db, close_db
@@ -68,6 +68,22 @@ app.include_router(profiles.router, prefix=PREFIX, tags=["profiles"])
 app.include_router(imsis.router, prefix=PREFIX, tags=["imsis"])
 app.include_router(first_connection.router, prefix=PREFIX, tags=["first-connection"])
 app.include_router(bulk.router, prefix=PREFIX, tags=["bulk"])
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Return HTTPException.detail directly when it is a dict.
+
+    FastAPI's default handler wraps everything in {"detail": ...}, which
+    means tests that do resp.json().get("error") would never find the key.
+    When detail is already a dict we return it as the top-level response body.
+    String details (e.g. auth errors) keep the standard {"detail": "..."} shape.
+    """
+    if isinstance(exc.detail, dict):
+        content = exc.detail
+    else:
+        content = {"detail": exc.detail}
+    return JSONResponse(status_code=exc.status_code, content=content)
 
 
 @app.exception_handler(Exception)

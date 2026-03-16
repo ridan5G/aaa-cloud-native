@@ -529,8 +529,15 @@ async def delete_profile(device_id: str, conn=Depends(get_conn)):
             status_code=404,
             detail={"error": "not_found", "resource": "subscriber_profile", "device_id": device_id},
         )
-    # Soft-delete: set status=terminated
-    await conn.execute(
-        "UPDATE device_profiles SET status='terminated', updated_at=now() WHERE device_id=$1::uuid",
-        device_id,
-    )
+    async with conn.transaction():
+        # Hard-delete child rows so IMSI and IPs are freed for reuse.
+        # imsi_apn_ips cascades automatically via FK ON DELETE CASCADE on imsi2device.imsi.
+        await conn.execute("DELETE FROM imsi2device WHERE device_id = $1::uuid", device_id)
+        await conn.execute("DELETE FROM device_apn_ips WHERE device_id = $1::uuid", device_id)
+        # Soft-delete: keep the device_id row for audit trail.
+        # Clear iccid so the same ICCID can be assigned to a new profile (NULL is non-unique).
+        await conn.execute(
+            "UPDATE device_profiles SET status='terminated', iccid=NULL, updated_at=now() "
+            "WHERE device_id=$1::uuid",
+            device_id,
+        )
