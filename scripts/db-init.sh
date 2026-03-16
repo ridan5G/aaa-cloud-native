@@ -66,6 +66,48 @@ if ! kubectl get configmap "${CONFIGMAP}" -n "${NAMESPACE}" &>/dev/null; then
   exit 1
 fi
 
+# ── Drop stale Plan-1 tables (old names superseded by Plan-2 schema) ──────────
+# Plan 1 used different table names. If they are still present they block the
+# Plan 2 CREATE TABLE statements (duplicate constraint/index names).
+# We drop them with CASCADE only when the new Plan-2 tables are absent, so this
+# step is a no-op on a clean install and only fires during a schema migration.
+echo "Checking for stale Plan-1 tables..."
+kubectl exec -i "${PRIMARY_POD}" \
+  -n "${NAMESPACE}" \
+  -- psql -U postgres -d "${DB_NAME}" <<'SQL'
+DO $$
+BEGIN
+  -- subscriber_apn_ips  → replaced by imsi_apn_ips
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'subscriber_apn_ips'  AND relkind = 'r')
+  AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'imsi_apn_ips'   AND relkind = 'r') THEN
+    DROP TABLE subscriber_apn_ips CASCADE;
+    RAISE NOTICE 'Dropped stale Plan-1 table subscriber_apn_ips';
+  END IF;
+
+  -- subscriber_iccid_ips → replaced by device_apn_ips
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'subscriber_iccid_ips' AND relkind = 'r')
+  AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'device_apn_ips'   AND relkind = 'r') THEN
+    DROP TABLE subscriber_iccid_ips CASCADE;
+    RAISE NOTICE 'Dropped stale Plan-1 table subscriber_iccid_ips';
+  END IF;
+
+  -- subscriber_imsis  → replaced by imsi2device  (keep if new table also absent)
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'subscriber_imsis' AND relkind = 'r')
+  AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'imsi2device'  AND relkind = 'r') THEN
+    DROP TABLE subscriber_imsis CASCADE;
+    RAISE NOTICE 'Dropped stale Plan-1 table subscriber_imsis';
+  END IF;
+
+  -- subscriber_profiles → replaced by device_profiles
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'subscriber_profiles' AND relkind = 'r')
+  AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'device_profiles'  AND relkind = 'r') THEN
+    DROP TABLE subscriber_profiles CASCADE;
+    RAISE NOTICE 'Dropped stale Plan-1 table subscriber_profiles';
+  END IF;
+END;
+$$;
+SQL
+
 # ── Apply schema SQL from ConfigMap ───────────────────────────────────────────
 echo "Applying schema SQL from ConfigMap '${CONFIGMAP}'..."
 kubectl get configmap "${CONFIGMAP}" \

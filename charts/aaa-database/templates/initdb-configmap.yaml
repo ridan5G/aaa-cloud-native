@@ -73,7 +73,7 @@ data:
     CREATE INDEX IF NOT EXISTS idx_sp_status
         ON device_profiles (account_name, status);
 
-    CREATE TRIGGER trg_sp_updated_at
+    CREATE OR REPLACE TRIGGER trg_sp_updated_at
         BEFORE UPDATE ON device_profiles
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
@@ -105,7 +105,7 @@ data:
     CREATE INDEX IF NOT EXISTS idx_si_device_id
         ON imsi2device (device_id);
 
-    CREATE TRIGGER trg_si_updated_at
+    CREATE OR REPLACE TRIGGER trg_si_updated_at
         BEFORE UPDATE ON imsi2device
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
@@ -138,7 +138,7 @@ data:
     CREATE INDEX IF NOT EXISTS idx_sai_imsi
         ON imsi_apn_ips (imsi);
 
-    CREATE TRIGGER trg_sai_updated_at
+    CREATE OR REPLACE TRIGGER trg_sai_updated_at
         BEFORE UPDATE ON imsi_apn_ips
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
@@ -170,7 +170,7 @@ data:
     CREATE INDEX IF NOT EXISTS idx_sii_device_id
         ON device_apn_ips (device_id);
 
-    CREATE TRIGGER trg_sii_updated_at
+    CREATE OR REPLACE TRIGGER trg_sii_updated_at
         BEFORE UPDATE ON device_apn_ips
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
@@ -196,7 +196,7 @@ data:
     CREATE INDEX IF NOT EXISTS idx_pools_account
         ON ip_pools (account_name);
 
-    CREATE TRIGGER trg_pools_updated_at
+    CREATE OR REPLACE TRIGGER trg_pools_updated_at
         BEFORE UPDATE ON ip_pools
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
@@ -260,7 +260,7 @@ data:
     CREATE INDEX IF NOT EXISTS idx_iccid_rc_range
         ON iccid_range_configs (f_iccid, t_iccid);
 
-    CREATE TRIGGER trg_iccid_rc_updated_at
+    CREATE OR REPLACE TRIGGER trg_iccid_rc_updated_at
         BEFORE UPDATE ON iccid_range_configs
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
@@ -321,7 +321,7 @@ data:
     CREATE INDEX IF NOT EXISTS idx_irc_iccid_range
         ON imsi_range_configs (iccid_range_id);
 
-    CREATE TRIGGER trg_irc_updated_at
+    CREATE OR REPLACE TRIGGER trg_irc_updated_at
         BEFORE UPDATE ON imsi_range_configs
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
