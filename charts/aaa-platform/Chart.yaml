@@ -51,11 +51,6 @@ dependencies:
     condition: prometheus-pushgateway.enabled
 
   # ── One-time jobs (disabled by default — run manually) ───────
-  - name: aaa-migration
-    version: "1.0.0"
-    repository: "file://../aaa-migration"
-    condition: aaa-migration.enabled
-
   - name: aaa-regression-tester
     version: "1.0.0"
     repository: "file://../aaa-regression-tester"
