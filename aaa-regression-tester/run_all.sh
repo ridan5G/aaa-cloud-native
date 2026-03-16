@@ -41,8 +41,8 @@ EOF
   exit 1
 }
 
-wait_healthy "${PROVISION_URL:-http://localhost:8080/v1}" "subscriber-profile-api"
-wait_healthy "${LOOKUP_URL:-http://localhost:8081/v1}"    "aaa-lookup-service"
+wait_healthy "${PROVISION_URL%/v1}" "subscriber-profile-api"
+wait_healthy "${LOOKUP_URL%/v1}"    "aaa-lookup-service"
 
 # ── Run the suite ─────────────────────────────────────────────────────────────
 EXIT_CODE=0
