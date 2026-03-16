@@ -30,7 +30,7 @@ SCRIPT      ?= load.js   # override: make load-test-k8s SCRIPT=stress.js
 
 .PHONY: help \
         cluster-up cluster-down cluster-status cnpg-install nginx-install dep-update prom-crds \
-        build-all build-radius-server push-all build-push build-ui \
+        build-all build-api build-lookup build-radius-server push-all build-push build-ui \
         hosts bootstrap setup helm-unlock \
         deploy deploy-dry-run deploy-migration db-init \
         test test-secret radius-secret \
@@ -123,6 +123,16 @@ build-all:                      ## Build all service images (REGISTRY=aaa TAG=de
 
 build-radius-server:            ## Build just the aaa-radius-server image
 	docker build -t $(REGISTRY)/aaa-radius-server:$(TAG) ./aaa-radius-server/
+
+build-api:                      ## Rebuild subscriber-profile-api and restart its pod (picks up code changes with pullPolicy:Never)
+	docker build -t $(REGISTRY)/subscriber-profile-api:$(TAG) ./subscriber-profile-api/
+	kubectl rollout restart deployment/$(RELEASE)-subscriber-profile-api -n $(NAMESPACE)
+	kubectl rollout status deployment/$(RELEASE)-subscriber-profile-api -n $(NAMESPACE)
+
+build-lookup:                   ## Rebuild aaa-lookup-service and restart its pod
+	docker build -t $(REGISTRY)/aaa-lookup-service:$(TAG) ./aaa-lookup-service/
+	kubectl rollout restart deployment/$(RELEASE)-aaa-lookup-service -n $(NAMESPACE)
+	kubectl rollout status deployment/$(RELEASE)-aaa-lookup-service -n $(NAMESPACE)
 
 push-all:                       ## Push all service images to the registry (k3d / remote only)
 	@for svc in $(SERVICES); do \

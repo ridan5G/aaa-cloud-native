@@ -173,7 +173,7 @@ async def create_profile(body: ProfileCreate, conn=Depends(get_conn)):
         # Check IMSI uniqueness
         for entry in body.imsis:
             existing = await conn.fetchval(
-                "SELECT device_id::text FROM imsi2device si "
+                "SELECT si.device_id::text FROM imsi2device si "
                 "JOIN device_profiles sp ON sp.device_id = si.device_id "
                 "WHERE si.imsi = $1 AND sp.status != 'terminated'",
                 entry.imsi,
