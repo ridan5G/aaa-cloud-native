@@ -32,7 +32,7 @@ SCRIPT      ?= load.js   # override: make load-test-k8s SCRIPT=stress.js
         cluster-up cluster-down cluster-status cnpg-install nginx-install dep-update prom-crds \
         build-all build-api build-lookup build-radius-server build-tester push-all build-push build-ui \
         hosts bootstrap setup helm-unlock \
-        deploy deploy-dry-run deploy-migration db-init \
+        deploy deploy-dry-run deploy-migration db-init db-flush-stale \
         test test-secret radius-secret \
         port-forward-lookup port-forward-api port-forward-db port-forward-ui \
         port-forward-grafana port-forward-prometheus port-forward-pgbouncer \
@@ -180,6 +180,14 @@ deploy-migration:               ## Run migration Jobs (Steps 1–3)
 
 db-init:                        ## Apply DB schema + grants idempotently (auto-called by setup/bootstrap; run manually on existing clusters)
 	@NAMESPACE=$(NAMESPACE) bash scripts/db-init.sh
+
+db-flush-stale:                 ## Full profile cleanup: truncates all device/IMSI/IP data (dev only; run before make test when tests fail with stale-data errors)
+	@POD=$$(kubectl get pod -n $(NAMESPACE) -l cnpg.io/instanceRole=primary \
+	  -o jsonpath='{.items[0].metadata.name}'); \
+	kubectl exec -i "$$POD" -n $(NAMESPACE) -- \
+	  psql -U postgres -d $(DB_NAME) -v ON_ERROR_STOP=1 \
+	  -c "TRUNCATE imsi_apn_ips, device_apn_ips, imsi2device, device_profiles CASCADE"
+	@echo "All profile data removed. Pools and range configs preserved."
 
 # ── Regression tests ──────────────────────────────────────────
 test-secret:                    ## Create the JWT secret for regression tester

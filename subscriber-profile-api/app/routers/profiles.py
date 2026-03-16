@@ -79,7 +79,7 @@ async def _build_profile_response(device_id: str, conn) -> dict:
                        json_build_object(
                            'id', sa.id,
                            'apn', sa.apn,
-                           'static_ip', sa.static_ip::text,
+                           'static_ip', host(sa.static_ip),
                            'pool_id', sa.pool_id::text,
                            'pool_name', sa.pool_name
                        ) ORDER BY sa.id
@@ -97,7 +97,7 @@ async def _build_profile_response(device_id: str, conn) -> dict:
 
     iccid_ips = await conn.fetch(
         """
-        SELECT id, apn, static_ip::text, pool_id::text, pool_name
+        SELECT id, apn, host(static_ip) AS static_ip, pool_id::text, pool_name
         FROM device_apn_ips WHERE device_id = $1::uuid
         ORDER BY id
         """,
@@ -244,7 +244,8 @@ async def create_profile(body: ProfileCreate, conn=Depends(get_conn)):
 @router.get("/profiles/{device_id}", dependencies=[Depends(require_auth)])
 async def get_profile(device_id: str, conn=Depends(get_conn)):
     result = await _build_profile_response(device_id, conn)
-    if result is None:
+    # Treat terminated profiles the same as missing — they are no longer addressable.
+    if result is None or result.get("status") == "terminated":
         raise HTTPException(
             status_code=404,
             detail={"error": "not_found", "resource": "subscriber_profile", "device_id": device_id},
@@ -522,7 +523,8 @@ async def patch_profile(device_id: str, body: ProfilePatch, conn=Depends(get_con
 @router.delete("/profiles/{device_id}", status_code=204, dependencies=[Depends(require_auth)])
 async def delete_profile(device_id: str, conn=Depends(get_conn)):
     existing = await conn.fetchrow(
-        "SELECT device_id FROM device_profiles WHERE device_id = $1::uuid", device_id
+        "SELECT device_id FROM device_profiles WHERE device_id = $1::uuid AND status != 'terminated'",
+        device_id,
     )
     if not existing:
         raise HTTPException(

@@ -33,12 +33,18 @@ class ImsiCreate(BaseModel):
 class ImsiPatch(BaseModel):
     status: Optional[str] = None
     priority: Optional[int] = None
+    # Convenience shorthand for imsi/iccid modes (no APN key needed):
+    # PATCH …/imsis/{imsi} {"static_ip": "x.x.x.x", "pool_id": "…"} is
+    # equivalent to passing apn_ips=[{"static_ip": …, "pool_id": …}].
+    static_ip: Optional[str] = None
+    pool_id: Optional[str] = None
     apn_ips: Optional[list[ApnIpEntry]] = None
 
 
 async def _require_profile(device_id: str, conn):
     row = await conn.fetchrow(
-        "SELECT device_id FROM device_profiles WHERE device_id = $1::uuid", device_id
+        "SELECT device_id FROM device_profiles WHERE device_id = $1::uuid AND status != 'terminated'",
+        device_id,
     )
     if not row:
         raise HTTPException(
@@ -58,7 +64,7 @@ async def list_imsis(device_id: str, conn=Depends(get_conn)):
                        json_build_object(
                            'id', sa.id,
                            'apn', sa.apn,
-                           'static_ip', sa.static_ip::text,
+                           'static_ip', host(sa.static_ip),
                            'pool_id', sa.pool_id::text,
                            'pool_name', sa.pool_name
                        ) ORDER BY sa.id
@@ -93,7 +99,7 @@ async def get_imsi(device_id: str, imsi: str, conn=Depends(get_conn)):
                        json_build_object(
                            'id', sa.id,
                            'apn', sa.apn,
-                           'static_ip', sa.static_ip::text,
+                           'static_ip', host(sa.static_ip),
                            'pool_id', sa.pool_id::text,
                            'pool_name', sa.pool_name
                        ) ORDER BY sa.id
@@ -180,10 +186,16 @@ async def patch_imsi(device_id: str, imsi: str, body: ImsiPatch, conn=Depends(ge
             body.priority, imsi,
         )
 
-    if body.apn_ips is not None:
+    # Normalise shorthand: top-level static_ip → single apn_ips entry (imsi/iccid modes).
+    # Allows PATCH {"status":"active","static_ip":"x.x","pool_id":"…"} without nesting.
+    effective_apn_ips = body.apn_ips
+    if body.static_ip is not None and body.apn_ips is None:
+        effective_apn_ips = [ApnIpEntry(static_ip=body.static_ip, pool_id=body.pool_id)]
+
+    if effective_apn_ips is not None:
         async with conn.transaction():
             await conn.execute("DELETE FROM imsi_apn_ips WHERE imsi = $1", imsi)
-            for aip in body.apn_ips:
+            for aip in effective_apn_ips:
                 await conn.execute(
                     "INSERT INTO imsi_apn_ips (imsi, apn, static_ip, pool_id, pool_name) VALUES ($1, $2, $3::inet, $4::uuid, $5)",
                     imsi, aip.apn, aip.static_ip, aip.pool_id, aip.pool_name,

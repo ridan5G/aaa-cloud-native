@@ -9,6 +9,9 @@ env:
   PROVISION_URL: "http://subscriber-profile-api:8080/v1"
   LOOKUP_URL: "http://aaa-lookup-service:8081/v1"
   PUSHGATEWAY_URL: "http://prometheus-pushgateway:9091"
+  # DB_URL is used by conftest.py to flush all profile data before the test run.
+  # Points at PgBouncer (pooler) — same credentials as the API.
+  DB_URL: "postgres://aaa_app:devpassword@aaa-postgres-pooler-rw:5432/aaa"
 
 # ── JWT token ────────────────────────────────────────────────────
 # Name of a pre-existing Secret with key "token"

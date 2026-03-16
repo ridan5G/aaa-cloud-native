@@ -64,7 +64,7 @@ async def _allocate_ip(conn, pool_id: str) -> Optional[str]:
             ORDER BY ip LIMIT 1
             FOR UPDATE SKIP LOCKED
         )
-        RETURNING ip::text
+        RETURNING host(ip)
         """,
         pool_id,
     )
@@ -121,12 +121,12 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
         device_id = existing_imsi["device_id"]
         # Prefer exact APN match; fall back to apn=NULL (imsi/iccid modes store NULL).
         static_ip = await conn.fetchval(
-            "SELECT static_ip::text FROM imsi_apn_ips WHERE imsi = $1 AND (apn = $2 OR apn IS NULL) ORDER BY apn NULLS LAST LIMIT 1",
+            "SELECT host(static_ip) FROM imsi_apn_ips WHERE imsi = $1 AND (apn = $2 OR apn IS NULL) ORDER BY apn NULLS LAST LIMIT 1",
             body.imsi, body.apn,
         )
         if not static_ip:
             static_ip = await conn.fetchval(
-                "SELECT static_ip::text FROM device_apn_ips WHERE device_id = $1::uuid AND (apn = $2 OR apn IS NULL) ORDER BY apn NULLS LAST LIMIT 1",
+                "SELECT host(static_ip) FROM device_apn_ips WHERE device_id = $1::uuid AND (apn = $2 OR apn IS NULL) ORDER BY apn NULLS LAST LIMIT 1",
                 device_id, body.apn,
             )
         first_connection_total.labels(result="reused").inc()
@@ -254,7 +254,7 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
                 request_apn_val = None if ip_resolution == "imsi" else body.apn
                 # Check if this IMSI+APN was already pre-provisioned.
                 allocated_ip = await conn.fetchval(
-                    "SELECT static_ip::text FROM imsi_apn_ips WHERE imsi = $1 AND apn IS NOT DISTINCT FROM $2",
+                    "SELECT host(static_ip) FROM imsi_apn_ips WHERE imsi = $1 AND apn IS NOT DISTINCT FROM $2",
                     body.imsi, request_apn_val,
                 )
                 if not allocated_ip:
@@ -278,7 +278,7 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
             else:
                 apn_val = None if ip_resolution == "iccid" else body.apn
                 allocated_ip = await conn.fetchval(
-                    "SELECT static_ip::text FROM device_apn_ips WHERE device_id = $1::uuid AND apn IS NOT DISTINCT FROM $2 LIMIT 1",
+                    "SELECT host(static_ip) FROM device_apn_ips WHERE device_id = $1::uuid AND apn IS NOT DISTINCT FROM $2 LIMIT 1",
                     device_id, apn_val,
                 )
 

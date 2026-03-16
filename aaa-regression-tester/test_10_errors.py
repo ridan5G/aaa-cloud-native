@@ -292,6 +292,7 @@ class TestErrors:
             f"Expected 400 for missing imsi, got {r.status_code}: {r.text}"
 
     # 10.15 ───────────────────────────────────────────────────────────────────
+    @pytest.mark.noauth
     def test_15_invalid_jwt_returns_401(self, unauthed_http: httpx.Client):
         """Any endpoint with invalid / missing JWT → 401."""
         # Provision API
