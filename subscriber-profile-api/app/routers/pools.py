@@ -1,6 +1,6 @@
 import ipaddress
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from app.db import get_conn
 from app.auth import require_auth
@@ -105,26 +105,45 @@ async def get_pool(pool_id: str, conn=Depends(get_conn)):
 
 
 @router.get("/pools", dependencies=[Depends(require_auth)])
-async def list_pools(account_name: Optional[str] = None, conn=Depends(get_conn)):
+async def list_pools(
+    account_name: Optional[str] = None,
+    status: Optional[str] = None,
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=100, ge=1, le=1000),
+    conn=Depends(get_conn),
+):
+    filters = []
+    params = []
+    idx = 1
+
     if account_name:
-        rows = await conn.fetch(
-            """
-            SELECT pool_id::text, account_name, pool_name,
-                   subnet::text, start_ip::text, end_ip::text, status
-            FROM ip_pools WHERE account_name = $1
-            ORDER BY created_at DESC
-            """,
-            account_name,
-        )
-    else:
-        rows = await conn.fetch(
-            """
-            SELECT pool_id::text, account_name, pool_name,
-                   subnet::text, start_ip::text, end_ip::text, status
-            FROM ip_pools ORDER BY created_at DESC
-            """
-        )
-    return {"items": [dict(r) for r in rows]}
+        filters.append(f"account_name = ${idx}")
+        params.append(account_name)
+        idx += 1
+    if status:
+        if status not in ("active", "suspended"):
+            _validation_error("status", "must be active or suspended")
+        filters.append(f"status = ${idx}")
+        params.append(status)
+        idx += 1
+
+    where = f"WHERE {' AND '.join(filters)}" if filters else ""
+    offset = (page - 1) * limit
+
+    total = await conn.fetchval(f"SELECT COUNT(*) FROM ip_pools {where}", *params)
+    rows = await conn.fetch(
+        f"""
+        SELECT pool_id::text, account_name, pool_name,
+               subnet::text, start_ip::text, end_ip::text, status
+        FROM ip_pools {where}
+        ORDER BY created_at DESC
+        LIMIT ${idx} OFFSET ${idx + 1}
+        """,
+        *params,
+        limit,
+        offset,
+    )
+    return {"items": [dict(r) for r in rows], "total": int(total), "page": page}
 
 
 @router.get("/pools/{pool_id}/stats", dependencies=[Depends(require_auth)])

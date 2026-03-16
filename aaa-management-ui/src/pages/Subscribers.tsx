@@ -1,8 +1,678 @@
+import { useEffect, useState } from 'react'
+import { Routes, Route, Link, useNavigate, useParams } from 'react-router-dom'
+import { apiClient } from '../apiClient'
+import StatusBadge from '../components/StatusBadge'
+import { useToasts } from '../stores/toast'
+import type { Profile, Imsi, IccidIp, Pool, IpResolution } from '../types'
+
+const IP_RESOLUTIONS: IpResolution[] = ['imsi', 'imsi_apn', 'iccid', 'iccid_apn']
+const PER_PAGE = 50
+
+function fmtDate(s: string) {
+  return new Date(s).toLocaleDateString(undefined, { dateStyle: 'medium' })
+}
+
+function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  return (
+    <>
+      <div className="fixed inset-0 bg-black/30 z-40" onClick={onClose} />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+          <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+            <h2 className="text-base font-semibold">{title}</h2>
+            <button onClick={onClose} className="btn-icon text-xl leading-none">×</button>
+          </div>
+          <div className="px-6 py-5">{children}</div>
+        </div>
+      </div>
+    </>
+  )
+}
+
+// ─── List ─────────────────────────────────────────────────────────────────────
+function SubscriberList() {
+  const navigate  = useNavigate()
+  const [items,   setItems]   = useState<Profile[]>([])
+  const [total,   setTotal]   = useState(0)
+  const [page,    setPage]    = useState(1)
+  const [search,  setSearch]  = useState('')
+  const [status,  setStatus]  = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error,   setError]   = useState<string | null>(null)
+
+  async function load(q = search, st = status, pg = page) {
+    setLoading(true); setError(null)
+    try {
+      const params: Record<string, string | number> = { page: pg, limit: PER_PAGE }
+      if (st) params.status = st
+      const t = q.trim()
+      if (/^\d{15}$/.test(t))    params.imsi         = t
+      else if (/^\d{19,20}$/.test(t)) params.iccid   = t
+      else if (t)                 params.account_name = t
+      const res = await apiClient.get('/profiles', { params })
+      setItems(res.data.items ?? res.data.profiles ?? [])
+      setTotal(res.data.total ?? 0)
+    } catch (e) { setError(String(e)) } finally { setLoading(false) }
+  }
+
+  useEffect(() => { load() }, []) // eslint-disable-line
+
+  function handleSearch(e: React.FormEvent) { e.preventDefault(); setPage(1); load(search, status, 1) }
+  function handleStatus(v: string) { setStatus(v); setPage(1); load(search, v, 1) }
+  function goPage(p: number) { setPage(p); load(search, status, p) }
+  const totalPages = Math.ceil(total / PER_PAGE)
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-xs text-gray-400 uppercase tracking-widest font-medium">Provisioning</p>
+          <h1 className="page-title">Subscribers</h1>
+        </div>
+        <div className="flex gap-2">
+          <Link to="bulk" className="btn-outline">↑ Bulk Import</Link>
+          <Link to="new"  className="btn-primary">+ New Profile</Link>
+        </div>
+      </div>
+
+      <form onSubmit={handleSearch} className="flex gap-3 flex-wrap">
+        <input className="input max-w-xs" placeholder="Search IMSI, ICCID, or account…"
+          value={search} onChange={e => setSearch(e.target.value)} />
+        <select className="select w-40" value={status} onChange={e => handleStatus(e.target.value)}>
+          <option value="">All statuses</option>
+          <option value="active">Active</option>
+          <option value="suspended">Suspended</option>
+          <option value="terminated">Terminated</option>
+        </select>
+        <button type="submit" className="btn-primary">Search</button>
+      </form>
+
+      {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-lg">{error}</div>}
+
+      <div className="tbl-wrap">
+        {loading ? (
+          <div className="flex items-center justify-center h-40 text-gray-400 text-sm">Loading…</div>
+        ) : items.length === 0 ? (
+          <div className="flex items-center justify-center h-40 text-gray-400 text-sm">No profiles found.</div>
+        ) : (
+          <>
+            <table className="tbl">
+              <thead><tr>
+                <th>Device ID</th><th>ICCID</th><th>Account</th>
+                <th>Status</th><th>IP Resolution</th><th>IMSIs</th><th>Created</th><th />
+              </tr></thead>
+              <tbody>
+                {items.map(p => (
+                  <tr key={p.device_id}
+                    className="border-b border-border hover:bg-page transition-colors cursor-pointer"
+                    onClick={() => navigate(p.device_id)}>
+                    <td className="px-4 py-3 font-mono text-xs text-gray-500">{p.device_id.slice(0, 8)}…</td>
+                    <td className="px-4 py-3 text-sm font-mono text-xs">
+                      {p.iccid ? p.iccid.slice(0, 12) + '…' : <span className="text-gray-400">—</span>}
+                    </td>
+                    <td className="px-4 py-3 text-sm">{p.account_name ?? <span className="text-gray-400">—</span>}</td>
+                    <td className="px-4 py-3"><StatusBadge status={p.status} /></td>
+                    <td className="px-4 py-3">
+                      <span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded font-mono">{p.ip_resolution}</span>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-gray-500 tabular-nums">{p.imsis?.length ?? '—'}</td>
+                    <td className="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">{fmtDate(p.created_at)}</td>
+                    <td className="px-4 py-3 text-right"><span className="text-xs text-primary">View →</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="px-4 py-3 border-t border-border flex items-center justify-between text-xs text-gray-500">
+              <span>{((page-1)*PER_PAGE+1).toLocaleString()}–{Math.min(page*PER_PAGE,total).toLocaleString()} of {total.toLocaleString()}</span>
+              <div className="flex gap-1">
+                <button className="px-2 py-1 border border-border rounded hover:bg-page disabled:opacity-40"
+                  disabled={page<=1} onClick={() => goPage(page-1)}>← Prev</button>
+                <button className="px-2 py-1 border border-border rounded hover:bg-page disabled:opacity-40"
+                  disabled={page>=totalPages} onClick={() => goPage(page+1)}>Next →</button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Profile type banner ──────────────────────────────────────────────────────
+const IP_RES_META: Record<IpResolution, { label: string; color: string; desc: string }> = {
+  imsi:     { label: 'IMSI',        color: 'bg-blue-50 text-blue-700 border-blue-200',   desc: 'Per-IMSI, APN-agnostic — each IMSI gets its own IP' },
+  imsi_apn: { label: 'IMSI + APN',  color: 'bg-amber-50 text-amber-700 border-amber-300', desc: 'Per-IMSI, per-APN — each IMSI×APN pair gets a dedicated IP' },
+  iccid:    { label: 'ICCID',       color: 'bg-purple-50 text-purple-700 border-purple-300', desc: 'Card-level — all IMSIs on this SIM share one IP' },
+  iccid_apn:{ label: 'ICCID + APN', color: 'bg-green-50 text-green-700 border-green-300',  desc: 'Card-level per-APN — all IMSIs share per-APN IPs' },
+}
+
+// Sub-component: renders iccid_ips card for iccid/iccid_apn modes
+function CardIpSection({ iccidIps }: { iccidIps: IccidIp[] }) {
+  if (!iccidIps.length) return (
+    <div className="text-xs text-gray-400 italic py-2">No card-level IPs allocated yet — assigned on first connection.</div>
+  )
+  return (
+    <table className="tbl">
+      <thead><tr>
+        <th>APN</th><th>Static IP</th><th>Pool</th>
+      </tr></thead>
+      <tbody>
+        {iccidIps.map((ip, i) => (
+          <tr key={i} className="border-b border-border">
+            <td className="px-4 py-2.5 font-mono text-xs text-gray-600">{ip.apn ?? <span className="text-gray-300 not-italic">— any APN —</span>}</td>
+            <td className="px-4 py-2.5 font-mono text-xs text-gray-800">{ip.static_ip ?? <span className="text-gray-400 not-italic">Auto</span>}</td>
+            <td className="px-4 py-2.5 text-xs text-gray-500">{ip.pool_name ?? ip.pool_id ?? '—'}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+// Sub-component: renders per-IMSI APN IPs (for imsi_apn mode, expanded view)
+function ImsiApnIpsList({ apnIps }: { apnIps: { apn: string | null; static_ip: string | null; pool_name?: string | null; pool_id?: string | null }[] }) {
+  if (!apnIps.length) return <span className="text-gray-400 text-xs italic">No IPs</span>
+  return (
+    <div className="space-y-0.5">
+      {apnIps.map((ip, i) => (
+        <div key={i} className="flex items-center gap-1.5 text-xs">
+          <span className="text-amber-600 font-mono truncate max-w-[100px]">{ip.apn ?? 'any'}</span>
+          <span className="text-gray-300">→</span>
+          <span className="font-mono text-gray-700">{ip.static_ip ?? 'Auto'}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ─── Profile Detail ───────────────────────────────────────────────────────────
+function ProfileDetail() {
+  const { device_id } = useParams<{ device_id: string }>()
+  const navigate = useNavigate()
+  const { show } = useToasts()
+  const [profile, setProfile] = useState<Profile | null>(null)
+  const [imsis,   setImsis]   = useState<Imsi[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error,   setError]   = useState<string | null>(null)
+  const [showForm, setShowForm] = useState(false)
+  const [newImsi, setNewImsi] = useState({ imsi: '', priority: '1', static_ip: '', pool_id: '' })
+  const [saving,  setSaving]  = useState(false)
+
+  async function load() {
+    if (!device_id) return
+    setLoading(true)
+    try {
+      const [pr, ir] = await Promise.all([
+        apiClient.get(`/profiles/${device_id}`),
+        apiClient.get(`/profiles/${device_id}/imsis`).catch(() => ({ data: [] })),
+      ])
+      setProfile(pr.data)
+      const d = ir.data
+      setImsis(Array.isArray(d) ? d : d.items ?? d.imsis ?? [])
+    } catch (e) { setError(String(e)) } finally { setLoading(false) }
+  }
+
+  useEffect(() => { load() }, [device_id]) // eslint-disable-line
+
+  async function patchProfile(body: Record<string, unknown>) {
+    try { await apiClient.patch(`/profiles/${device_id}`, body); show('success', 'Updated'); load() }
+    catch (e) { show('error', String(e)) }
+  }
+
+  async function patchImsi(imsi: string, body: Record<string, unknown>) {
+    try { await apiClient.patch(`/profiles/${device_id}/imsis/${imsi}`, body); show('success', 'Updated'); load() }
+    catch (e) { show('error', String(e)) }
+  }
+
+  async function deleteImsi(imsi: string) {
+    if (!confirm(`Remove IMSI ${imsi}?`)) return
+    try { await apiClient.delete(`/profiles/${device_id}/imsis/${imsi}`); show('success', 'IMSI removed'); load() }
+    catch (e) { show('error', String(e)) }
+  }
+
+  async function addImsi() {
+    setSaving(true)
+    try {
+      const apn_ips = newImsi.static_ip || newImsi.pool_id
+        ? [{ apn: null, static_ip: newImsi.static_ip || null, pool_id: newImsi.pool_id || null }] : []
+      await apiClient.post(`/profiles/${device_id}/imsis`, {
+        imsi: newImsi.imsi, priority: parseInt(newImsi.priority, 10), apn_ips,
+      })
+      show('success', 'IMSI added'); setShowForm(false)
+      setNewImsi({ imsi: '', priority: '1', static_ip: '', pool_id: '' }); load()
+    } catch (e) { show('error', String(e)) } finally { setSaving(false) }
+  }
+
+  if (loading) return <div className="flex items-center justify-center h-60 text-gray-400 text-sm">Loading…</div>
+  if (error)   return <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">{error}</div>
+  if (!profile) return null
+
+  const resMeta = IP_RES_META[profile.ip_resolution] ?? { label: profile.ip_resolution, color: 'bg-gray-100 text-gray-600 border-gray-200', desc: '' }
+  const isIccidMode = profile.ip_resolution === 'iccid' || profile.ip_resolution === 'iccid_apn'
+  const isApnMode   = profile.ip_resolution === 'imsi_apn' || profile.ip_resolution === 'iccid_apn'
+  const iccidIps: IccidIp[] = profile.iccid_ips ?? []
+
+  return (
+    <div className="space-y-4 max-w-4xl">
+      <div className="flex items-center gap-2 text-sm">
+        <button onClick={() => navigate('/subscribers')} className="text-primary hover:underline">Subscribers</button>
+        <span className="text-gray-400">/</span>
+        <span className="font-mono text-xs text-gray-600">{profile.device_id.slice(0, 16)}…</span>
+      </div>
+
+      {/* Profile card */}
+      <div className="card p-6 space-y-4">
+        <div className="flex items-start justify-between">
+          <div>
+            <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">SIM Profile</p>
+            <div className="flex items-center gap-2 mt-1">
+              <span className="font-mono text-sm text-gray-700">{profile.device_id}</span>
+              <button className="text-xs text-gray-400 hover:text-gray-600 border border-gray-200 rounded px-1.5 py-0.5"
+                onClick={() => { navigator.clipboard.writeText(profile.device_id); show('info', 'Copied!') }}>
+                Copy
+              </button>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            {profile.status === 'active' && (
+              <button onClick={() => patchProfile({ status: 'suspended' })} className="btn-ghost text-xs text-amber-600 border border-amber-200">Suspend</button>
+            )}
+            {profile.status === 'suspended' && (
+              <button onClick={() => patchProfile({ status: 'active' })} className="btn-ghost text-xs text-green-600 border border-green-200">Reactivate</button>
+            )}
+            {profile.status !== 'terminated' && (
+              <button onClick={() => patchProfile({ status: 'terminated' })} className="btn-danger text-xs py-1 px-3">Terminate</button>
+            )}
+          </div>
+        </div>
+
+        {/* IP Resolution type badge */}
+        <div className={`flex items-start gap-3 border rounded-lg px-4 py-3 ${resMeta.color}`}>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold uppercase tracking-wide">IP Resolution:</span>
+              <code className="text-xs font-mono font-semibold">{profile.ip_resolution}</code>
+            </div>
+            <p className="text-xs mt-0.5 opacity-80">{resMeta.desc}</p>
+          </div>
+          <Link to="/sim-profile-types" className="text-xs underline opacity-70 hover:opacity-100 shrink-0">Learn more</Link>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+          {[
+            { l: 'ICCID',   v: profile.iccid ?? 'Not set',  mono: true },
+            { l: 'Account', v: profile.account_name ?? '—', mono: false },
+            { l: 'Created', v: fmtDate(profile.created_at),  mono: false },
+            { l: 'Updated', v: fmtDate(profile.updated_at),  mono: false },
+          ].map(f => (
+            <div key={f.l}>
+              <p className="text-xs text-gray-400 uppercase tracking-wide font-medium mb-0.5">{f.l}</p>
+              <p className={`text-sm text-gray-800 ${f.mono ? 'font-mono' : ''}`}>{f.v}</p>
+            </div>
+          ))}
+          <div>
+            <p className="text-xs text-gray-400 uppercase tracking-wide font-medium mb-0.5">Status</p>
+            <StatusBadge status={profile.status} />
+          </div>
+        </div>
+
+        {profile.metadata && (profile.metadata.imei || profile.metadata.tags?.length) && (
+          <div className="pt-3 border-t border-border grid grid-cols-2 gap-4">
+            {profile.metadata.imei && (
+              <div>
+                <p className="text-xs text-gray-400 uppercase tracking-wide font-medium mb-0.5">IMEI</p>
+                <p className="text-sm font-mono text-gray-700">{profile.metadata.imei}</p>
+              </div>
+            )}
+            {profile.metadata.tags?.length && (
+              <div>
+                <p className="text-xs text-gray-400 uppercase tracking-wide font-medium mb-1">Tags</p>
+                <div className="flex flex-wrap gap-1">
+                  {profile.metadata.tags.map(t => (
+                    <span key={t} className="px-2 py-0.5 bg-primary-light text-primary text-xs rounded-full">{t}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Card-level IPs (iccid / iccid_apn modes) */}
+      {isIccidMode && (
+        <div className="card overflow-hidden">
+          <div className="px-5 py-4 border-b border-border">
+            <h2 className="text-sm font-semibold">Card-Level IPs</h2>
+            <p className="text-xs text-gray-400 mt-0.5">
+              IPs assigned at the ICCID (card) level — shared across all IMSIs on this SIM
+            </p>
+          </div>
+          <div className="p-5">
+            <CardIpSection iccidIps={iccidIps} />
+          </div>
+        </div>
+      )}
+
+      {/* IMSI Manager */}
+      <div className="card overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+          <h2 className="text-sm font-semibold">
+            IMSIs ({imsis.length})
+            {isIccidMode && <span className="ml-1.5 text-xs font-normal text-gray-400">— IPs are at card level above</span>}
+          </h2>
+          <button onClick={() => setShowForm(v => !v)} className="btn-outline text-xs py-1.5 px-3">
+            {showForm ? 'Cancel' : '+ Add IMSI'}
+          </button>
+        </div>
+
+        {showForm && (
+          <div className="px-5 py-4 bg-primary-light border-b border-border">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="field">
+                <label className="label">IMSI (15 digits) *</label>
+                <input className="input font-mono text-xs" placeholder="278773000002005"
+                  value={newImsi.imsi} onChange={e => setNewImsi(p => ({ ...p, imsi: e.target.value }))} />
+              </div>
+              <div className="field">
+                <label className="label">Priority</label>
+                <input className="input" type="number" min="1"
+                  value={newImsi.priority} onChange={e => setNewImsi(p => ({ ...p, priority: e.target.value }))} />
+              </div>
+              {!isIccidMode && (
+                <>
+                  <div className="field">
+                    <label className="label">Static IP</label>
+                    <input className="input font-mono text-xs" placeholder="100.65.0.1"
+                      value={newImsi.static_ip} onChange={e => setNewImsi(p => ({ ...p, static_ip: e.target.value }))} />
+                  </div>
+                  <div className="field">
+                    <label className="label">Pool ID</label>
+                    <input className="input font-mono text-xs" placeholder="pool-uuid"
+                      value={newImsi.pool_id} onChange={e => setNewImsi(p => ({ ...p, pool_id: e.target.value }))} />
+                  </div>
+                </>
+              )}
+            </div>
+            <div className="flex gap-2 mt-3">
+              <button onClick={addImsi} disabled={saving || !/^\d{15}$/.test(newImsi.imsi)} className="btn-primary text-xs py-1.5 px-4">
+                {saving ? 'Saving…' : 'Add IMSI'}
+              </button>
+              <button onClick={() => setShowForm(false)} className="btn-ghost text-xs">Cancel</button>
+            </div>
+          </div>
+        )}
+
+        {imsis.length === 0 ? (
+          <div className="flex items-center justify-center h-20 text-gray-400 text-sm">No IMSIs assigned.</div>
+        ) : (
+          <table className="tbl">
+            <thead><tr>
+              <th>IMSI</th>
+              <th className="text-center w-16">Slot</th>
+              <th>Status</th>
+              {!isIccidMode && <th>{isApnMode ? 'APN → IP' : 'Static IP'}</th>}
+              <th />
+            </tr></thead>
+            <tbody>
+              {imsis.map(im => (
+                <tr key={im.imsi} className="border-b border-border hover:bg-page">
+                  <td className="px-4 py-3 font-mono text-xs">{im.imsi}</td>
+                  <td className="px-4 py-3 text-center text-sm tabular-nums text-gray-500">{im.priority}</td>
+                  <td className="px-4 py-3"><StatusBadge status={im.status} /></td>
+                  {!isIccidMode && (
+                    <td className="px-4 py-3">
+                      {isApnMode
+                        ? <ImsiApnIpsList apnIps={im.apn_ips ?? []} />
+                        : <span className="font-mono text-xs text-gray-500">{im.apn_ips?.[0]?.static_ip ?? <span className="text-gray-400 not-italic">Auto</span>}</span>
+                      }
+                    </td>
+                  )}
+                  <td className="px-4 py-3 text-right space-x-3">
+                    {im.status === 'active'
+                      ? <button onClick={() => patchImsi(im.imsi, { status: 'suspended' })} className="text-xs text-amber-600 hover:underline">Suspend</button>
+                      : <button onClick={() => patchImsi(im.imsi, { status: 'active'    })} className="text-xs text-green-600 hover:underline">Activate</button>
+                    }
+                    <button onClick={() => deleteImsi(im.imsi)} className="text-xs text-red-500 hover:underline">Remove</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── New Profile ──────────────────────────────────────────────────────────────
+function NewProfile() {
+  const navigate = useNavigate()
+  const { show } = useToasts()
+  const [pools,  setPools]  = useState<Pool[]>([])
+  const [saving, setSaving] = useState(false)
+  const [error,  setError]  = useState<string | null>(null)
+  const [form, setForm] = useState({
+    iccid: '', account_name: '', ip_resolution: 'imsi' as IpResolution,
+    imsis: [{ imsi: '', static_ip: '', pool_id: '' }], imei: '', tags: '',
+  })
+
+  useEffect(() => {
+    apiClient.get('/pools').then(r => setPools(r.data.pools ?? r.data.items ?? [])).catch(() => {})
+  }, [])
+
+  const setF = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }))
+  const addRow    = () => setForm(f => ({ ...f, imsis: [...f.imsis, { imsi: '', static_ip: '', pool_id: '' }] }))
+  const removeRow = (i: number) => setForm(f => ({ ...f, imsis: f.imsis.filter((_, x) => x !== i) }))
+  const setRow = (i: number, k: string, v: string) =>
+    setForm(f => ({ ...f, imsis: f.imsis.map((r, x) => x === i ? { ...r, [k]: v } : r) }))
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault(); setSaving(true); setError(null)
+    try {
+      const body: Record<string, unknown> = { ip_resolution: form.ip_resolution, status: 'active' }
+      if (form.iccid)        body.iccid        = form.iccid
+      if (form.account_name) body.account_name = form.account_name
+      const imsis = form.imsis.filter(r => /^\d{15}$/.test(r.imsi.trim())).map(r => ({
+        imsi:    r.imsi.trim(),
+        apn_ips: r.static_ip || r.pool_id ? [{ apn: null, static_ip: r.static_ip || null, pool_id: r.pool_id || null }] : [],
+      }))
+      if (imsis.length) body.imsis = imsis
+      const meta: Record<string, unknown> = {}
+      if (form.imei) meta.imei = form.imei
+      if (form.tags) meta.tags = form.tags.split(',').map(t => t.trim()).filter(Boolean)
+      if (Object.keys(meta).length) body.metadata = meta
+      const res = await apiClient.post('/profiles', body)
+      show('success', `Profile created: ${res.data.device_id}`)
+      navigate(`/subscribers/${res.data.device_id}`)
+    } catch (e: unknown) {
+      const d = (e as { response?: { data?: { error?: string } } })?.response?.data
+      setError(d?.error ?? String(e))
+    } finally { setSaving(false) }
+  }
+
+  const needsImsis = ['imsi', 'imsi_apn'].includes(form.ip_resolution)
+
+  return (
+    <div className="max-w-2xl space-y-4">
+      <div className="flex items-center gap-2 text-sm">
+        <button onClick={() => navigate('/subscribers')} className="text-primary hover:underline">Subscribers</button>
+        <span className="text-gray-400">/</span>
+        <span className="text-gray-600">New Profile</span>
+      </div>
+      <h1 className="page-title">New Subscriber Profile</h1>
+      {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-lg">{error}</div>}
+
+      <form onSubmit={submit} className="card p-6 space-y-5">
+        <div className="grid grid-cols-2 gap-4">
+          <div className="field">
+            <label className="label">IP Resolution *</label>
+            <select className="select" value={form.ip_resolution} onChange={e => setF('ip_resolution', e.target.value)}>
+              {IP_RESOLUTIONS.map(r => <option key={r} value={r}>{r}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label className="label">Account Name</label>
+            <input className="input" placeholder="Melita" value={form.account_name} onChange={e => setF('account_name', e.target.value)} />
+          </div>
+          <div className="field col-span-2">
+            <label className="label">ICCID (optional, 19–20 digits)</label>
+            <input className="input font-mono" placeholder="8944501012345678901" value={form.iccid} onChange={e => setF('iccid', e.target.value)} />
+          </div>
+        </div>
+
+        {needsImsis && (
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="label mb-0">IMSIs</span>
+              <button type="button" onClick={addRow} className="text-xs text-primary hover:underline">+ Add IMSI</button>
+            </div>
+            <div className="space-y-2">
+              {form.imsis.map((row, i) => (
+                <div key={i} className="grid grid-cols-3 gap-2 items-center">
+                  <input className="input font-mono text-xs" placeholder="IMSI (15 digits)"
+                    value={row.imsi} onChange={e => setRow(i, 'imsi', e.target.value)} />
+                  <input className="input text-xs" placeholder="Static IP (optional)"
+                    value={row.static_ip} onChange={e => setRow(i, 'static_ip', e.target.value)} />
+                  <div className="flex gap-1">
+                    <select className="select text-xs flex-1" value={row.pool_id} onChange={e => setRow(i, 'pool_id', e.target.value)}>
+                      <option value="">No pool</option>
+                      {pools.map(p => <option key={p.pool_id} value={p.pool_id}>{p.name}</option>)}
+                    </select>
+                    {form.imsis.length > 1 && (
+                      <button type="button" onClick={() => removeRow(i)} className="btn-icon text-red-400 text-lg leading-none">×</button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-4">
+          <div className="field">
+            <label className="label">IMEI (optional)</label>
+            <input className="input font-mono text-xs" placeholder="865914030178379" value={form.imei} onChange={e => setF('imei', e.target.value)} />
+          </div>
+          <div className="field">
+            <label className="label">Tags (comma-separated)</label>
+            <input className="input text-xs" placeholder="iot, nova-project" value={form.tags} onChange={e => setF('tags', e.target.value)} />
+          </div>
+        </div>
+
+        <div className="flex gap-3 pt-2 border-t border-border">
+          <button type="submit" disabled={saving} className="btn-primary">{saving ? 'Creating…' : 'Create Profile'}</button>
+          <button type="button" onClick={() => navigate('/subscribers')} className="btn-ghost">Cancel</button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+// ─── Bulk Import ──────────────────────────────────────────────────────────────
+function BulkImport() {
+  const navigate = useNavigate()
+  const { show } = useToasts()
+  const [file,    setFile]    = useState<File | null>(null)
+  const [preview, setPreview] = useState<string[][]>([])
+  const [headers, setHeaders] = useState<string[]>([])
+  const [error,   setError]   = useState<string | null>(null)
+  const [busy,    setBusy]    = useState(false)
+
+  const REQUIRED = ['iccid', 'account_name', 'status', 'ip_resolution']
+
+  function downloadTemplate() {
+    const csv = [
+      'device_id,iccid,account_name,status,ip_resolution,imsi,apn,static_ip,pool_id',
+      ',8944501012345678901,Melita,active,imsi,278773000002002,,100.65.120.5,pool-uuid-abc',
+    ].join('\n')
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
+    Object.assign(document.createElement('a'), { href: url, download: 'subscriber-profiles-template.csv' }).click()
+    URL.revokeObjectURL(url)
+  }
+
+  function handleFile(f: File) {
+    setFile(f); setError(null)
+    const reader = new FileReader()
+    reader.onload = ev => {
+      const lines = (ev.target?.result as string).split('\n').filter(Boolean)
+      const h = lines[0].split(',').map(c => c.trim())
+      setHeaders(h)
+      const missing = REQUIRED.filter(r => !h.includes(r))
+      if (missing.length) { setError(`Missing columns: ${missing.join(', ')}`); return }
+      setPreview(lines.slice(1, 6).map(l => l.split(',')))
+    }
+    reader.readAsText(f)
+  }
+
+  async function upload() {
+    if (!file) return; setBusy(true)
+    try {
+      const fd = new FormData(); fd.append('file', file)
+      const res = await apiClient.post('/profiles/bulk', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+      show('success', `Job started: ${res.data.job_id}`)
+      navigate('/bulk-jobs')
+    } catch (e) { setError(String(e)) } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="max-w-2xl space-y-4">
+      <div className="flex items-center gap-2 text-sm">
+        <button onClick={() => navigate('/subscribers')} className="text-primary hover:underline">Subscribers</button>
+        <span className="text-gray-400">/</span>
+        <span className="text-gray-600">Bulk Import</span>
+      </div>
+      <h1 className="page-title">Bulk Import</h1>
+
+      <div className="card p-6 space-y-6">
+        <div>
+          <p className="text-sm font-medium text-gray-700 mb-2">Step 1 — Download template</p>
+          <button onClick={downloadTemplate} className="btn-outline">↓ Download CSV Template</button>
+        </div>
+        <div>
+          <p className="text-sm font-medium text-gray-700 mb-2">Step 2 — Upload your file</p>
+          <label className="flex flex-col items-center justify-center h-32 border-2 border-dashed border-border rounded-lg bg-page cursor-pointer hover:border-primary transition-colors">
+            <span className="text-gray-500 text-sm">{file ? file.name : 'Drag & drop CSV here, or click to browse'}</span>
+            <span className="text-gray-400 text-xs mt-1">Max 100,000 rows · .csv only</span>
+            <input type="file" accept=".csv" className="hidden" onChange={e => { if (e.target.files?.[0]) handleFile(e.target.files[0]) }} />
+          </label>
+        </div>
+        {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-lg">{error}</div>}
+        {preview.length > 0 && (
+          <div>
+            <p className="text-sm font-medium text-gray-700 mb-2">Step 3 — Preview (first {preview.length} rows)</p>
+            <div className="overflow-x-auto rounded-lg border border-border">
+              <table className="text-xs w-full">
+                <thead className="bg-page border-b border-border">
+                  <tr>{headers.slice(0, 8).map(h => <th key={h} className="px-2 py-2 text-left text-gray-500 font-semibold uppercase tracking-wide">{h}</th>)}</tr>
+                </thead>
+                <tbody className="divide-y divide-border bg-white">
+                  {preview.map((row, i) => (
+                    <tr key={i}>{row.slice(0, 8).map((v, j) => <td key={j} className="px-2 py-1.5 font-mono">{v || '—'}</td>)}</tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+        <div className="flex gap-3 pt-2 border-t border-border">
+          <button onClick={() => navigate('/subscribers')} className="btn-ghost">Cancel</button>
+          <button onClick={upload} disabled={!file || !!error || busy} className="btn-primary ml-auto">
+            {busy ? 'Uploading…' : 'Upload & Import'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Router ───────────────────────────────────────────────────────────────────
 export default function Subscribers() {
   return (
-    <div>
-      <h1 className="text-2xl font-semibold mb-6">Subscribers</h1>
-      <p className="text-gray-500 text-sm">Subscriber list, search, and profile management.</p>
-    </div>
+    <Routes>
+      <Route index            element={<SubscriberList />} />
+      <Route path="new"       element={<NewProfile />} />
+      <Route path="bulk"      element={<BulkImport />} />
+      <Route path=":device_id" element={<ProfileDetail />} />
+    </Routes>
   )
 }

@@ -42,7 +42,7 @@ AAA hot path — no latency SLA applies, but it must be correct and consistent.
 | `GET` | `/profiles/{device_id}` | Get full profile by UUID | 200 full profile JSON | |
 | `GET` | `/profiles?iccid={iccid}` | Find by ICCID | 200 or 404 | |
 | `GET` | `/profiles?imsi={imsi}` | Find by IMSI | 200 or 404 | Admin/debug use |
-| `GET` | `/profiles?account_name={name}&status=active&page=1&limit=100` | Paginated list | 200 `{items[], total, page}` | Max limit=1000 |
+| `GET` | `/profiles?account_name={name}&status=active&ip_resolution={mode}&pool_id={uuid}&page=1&limit=100` | Paginated list | 200 `{items[], total, page}` | Max limit=1000; `pool_id` matches profiles with any IP from that pool |
 | `PUT` | `/profiles/{device_id}` | Replace full profile | 200 | All fields replaced; device_id immutable |
 | `PATCH` | `/profiles/{device_id}` | Partial update (JSON Merge Patch) | 200 | Used to set iccid, change status, update metadata |
 | `DELETE` | `/profiles/{device_id}` | Soft-delete | 204 | Sets status=terminated; data retained |
@@ -63,7 +63,7 @@ AAA hot path — no latency SLA applies, but it must be correct and consistent.
 |---|---|---|---|---|
 | `POST` | `/pools` | Create pool + pre-populate ip_pool_available | 201 `{pool_id}` | Synchronous pre-population |
 | `GET` | `/pools/{pool_id}` | Get pool definition | 200 | |
-| `GET` | `/pools?account_name={name}` | List pools by account | 200 | |
+| `GET` | `/pools?account_name={name}&status=active&page=1&limit=100` | List pools with filters | 200 `{items[], total, page}` | Max limit=1000 |
 | `GET` | `/pools/{pool_id}/stats` | total / allocated / available IP counts | 200 `{total, allocated, available}` | |
 | `PATCH` | `/pools/{pool_id}` | Update name or status | 200 | |
 | `DELETE` | `/pools/{pool_id}` | Delete pool | 204 or 409 | 409 if allocated > 0; check is app-layer only |
@@ -74,7 +74,7 @@ AAA hot path — no latency SLA applies, but it must be correct and consistent.
 |---|---|---|---|
 | `POST` | `/range-configs` | Create standalone IMSI range config (`iccid_range_id = NULL`) | 201 `{id}` |
 | `GET` | `/range-configs/{id}` | Get range config | 200 |
-| `GET` | `/range-configs?account_name={name}` | List by account | 200 |
+| `GET` | `/range-configs?account_name={name}&status=active&pool_id={uuid}&ip_resolution={mode}` | List with filters | 200 |
 | `PATCH` | `/range-configs/{id}` | Update pool_id, status, ip_resolution | 200 |
 | `DELETE` | `/range-configs/{id}` | Delete range config | 204 |
 
@@ -113,7 +113,7 @@ IMSI ranges for each slot on those cards.
 |---|---|---|---|---|
 | `POST` | `/iccid-range-configs` | Create ICCID range + validate `imsi_count` | 201 `{id}` | `pool_id` is **optional** — each slot may define its own pool; parent pool is fallback |
 | `GET` | `/iccid-range-configs/{id}` | Get ICCID range + all child IMSI ranges | 200 | Nested response includes `imsi_ranges[]` |
-| `GET` | `/iccid-range-configs?account_name={name}` | List by account | 200 | |
+| `GET` | `/iccid-range-configs?account_name={name}&status=active&pool_id={uuid}&ip_resolution={mode}` | List with filters | 200 | |
 | `PATCH` | `/iccid-range-configs/{id}` | Update description, status, pool_id | 200 | Cannot change f_iccid/t_iccid after creation |
 | `DELETE` | `/iccid-range-configs/{id}` | Delete ICCID range + cascade deletes child IMSI ranges | 204 | |
 | `POST` | `/iccid-range-configs/{id}/imsi-slots` | Add a child IMSI range (one slot) | 201 `{range_config_id}` | Slot `pool_id` overrides parent; validates cardinality equality |

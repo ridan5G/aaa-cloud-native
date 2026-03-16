@@ -6,10 +6,255 @@ A browser-based management UI for operators to manage subscriber profiles,
 IP pools, IMSI range configs, and bulk imports. It talks exclusively to
 the `subscriber-profile-api` REST endpoints — no direct DB access.
 
-**Technology:** React + TypeScript + Tailwind CSS
+**Technology:** React + TypeScript + Tailwind CSS (custom theme)
 **Deployment:** Static build served via Nginx or CDN, same domain as API
 **Auth:** OAuth 2.0 / OIDC login (SSO); JWT stored in memory (not localStorage)
 **Target users:** Telecoms operators and platform administrators
+
+---
+
+## Visual Design System
+
+### Design Principles
+
+- **Operator-grade density:** data tables are primary UI elements; prioritise information per viewport over whitespace
+- **Amber-on-navy identity:** dark sidebar with a warm amber accent — professional, readable in low-light NOC environments
+- **Status at a glance:** every entity (SIM, pool, job) has a colour-coded status dot or badge, never colour-only
+- **Progressive disclosure:** summary list → detail page → inline action form — no full-page redirects for routine edits
+
+---
+
+### Colour Tokens
+
+```css
+/* === Primary Palette === */
+--color-primary:        #F5A623;   /* amber — buttons, active nav, progress bars */
+--color-primary-hover:  #E09518;   /* darker amber on hover */
+--color-primary-light:  #FEF3DC;   /* tinted amber — selected row, highlight bg */
+
+/* === Sidebar === */
+--color-sidebar-bg:     #1C2340;   /* deep navy */
+--color-sidebar-active: #F5A623;   /* amber bg for active nav item */
+--color-sidebar-text:   #FFFFFF;   /* white labels */
+--color-sidebar-muted:  #8892B0;   /* inactive / secondary nav text */
+--color-sidebar-hover:  #252D4A;   /* subtle hover row in sidebar */
+
+/* === Top Bar === */
+--color-topbar-accent:  #F5A623;   /* 3px top border strip across the full viewport */
+--color-topbar-bg:      #FFFFFF;
+
+/* === Content Area === */
+--color-bg-page:        #F4F6F9;   /* very light grey page background */
+--color-bg-card:        #FFFFFF;   /* card / panel background */
+--color-bg-row-hover:   #F8F9FC;   /* table row hover */
+--color-border:         #E2E8F0;   /* dividers, table borders */
+
+/* === Typography === */
+--color-text-primary:   #1A202C;   /* headings, table values */
+--color-text-secondary: #718096;   /* labels, captions, breadcrumbs */
+--color-text-disabled:  #A0AEC0;
+
+/* === Semantic Status === */
+--color-status-active:       #38A169;   /* green */
+--color-status-inactive:     #A0AEC0;   /* grey */
+--color-status-suspended:    #F5A623;   /* amber */
+--color-status-terminated:   #E53E3E;   /* red */
+--color-status-running:      #3182CE;   /* blue — bulk job in progress */
+--color-status-queued:       #A0AEC0;   /* grey */
+--color-status-completed:    #38A169;   /* green */
+--color-status-failed:       #E53E3E;   /* red */
+```
+
+---
+
+### Typography
+
+```css
+/* Font stack — no custom font download required; system sans-serif */
+--font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+--font-size-xs:   11px;   /* table sub-labels, timestamps */
+--font-size-sm:   13px;   /* table body, form labels */
+--font-size-base: 14px;   /* default body */
+--font-size-md:   16px;   /* section headings */
+--font-size-lg:   20px;   /* page titles */
+--font-size-xl:   28px;   /* stat card numbers */
+
+--font-weight-normal:    400;
+--font-weight-medium:    500;
+--font-weight-semibold:  600;
+--font-weight-bold:      700;
+
+/* Table column headers: uppercase, letter-spacing, --color-text-secondary */
+.table-header { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
+```
+
+---
+
+### Layout Shell
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ ████████████████ amber top bar strip (3px)  ████████████████████████ │
+├──────────┬───────────────────────────────────────────────────────────┤
+│          │ [Search SIM ...]           🔔  ?  [ Avatar ▾ ]            │
+│  Sidebar │───────────────────────────────────────────────────────────│
+│  192px   │ Breadcrumb > Path                                         │
+│  navy bg │                                                           │
+│          │  Page Title                                   [Action Btn]│
+│ ─────── │                                                           │
+│ ● Dashboard     │  Content area (white cards on light-grey page bg)  │
+│   SIMs          │                                                     │
+│   IP Pools      │                                                     │
+│   Range Configs ▸│                                                   │
+│   ICCID Ranges  │                                                     │
+│   Bulk Jobs     │                                                     │
+│                 │                                                     │
+│  [≡ collapse]   │                                                     │
+└──────────┴───────────────────────────────────────────────────────────┘
+```
+
+**Sidebar details:**
+- Width: 192px expanded, 56px icon-only collapsed (hamburger toggle top-left)
+- Active nav item: amber background `--color-sidebar-active`, white text, rounded-r-md pill
+- Sub-menu items indented 16px, revealed on parent click (accordion)
+- Bottom: user avatar + name + account badge (collapsible with sidebar)
+
+**Top bar:**
+- 3px amber strip across full viewport top
+- Height 56px; white background
+- Left: logo mark (32×32 SVG — no brand wordmark, just a geometric icon)
+- Centre: global SIM/ICCID search input (magnifier icon, placeholder "Search SIM or ICCID…")
+- Right: notification bell badge, help icon, user avatar dropdown
+
+---
+
+### Component Patterns
+
+#### Stat Card (Dashboard)
+```
+┌────────────────────────────────┐
+│  Active SIMs            [icon] │
+│                                │
+│  12,329,921                    │
+│  ── ── ── ── ── ── ── ── ──    │
+│  ▲ 1.4% vs yesterday           │
+└────────────────────────────────┘
+```
+- White card, 8px border-radius, subtle box-shadow
+- Icon: 40px circle, amber bg at 15% opacity, amber icon inside
+- Number: `--font-size-xl`, `--font-weight-bold`
+- Trend: green (up) or red (down) with tiny arrow
+
+#### Data Table
+- Header row: `--color-bg-page` background, uppercase labels
+- Body rows: white, 44px height, `1px solid --color-border` bottom
+- Hover: `--color-bg-row-hover`
+- Selected (checkbox): `--color-primary-light` background tint
+- Pagination: bottom-right, "Rows per page" select + `1–50 of N` counter + prev/next arrows
+- Column visibility toggle: icon button top-right of table (grid icon)
+- Export button: outlined amber button, top-right of list pages
+
+#### Status Badge
+```
+● Active      — green dot + "Active" text
+● Suspended   — amber dot + "Suspended" text
+● Terminated  — red dot + "Terminated" text
+● Running     — pulsing blue dot + "Running" text (CSS animation)
+```
+Badge is a `<span>` with dot + text; never colour-only.
+
+#### Primary Button
+```
+[  + New Profile  ]
+```
+- Background: `--color-primary` (#F5A623)
+- Text: white, semibold, 14px
+- Border-radius: 6px
+- Hover: `--color-primary-hover`
+- Destructive variant: red background (`#E53E3E`)
+- Outlined variant: amber border + amber text, transparent bg (for secondary actions)
+
+#### Inline Form (add row in detail page)
+- Appears as a highlighted row at the top of the sub-table
+- Inputs: 36px height, 1px border, 4px radius, focus ring amber
+- Save: small amber button; Cancel: text link
+
+#### Modal / Drawer
+- Backdrop: `rgba(0,0,0,0.4)`
+- Modal max-width 560px, centered, 12px radius
+- Drawer: slides from right, 480px wide (for job detail / error list)
+- Header: title + ✕ close button
+- Footer: [Cancel] text link + [Save / Submit] amber button, right-aligned
+
+#### Toast Notifications
+- Position: bottom-right, stacked
+- Success: green left-border + check icon
+- Error: red left-border + ✕ icon
+- Info: amber left-border + ℹ icon
+- Auto-dismiss: 5s; manual dismiss ✕
+
+#### Progress Bar (pool utilisation, bulk job)
+- Track: `--color-border`
+- Fill: amber (0–75%), orange-red (`#E07B39`) (75–90%), red (>90%)
+- Shows `used / total` label at right end
+
+---
+
+### Login Page Layout
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│               │                                                      │
+│  Login form   │   Full-height illustration panel (navy bg)           │
+│  (left 42%)   │   Geometric network/globe SVG                        │
+│               │   Tagline: "One Platform · Multiple Services"        │
+│  Logo mark    │   (right 58%)                                        │
+│  Email input  │                                                      │
+│  Password     │                                                      │
+│  [Sign In]    │                                                      │
+│               │                                                      │
+└───────────────┴──────────────────────────────────────────────────────┘
+```
+- Left panel: white, vertically centred form, logo mark above inputs
+- Right panel: `--color-sidebar-bg` (#1C2340), decorative SVG illustration (no brand imagery)
+- Sign In button: full-width amber, 48px height
+
+---
+
+### Tailwind Theme Extension
+
+```javascript
+// tailwind.config.js
+module.exports = {
+  theme: {
+    extend: {
+      colors: {
+        primary: { DEFAULT: '#F5A623', hover: '#E09518', light: '#FEF3DC' },
+        sidebar: { bg: '#1C2340', active: '#F5A623', text: '#FFFFFF', muted: '#8892B0' },
+        status: {
+          active:     '#38A169',
+          suspended:  '#F5A623',
+          terminated: '#E53E3E',
+          running:    '#3182CE',
+          inactive:   '#A0AEC0',
+        },
+        border: '#E2E8F0',
+        page:   '#F4F6F9',
+      },
+      fontFamily: {
+        sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
+      },
+      borderRadius: {
+        card: '8px',
+      },
+      boxShadow: {
+        card: '0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04)',
+      },
+    },
+  },
+};
+```
 
 ---
 
@@ -22,7 +267,7 @@ Login
         │     ├── List / Search
         │     ├── Profile Detail
         │     │     ├── Edit Profile
-        │     │     └── IMSI Manager (add / remove / suspend)
+        │     │     └── IMSI Manager (add / remove / suspend / set priority)
         │     ├── New Profile (form)
         │     └── Bulk Import (CSV upload)
         ├── IP Pools
@@ -31,8 +276,16 @@ Login
         │     └── New Pool (form)
         ├── IMSI Range Configs
         │     ├── Range Config List
+        │     ├── Range Config Detail
+        │     │     └── APN Pool Manager (inline: add / remove APN→Pool overrides)
         │     ├── New Range Config (form)
         │     └── Edit Range Config
+        ├── ICCID Range Configs (Multi-IMSI SIM)
+        │     ├── ICCID Range Config List
+        │     ├── ICCID Range Config Detail
+        │     │     └── IMSI Slot Manager (inline: add / edit / remove slots)
+        │     ├── New ICCID Range Config (form)
+        │     └── Edit ICCID Range Config
         └── Bulk Jobs
               └── Job List + Status / Progress
 ```
@@ -49,7 +302,7 @@ Login
 - Active SIM count (GET /profiles?status=active count)
 - Pool utilization summary (per pool: used / total as progress bar)
 - Recent bulk jobs (last 5, with status badges)
-- Quick links: New Profile, Bulk Import, New Pool
+- Quick links: New Profile, Bulk Import, New Pool, New ICCID Range Config
 
 ---
 
@@ -88,11 +341,11 @@ Login
 │ Created: 2026-01-15  Updated: 2026-02-26   │
 ├─────────────────────────────────────────────┤
 │ IMSIs                                        │
-│ ┌───────────────────────────────────────┐   │
-│ │ IMSI          │ Status  │ Static IP   │   │
-│ │ 2787730000... │ Active  │ 100.65.120.5│   │
-│ │ 2787730000... │ Suspend │ 101.65.120.5│   │
-│ └───────────────────────────────────────┘   │
+│ ┌─────────────────────────────────────────────────────┐   │
+│ │ IMSI          │ Priority │ Status  │ Static IP    │   │
+│ │ 2787730000... │ 1        │ Active  │ 100.65.120.5 │   │
+│ │ 2787730000... │ 2        │ Suspend │ 101.65.120.5 │   │
+│ └─────────────────────────────────────────────────────┘   │
 │ [+ Add IMSI]                                │
 ├─────────────────────────────────────────────┤
 │ Metadata                                     │
@@ -105,7 +358,9 @@ Login
 - Suspend / Reactivate / Terminate the SIM
 - Set/update ICCID (PATCH with `{iccid: "..."}`)
 - Open Edit Profile (full form)
-- Add / remove / suspend individual IMSIs (inline, no page navigation)
+- Add IMSI: inline form with IMSI (15 digits), Priority (integer ≥ 1), APN/IP rows → POST `/profiles/{device_id}/imsis`
+- Suspend / Reactivate / Remove individual IMSIs → PATCH or DELETE `/profiles/{device_id}/imsis/{imsi}`
+- Edit IMSI priority inline → PATCH `/profiles/{device_id}/imsis/{imsi}` with `{priority: N}`
 
 ---
 
@@ -261,20 +516,93 @@ On POST /pools success, show a toast: "Pool created. 253 IPs are now available."
 
 ### 8. IMSI Range Configs
 
-**Range Config List:** Table. Columns: ID, Account, f_imsi, t_imsi, Pool Name, ip_resolution, Status, Actions.
+**Range Config List:** Table. Columns: ID, Account, f_imsi, t_imsi, Pool Name, ip_resolution, APN Overrides count, Status, Actions (View / Edit / Delete).
+
+**Range Config Detail:**
+- Header: ID, Account, f_imsi → t_imsi, Pool Name, ip_resolution, Status
+- **APN Pool Manager** (inline table — only shown when ip_resolution is `imsi_apn` or `iccid_apn`):
+  ```
+  ┌──────────────────────────────────────────────────────┐
+  │ APN → Pool Overrides              [+ Add Override]   │
+  │ ┌──────────────────────────────────────────────────┐ │
+  │ │ APN                    │ Pool Name   │ Actions   │ │
+  │ │ internet.operator.com  │ Pool-A      │ [Delete]  │ │
+  │ │ ims.operator.com       │ Pool-B      │ [Delete]  │ │
+  │ └──────────────────────────────────────────────────┘ │
+  └──────────────────────────────────────────────────────┘
+  ```
+  - **Add Override:** inline form with APN text field + Pool select → POST `/range-configs/{id}/apn-pools`
+  - **Delete:** confirmation popover → DELETE `/range-configs/{id}/apn-pools/{apn}`
+  - When ip_resolution is `imsi` or `iccid`, the APN Pool Manager section is hidden with a note:
+    "APN overrides apply only when ip_resolution is imsi_apn or iccid_apn."
+- [Edit Range Config] / [Delete Range Config] buttons
 
 **New / Edit Range Config Form:**
 - Account Name (optional)
 - From IMSI (15 digits, validated)
 - To IMSI (15 digits, validated; must be ≥ From IMSI)
-- Pool (select from pools for this account)
-- ip_resolution (select, default=imsi)
+- Pool (select from pools for this account; optional — can be null if slots define their own pools)
+- ip_resolution (select: imsi / imsi_apn / iccid / iccid_apn; default=imsi)
 - Description (optional)
 - Status (active / suspended)
 
 ---
 
-### 9. Bulk Jobs
+### 9. ICCID Range Configs (Multi-IMSI SIM)
+
+**Purpose:** Manage batches of physical SIM cards that carry multiple IMSIs. Each ICCID Range Config
+is a parent that owns one or more IMSI Slot ranges, one per IMSI slot on the card.
+
+**ICCID Range Config List:** Table. Columns: ID, Account, f_iccid → t_iccid, Pool (fallback), ip_resolution, IMSI count, Slot count, Status, Actions (View / Edit / Delete).
+
+**ICCID Range Config Detail:**
+```
+┌──────────────────────────────────────────────────────────┐
+│ ICCID Range Config #1                                     │
+│ Account: Melita                                           │
+│ ICCID range: 8944501010000000000 → 8944501010000999999   │
+│ Fallback Pool: Pool-A   ip_resolution: imsi   IMSIs: 2   │
+│ Status: ● Active    [Edit] [Delete]                       │
+├──────────────────────────────────────────────────────────┤
+│ IMSI Slots                            [+ Add Slot]        │
+│ ┌──────────────────────────────────────────────────────┐  │
+│ │ Slot │ f_imsi          │ t_imsi          │ Pool  │ ✓ │  │
+│ │ 1    │ 278770000000000 │ 278770000999999 │Pool-A │ ✓ │  │
+│ │ 2    │ 278771000000000 │ 278771000999999 │Pool-B │ ✓ │  │
+│ └──────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────┘
+```
+- **✓ column:** cardinality check — green tick if `t_imsi - f_imsi = t_iccid - f_iccid`, red warning otherwise.
+- **Add Slot:** opens inline form (see below).
+- **Edit Slot:** inline row editing.
+- **Delete Slot:** only allowed when no profiles are allocated from this slot; otherwise shows tooltip "Profiles allocated from this slot — cannot delete".
+
+**New / Edit ICCID Range Config Form:**
+- Account Name (optional)
+- From ICCID (19–20 digits, validated)
+- To ICCID (19–20 digits, validated; must be ≥ From ICCID)
+- Fallback Pool (select; optional — may be null if each slot defines its own)
+- ip_resolution (select: imsi / imsi_apn / iccid / iccid_apn; default=imsi)
+- IMSI Count (number 1–10)
+- Description (optional)
+
+**Add / Edit IMSI Slot form (inline in Detail):**
+- Slot number (read-only on edit; auto-filled next available on add)
+- From IMSI (15 digits, validated)
+- To IMSI (15 digits, validated; must be ≥ From IMSI)
+- Slot Pool (select; optional — overrides parent fallback pool)
+- ip_resolution: read-only, inherited from parent (shown informational)
+- Description (optional)
+- Cardinality check shown live as user types: "Cardinality: 1,000,000 ✓ matches ICCID range" or "⚠ mismatch"
+
+**Conflict display on save:**
+- Cardinality mismatch → inline error: "IMSI range has 100,000 entries; ICCID range has 1,000,000. They must match."
+- Duplicate slot number → "Slot 2 already exists on this ICCID range."
+- ip_resolution mismatch → "Slot ip_resolution must match parent (imsi)."
+
+---
+
+### 10. Bulk Jobs
 
 **Job List:** Polling table (auto-refreshes every 5s while any job has status=running).
 Columns: Job ID, Submitted, Status badge, Processed, Failed, Duration, Actions.

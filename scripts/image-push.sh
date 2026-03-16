@@ -10,8 +10,8 @@ SERVICES=(
   "aaa-lookup-service"
   "subscriber-profile-api"
   "aaa-management-ui"
+  "aaa-radius-server"
   "aaa-regression-tester"
-  "aaa-migration"
 )
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

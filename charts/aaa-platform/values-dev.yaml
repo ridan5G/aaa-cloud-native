@@ -42,8 +42,6 @@ aaa-database:
   pgbouncer:
     rw:
       enabled: true
-    ro:
-      enabled: false          # no read replicas in single-instance dev
       instances: 1
       parameters:
         max_client_conn: "100"
@@ -57,19 +55,7 @@ aaa-database:
           cpu: "200m"
           memory: "64Mi"
     ro:
-      enabled: true
-      instances: 1
-      parameters:
-        max_client_conn: "100"
-        default_pool_size: "10"
-        reserve_pool_size: "5"
-      resources:
-        requests:
-          cpu: "50m"
-          memory: "32Mi"
-        limits:
-          cpu: "200m"
-          memory: "64Mi"
+      enabled: false          # single-instance dev — no read replicas
 
 # ── AAA Lookup Service ────────────────────────────────────────────
 aaa-lookup-service:
@@ -99,12 +85,18 @@ aaa-lookup-service:
 
 # ── Provisioning API ─────────────────────────────────────────────
 subscriber-profile-api:
-  enabled: false
+  enabled: true
   replicaCount: 1
   image:
-    repository: ""       # SET THIS: e.g. myregistry.io/aaa/subscriber-profile-api
+    repository: aaa/subscriber-profile-api
     tag: "dev"
-    pullPolicy: Always
+    pullPolicy: Never
+  ingress:
+    enabled: true
+    className: nginx
+    host: provisioning.aaa.localhost
+    tls:
+      enabled: false
   db:
     secretName: aaa-db-credentials
   jwt:
@@ -154,6 +146,29 @@ aaa-management-ui:
       memory: "64Mi"
     limits:
       cpu: "200m"
+      memory: "128Mi"
+
+# ── RADIUS Server ────────────────────────────────────────────────
+aaa-radius-server:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: aaa/aaa-radius-server
+    tag: "dev"
+    pullPolicy: Never
+  radiusSecret:
+    value: "testing123"   # dev only — override with secretRef in production
+  lookupUrl: "http://aaa-platform-aaa-lookup-service:8081"
+  provisioningUrl: "http://aaa-platform-subscriber-profile-api:8080"
+  workerThreads: 4
+  autoscaling:
+    enabled: false
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "64Mi"
+    limits:
+      cpu: "300m"
       memory: "128Mi"
 
 # ── Prometheus + Grafana (kube-prometheus-stack) ──────────────────
@@ -206,7 +221,7 @@ kube-prometheus-stack:
       storageSpec:
         volumeClaimTemplate:
           spec:
-            storageClassName: local-path
+            storageClassName: hostpath
             resources:
               requests:
                 storage: 5Gi

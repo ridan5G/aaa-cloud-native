@@ -13,6 +13,8 @@ k3d cluster create ${CLUSTER_NAME} \
   --port "80:80@loadbalancer" \
   --port "443:443@loadbalancer" \
   --port "9090:9090@loadbalancer" \
+  --port "9091:9091@loadbalancer" \
+  --port "1812:1812/udp@loadbalancer" \
   --registry-use k3d-aaa-registry.localhost:${REGISTRY_PORT} \
   --agents 2 \
   --k3s-arg "--disable=traefik@server:*" \

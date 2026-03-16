@@ -33,6 +33,12 @@ dependencies:
     repository: "file://../aaa-management-ui"
     condition: aaa-management-ui.enabled
 
+  # ── RADIUS server ─────────────────────────────────────────────
+  - name: aaa-radius-server
+    version: "1.0.0"
+    repository: "file://../aaa-radius-server"
+    condition: aaa-radius-server.enabled
+
   # ── Observability stack ──────────────────────────────────────
   - name: kube-prometheus-stack
     version: "55.x.x"

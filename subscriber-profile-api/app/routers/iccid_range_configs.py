@@ -128,25 +128,44 @@ async def get_iccid_range_config(config_id: int, conn=Depends(get_conn)):
 
 
 @router.get("/iccid-range-configs", dependencies=[Depends(require_auth)])
-async def list_iccid_range_configs(account_name: Optional[str] = None, conn=Depends(get_conn)):
+async def list_iccid_range_configs(
+    account_name: Optional[str] = None,
+    status: Optional[str] = None,
+    pool_id: Optional[str] = None,
+    ip_resolution: Optional[str] = None,
+    conn=Depends(get_conn),
+):
+    conditions = []
+    params = []
+    idx = 1
+
     if account_name:
-        rows = await conn.fetch(
-            """
-            SELECT id, account_name, f_iccid, t_iccid, pool_id::text,
-                   ip_resolution, imsi_count, description, status
-            FROM iccid_range_configs WHERE account_name = $1
-            ORDER BY id
-            """,
-            account_name,
-        )
-    else:
-        rows = await conn.fetch(
-            """
-            SELECT id, account_name, f_iccid, t_iccid, pool_id::text,
-                   ip_resolution, imsi_count, description, status
-            FROM iccid_range_configs ORDER BY id
-            """
-        )
+        conditions.append(f"account_name = ${idx}")
+        params.append(account_name)
+        idx += 1
+    if status:
+        conditions.append(f"status = ${idx}")
+        params.append(status)
+        idx += 1
+    if pool_id:
+        conditions.append(f"pool_id = ${idx}::uuid")
+        params.append(pool_id)
+        idx += 1
+    if ip_resolution:
+        conditions.append(f"ip_resolution = ${idx}")
+        params.append(ip_resolution)
+        idx += 1
+
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    rows = await conn.fetch(
+        f"""
+        SELECT id, account_name, f_iccid, t_iccid, pool_id::text,
+               ip_resolution, imsi_count, description, status
+        FROM iccid_range_configs {where}
+        ORDER BY id
+        """,
+        *params,
+    )
     return {"items": [dict(r) for r in rows]}
 
 

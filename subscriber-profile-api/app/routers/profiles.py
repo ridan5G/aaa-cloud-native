@@ -258,6 +258,8 @@ async def list_profiles(
     imsi: Optional[str] = None,
     account_name: Optional[str] = None,
     status: Optional[str] = None,
+    ip_resolution: Optional[str] = None,
+    pool_id: Optional[str] = None,
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=100, ge=1, le=1000),
     conn=Depends(get_conn),
@@ -286,10 +288,25 @@ async def list_profiles(
         result = await _build_profile_response(row["device_id"], conn)
         return [result]
 
-    # Paginated list
+    # Paginated list with optional filters
     filters = []
     params = []
     idx = 1
+
+    if pool_id:
+        filters.append(
+            f"device_id IN ("
+            f"SELECT si.device_id FROM imsi2device si "
+            f"JOIN imsi_apn_ips iai ON iai.imsi = si.imsi "
+            f"WHERE iai.pool_id = ${idx}::uuid "
+            f"UNION "
+            f"SELECT device_id FROM device_apn_ips "
+            f"WHERE pool_id = ${idx}::uuid"
+            f")"
+        )
+        params.append(pool_id)
+        idx += 1
+
     if account_name:
         filters.append(f"account_name = ${idx}")
         params.append(account_name)
@@ -297,6 +314,10 @@ async def list_profiles(
     if status:
         filters.append(f"status = ${idx}")
         params.append(status)
+        idx += 1
+    if ip_resolution:
+        filters.append(f"ip_resolution = ${idx}")
+        params.append(ip_resolution)
         idx += 1
 
     where = f"WHERE {' AND '.join(filters)}" if filters else ""
