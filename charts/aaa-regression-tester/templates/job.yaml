@@ -22,8 +22,17 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           # Default CMD in the Dockerfile runs run_all.sh (full suite).
-          # Override args here to run a subset, e.g.:
-          #   args: ["pytest", "test_01_pools.py", "-v"]
+          # When pcap is enabled the command is wrapped to write a sentinel
+          # file (/captures/done) so the tcpdump sidecar can exit cleanly.
+          {{- if .Values.pcap.enabled }}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              bash /app/run_all.sh
+              RC=$?
+              touch /captures/done
+              exit $RC
+          {{- end }}
           env:
             - name: PROVISION_URL
               value: {{ .Values.env.PROVISION_URL | quote }}
@@ -52,8 +61,51 @@ spec:
           volumeMounts:
             - name: results
               mountPath: /app/results
+            {{- if .Values.pcap.enabled }}
+            - name: captures
+              mountPath: /captures
+            {{- end }}
+
+        {{- if .Values.pcap.enabled }}
+        # ── tcpdump sidecar ────────────────────────────────────────────────────
+        # Captures all pod network traffic to /captures/test.pcap.
+        # Exits cleanly once the regression-tester container touches /captures/done.
+        # Retrieve the file after the Job with: make pcap-get
+        - name: tcpdump
+          image: {{ .Values.pcap.image | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsUser: 0
+            capabilities:
+              add: ["NET_RAW", "NET_ADMIN"]
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "[pcap] Starting capture on all interfaces..."
+              tcpdump -i any -n -s 0 -w /captures/test.pcap {{ .Values.pcap.filter }} &
+              TCPDUMP_PID=$!
+              echo "[pcap] tcpdump PID=${TCPDUMP_PID} — waiting for tests to finish..."
+              until [ -f /captures/done ]; do sleep 2; done
+              echo "[pcap] Sentinel detected — flushing and stopping capture..."
+              kill -SIGTERM "${TCPDUMP_PID}"
+              wait "${TCPDUMP_PID}" 2>/dev/null || true
+              FSIZE=$(du -sh /captures/test.pcap 2>/dev/null | cut -f1)
+              echo "[pcap] Saved /captures/test.pcap (${FSIZE:-unknown size})"
+              echo "[pcap] Retrieve with: kubectl cp <namespace>/<pod>:/captures/test.pcap ./test.pcap"
+          volumeMounts:
+            - name: captures
+              mountPath: /captures
+        {{- end }}
+
       volumes:
         # JUnit XML and timing CSV are written here.
         # Retrieve with: kubectl cp <pod>:/app/results ./results -n <namespace>
         - name: results
           emptyDir: {}
+        {{- if .Values.pcap.enabled }}
+        # Backed by a PVC so the file survives pod completion and can be
+        # retrieved with: make pcap-get  (kubectl cp from a helper pod)
+        - name: captures
+          persistentVolumeClaim:
+            claimName: {{ include "aaa-regression-tester.fullname" . }}-pcap
+        {{- end }}

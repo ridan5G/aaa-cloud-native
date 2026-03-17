@@ -34,6 +34,13 @@ jwt:
   secretName: ""
   algorithm: "RS256"  # RS256 | HS256 — must match the signing algorithm of the token issuer
 
+# ── CORS ────────────────────────────────────────────────────────
+# Comma-separated allowed origins for browser cross-origin requests.
+# Leave empty when the UI nginx proxy routes /v1/ internally (no CORS needed).
+# Set explicitly when direct browser → API access is required (e.g., dev).
+cors:
+  origins: ""
+
 # ── Bulk job settings ───────────────────────────────────────────
 bulkJob:
   workerThreads: 4

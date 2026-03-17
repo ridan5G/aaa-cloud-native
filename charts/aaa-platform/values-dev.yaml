@@ -99,6 +99,8 @@ subscriber-profile-api:
       enabled: false
   db:
     secretName: aaa-db-credentials
+  cors:
+    origins: "http://ui.aaa.localhost"   # allow direct browser→API in dev (e.g. Swagger UI, Postman)
   jwt:
     skipVerify: "true"
   bulkJob:
@@ -133,7 +135,7 @@ aaa-management-ui:
     tls:
       enabled: false
   appConfig:
-    apiBaseUrl: "http://provisioning.aaa.localhost/v1"
+    apiBaseUrl: "/v1"   # relative → same-origin; UI nginx proxies /v1/ to the API ClusterIP
     oidcAuthority: "http://auth.aaa.localhost/realms/aaa"
     oidcClientId: "aaa-management-ui"
   apiServiceName: "aaa-platform-subscriber-profile-api"

@@ -76,6 +76,46 @@ class TestRadiusServer:
     fc_allocated_ip: str | None = None   # filled by test_06
 
     @classmethod
+    def _cleanup_previous_run(cls, c: httpx.Client) -> None:
+        """Remove any artifacts left by a previous interrupted test run.
+
+        Deletion order: profiles → range_configs → pools (FK safe).
+        All errors are swallowed so a dirty DB never blocks setup.
+        """
+        # 1. Delete leftover profiles for our IMSIs
+        for imsi in (IMSI_KNOWN, IMSI_FC_NEW):
+            try:
+                r = c.get("/profiles", params={"imsi": imsi})
+                if r.status_code == 200:
+                    data = r.json()
+                    items = data if isinstance(data, list) else data.get("profiles", data.get("items", []))
+                    for p in items:
+                        c.delete(f"/profiles/{p['device_id']}")
+            except Exception:
+                pass
+
+        # 2. Delete leftover range_configs covering our IMSI range
+        try:
+            r = c.get("/range-configs")
+            if r.status_code == 200:
+                for item in r.json().get("items", []):
+                    if item.get("f_imsi") == IMSI_FC_F and item.get("t_imsi") == IMSI_FC_T:
+                        c.delete(f"/range-configs/{item['id']}")
+        except Exception:
+            pass
+
+        # 3. Delete leftover pools with our fixed names
+        _OUR_POOLS = {"pool-radius-known-12", "pool-radius-fc-12"}
+        try:
+            r = c.get("/pools")
+            if r.status_code == 200:
+                for pool in r.json().get("items", []):
+                    if pool.get("pool_name") in _OUR_POOLS:
+                        c.delete(f"/pools/{pool['pool_id']}")
+        except Exception:
+            pass
+
+    @classmethod
     def setup_class(cls):
         """Create fixtures via the provisioning HTTP API before RADIUS tests run."""
         if not _radius_available(RADIUS_HOST, RADIUS_PORT, RADIUS_SECRET):
@@ -89,6 +129,7 @@ class TestRadiusServer:
             headers={"Authorization": f"Bearer {JWT_TOKEN}"},
             timeout=30.0,
         ) as c:
+            cls._cleanup_previous_run(c)
             # ── Pool A + pre-provisioned profile (for tests 12.2–12.5) ────────
             pool_a = create_pool(
                 c,

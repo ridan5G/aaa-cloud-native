@@ -87,17 +87,24 @@ function IccidDiagram() {
     <div className="flex flex-col items-center py-2 select-none">
       <Node color="navy" label="SIM Card" sub="ICCID-level" wide />
       <VLine />
-      <div className="flex gap-3">
-        <Node color="blue" label="IMSI-1" sub="278…001" />
-        <Node color="blue" label="IMSI-2" sub="278…002" />
-        <Node color="blue" label="IMSI-3" sub="278…003" />
-      </div>
-      {/* Converge to single IP */}
-      <div className="flex items-center gap-0.5 mt-0">
-        <div className="w-px h-3 bg-gray-300" />
-      </div>
-      <VLine />
+      {/* Shared IP is at the card (ICCID) level — connected directly to SIM Card */}
       <Node color="green" label="Shared IP" sub="100.65.0.1" wide />
+      <VLine />
+      {/* All IMSIs on the card branch down from the shared IP */}
+      <div className="flex gap-3">
+        <div className="flex flex-col items-center gap-0">
+          <div className="w-px h-3 bg-gray-300" />
+          <Node color="blue" label="IMSI-1" sub="278…001" />
+        </div>
+        <div className="flex flex-col items-center gap-0">
+          <div className="w-px h-3 bg-gray-300" />
+          <Node color="blue" label="IMSI-2" sub="278…002" />
+        </div>
+        <div className="flex flex-col items-center gap-0">
+          <div className="w-px h-3 bg-gray-300" />
+          <Node color="blue" label="IMSI-3" sub="278…003" />
+        </div>
+      </div>
       <div className="mt-1.5 text-[10px] text-gray-400 italic">All IMSIs on the card share one IP</div>
     </div>
   )
@@ -109,22 +116,20 @@ function IccidApnDiagram() {
     <div className="flex flex-col items-center py-2 select-none">
       <Node color="navy" label="SIM Card" sub="ICCID-level" wide />
       <VLine />
-      <div className="flex gap-3">
-        <Node color="blue" label="IMSI-1" sub="278…001" />
-        <Node color="blue" label="IMSI-2" sub="278…002" />
-      </div>
-      <VLine />
+      {/* APNs connect directly to SIM Card (not through individual IMSIs) */}
       <div className="flex gap-3">
         <div className="flex flex-col items-center gap-0">
           <div className="w-px h-3 bg-gray-300" />
           <Node color="amber" label="APN-A" sub="internet" />
           <VLine />
+          {/* IP remains connected to the APN */}
           <Node color="green" label="Shared IP" sub="100.65.0.1" wide />
         </div>
         <div className="flex flex-col items-center gap-0">
           <div className="w-px h-3 bg-gray-300" />
           <Node color="amber" label="APN-B" sub="ims" />
           <VLine />
+          {/* IP remains connected to the APN */}
           <Node color="green" label="Shared IP" sub="100.65.0.2" wide />
         </div>
       </div>

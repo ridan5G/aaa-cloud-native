@@ -42,6 +42,22 @@ resources:
     cpu: "1"
     memory: "512Mi"
 
+# ── Packet capture (dev/debug) ──────────────────────────────────
+# Enable with:  make test PCAP=true
+#
+# When enabled a tcpdump sidecar is added to the test pod. It captures all
+# traffic on every interface for the lifetime of the test run and writes
+# /captures/test.pcap (shared emptyDir). Retrieve with: make pcap-get
+pcap:
+  enabled: false
+  # Any image with tcpdump + /bin/sh works; corfr/tcpdump is Alpine-based (~6 MB).
+  image: "corfr/tcpdump"
+  # BPF filter passed verbatim to tcpdump.  Leave empty to capture everything.
+  # Example: "port 8080 or port 8081 or udp port 1812"
+  filter: ""
+  # PVC size for the capture file.  A full test run is typically 5–50 MB.
+  storageSize: "512Mi"
+
 # ── Helm name overrides ─────────────────────────────────────────
 nameOverride: ""
 fullnameOverride: ""

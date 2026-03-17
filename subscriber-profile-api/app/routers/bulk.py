@@ -1,5 +1,6 @@
 """
 POST /profiles/bulk  — async bulk upsert (JSON body list or CSV multipart upload)
+GET  /jobs           — list bulk jobs (newest first, ?limit=N)
 GET  /jobs/{job_id} — poll bulk job status
 """
 import csv
@@ -295,6 +296,20 @@ async def bulk_upsert(
         "submitted": submitted,
         "status_url": f"/v1/jobs/{job_id}",
     }
+
+
+@router.get("/jobs", dependencies=[Depends(require_auth)])
+async def list_jobs(limit: int = 100, conn=Depends(get_conn)):
+    rows = await conn.fetch(
+        """
+        SELECT job_id::text, status, submitted, processed, failed, created_at
+        FROM bulk_jobs
+        ORDER BY created_at DESC
+        LIMIT $1
+        """,
+        limit,
+    )
+    return {"jobs": [dict(r) for r in rows]}
 
 
 @router.get("/jobs/{job_id}", dependencies=[Depends(require_auth)])

@@ -27,13 +27,14 @@ DB_URL      ?= postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_N
 RADIUS_SECRET ?= testing123
 
 SCRIPT      ?= load.js   # override: make load-test-k8s SCRIPT=stress.js
+PCAP        ?= false     # set to true to attach a tcpdump sidecar: make test PCAP=true
 
 .PHONY: help \
         cluster-up cluster-down cluster-status cnpg-install nginx-install dep-update prom-crds \
         build-all build-api build-lookup build-radius-server build-tester push-all build-push build-ui \
         hosts bootstrap setup helm-unlock \
         deploy deploy-dry-run deploy-migration db-init db-flush-stale \
-        test test-secret radius-secret \
+        test test-secret radius-secret pcap-get \
         port-forward-lookup port-forward-api port-forward-db port-forward-ui \
         port-forward-grafana port-forward-prometheus port-forward-pgbouncer \
         logs logs-lookup logs-api logs-ui \
@@ -134,8 +135,9 @@ build-lookup:                   ## Rebuild aaa-lookup-service and restart its po
 	kubectl rollout restart deployment/$(RELEASE)-aaa-lookup-service -n $(NAMESPACE)
 	kubectl rollout status deployment/$(RELEASE)-aaa-lookup-service -n $(NAMESPACE)
 
-build-tester:                   ## Rebuild aaa-regression-tester image (picks up pytest.ini / test changes; next make test uses new image)
+build-tester:                   ## Rebuild aaa-regression-tester image and repackage its Helm chart
 	docker build -t $(REGISTRY)/aaa-regression-tester:$(TAG) ./aaa-regression-tester/
+	helm package ./charts/aaa-regression-tester -d ./charts/aaa-platform/charts/
 
 push-all:                       ## Push all service images to the registry (k3d / remote only)
 	@for svc in $(SERVICES); do \
@@ -200,13 +202,20 @@ radius-secret:                  ## Create/update aaa-radius-secret from RADIUS_S
 	  --from-literal=radius-secret="$(RADIUS_SECRET)" \
 	  -n $(NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
 
-test:                           ## Run full regression suite as a Kubernetes Job
+test:                           ## Run regression suite (append PCAP=true to capture traffic)
 	$(MAKE) test-secret
 	$(MAKE) radius-secret
+	@echo "Repackaging aaa-regression-tester sub-chart..."
+	helm package ./charts/aaa-regression-tester -d ./charts/aaa-platform/charts/
+	@echo "Removing any previous regression-tester Job and pods..."
+	kubectl delete jobs -n $(NAMESPACE) \
+	  -l app.kubernetes.io/name=aaa-regression-tester \
+	  --ignore-not-found --wait=true
 	helm upgrade --install $(RELEASE) $(CHART_DIR) \
 	  --namespace $(NAMESPACE) \
 	  -f $(CHART_DIR)/values-dev.yaml \
 	  --set "aaa-regression-tester.enabled=true" \
+	  --set "aaa-regression-tester.pcap.enabled=$(PCAP)" \
 	  --timeout 10m
 	@echo "Waiting for regression-tester Job to start..."
 	kubectl wait pod \
@@ -221,7 +230,20 @@ test:                           ## Run full regression suite as a Kubernetes Job
 	kubectl logs -n $(NAMESPACE) \
 	  $$(kubectl get pods -n $(NAMESPACE) \
 	    -l app.kubernetes.io/name=aaa-regression-tester \
-	    -o jsonpath='{.items[0].metadata.name}')
+	    -o jsonpath='{.items[0].metadata.name}') \
+	  -c regression-tester
+	@if [ "$(PCAP)" = "true" ]; then \
+	  echo ""; \
+	  echo "══════════════════════════════════════════════════════════════"; \
+	  echo " Packet capture complete."; \
+	  echo " Stored in PVC: $(RELEASE)-aaa-regression-tester-pcap"; \
+	  echo " Fetch:  make pcap-get          → saves ./test.pcap"; \
+	  echo " Open :  wireshark ./test.pcap"; \
+	  echo "══════════════════════════════════════════════════════════════"; \
+	fi
+
+pcap-get:                       ## Copy test.pcap from the PCAP=true PVC to ./test.pcap (works after pod exits)
+	bash scripts/pcap-get.sh $(NAMESPACE) $(RELEASE)-aaa-regression-tester-pcap ./test.pcap
 
 # ── Port-forwarding ───────────────────────────────────────────
 port-forward-lookup:            ## Forward aaa-lookup-service to localhost:8081

@@ -1,0 +1,19 @@
+{{- if .Values.pcap.enabled }}
+# PVC that holds the tcpdump capture file for the lifetime of the test run.
+# Survives Job completion so the file can be retrieved after the pod exits.
+# Delete manually when no longer needed:
+#   kubectl delete pvc {{ include "aaa-regression-tester.fullname" . }}-pcap -n {{ .Release.Namespace }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "aaa-regression-tester.fullname" . }}-pcap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aaa-regression-tester.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.pcap.storageSize }}
+{{- end }}

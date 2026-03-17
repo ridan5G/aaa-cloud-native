@@ -11,8 +11,10 @@ import logging
 import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from app.config import HTTP_PORT, METRICS_PORT
+from app.config import HTTP_PORT, METRICS_PORT, CORS_ORIGINS
 from app.db import init_db, close_db
 from app.metrics import start_metrics_server, api_request_duration
 from app.routers import health, pools, range_configs, iccid_range_configs, profiles, imsis, first_connection, bulk
@@ -40,6 +42,19 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+# CORS — must be added before any other middleware.
+# Origins are configured via CORS_ORIGINS env var (comma-separated).
+# Empty → no CORS headers (correct when the UI nginx proxy handles routing).
+if CORS_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=CORS_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    logger.info('"CORS enabled for origins: %s"', CORS_ORIGINS)
 
 
 @app.middleware("http")
@@ -84,6 +99,15 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     else:
         content = {"detail": exc.detail}
     return JSONResponse(status_code=exc.status_code, content=content)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Return 422 with a consistent {error, details} body for Pydantic/schema errors."""
+    return JSONResponse(
+        status_code=422,
+        content={"error": "validation_error", "details": exc.errors()},
+    )
 
 
 @app.exception_handler(Exception)

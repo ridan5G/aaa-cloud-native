@@ -24,7 +24,7 @@ ingress:
 
 # ── Runtime config — injected as window.APP_CONFIG via /config.js ──
 appConfig:
-  apiBaseUrl: "https://provisioning.aaa.example.com/v1"
+  apiBaseUrl: "/v1"   # relative → same-origin; UI nginx proxies /v1/ to the API ClusterIP
   oidcAuthority: "https://auth.example.com/realms/aaa"
   oidcClientId: "aaa-management-ui"
 

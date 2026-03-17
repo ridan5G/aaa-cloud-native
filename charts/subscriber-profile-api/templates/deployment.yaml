@@ -74,6 +74,9 @@ spec:
               value: {{ .Values.bulkJob.workerThreads | quote }}
             - name: BULK_BATCH_SIZE
               value: {{ .Values.bulkJob.batchSize | quote }}
+            # CORS — comma-separated allowed origins; empty disables CORS headers
+            - name: CORS_ORIGINS
+              value: {{ .Values.cors.origins | quote }}
             # JWT
             - name: JWT_SKIP_VERIFY
               value: {{ .Values.jwt.skipVerify | quote }}
