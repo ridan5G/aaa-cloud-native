@@ -1,34 +1,10 @@
 # ── Stage 1: Build ───────────────────────────────────────────────────────────
-FROM ubuntu:24.04 AS builder
+# Uses pre-built base with vcpkg packages already compiled.
+# Build the base once: make build-lookup-base
+ARG BUILD_BASE=aaa/aaa-lookup-build-base:latest
+FROM ${BUILD_BASE} AS builder
 
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    build-essential cmake ninja-build git curl zip unzip tar pkg-config \
-    bison flex autoconf automake libtool m4 \
-    libssl-dev libpq-dev uuid-dev zlib1g-dev libjsoncpp-dev \
-    libbrotli-dev libc-ares-dev libhiredis-dev \
-    && update-ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-# ca config
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates git curl bison flex \
- && update-ca-certificates \
- && rm -rf /var/lib/apt/lists/*
-# vcpkg for C++ dependency management
-ENV VCPKG_ROOT=/opt/vcpkg
-RUN git clone --depth=1 https://github.com/microsoft/vcpkg.git ${VCPKG_ROOT} && \
-    ${VCPKG_ROOT}/bootstrap-vcpkg.sh -disableMetrics
-
-# Install all project dependencies via vcpkg
-COPY vcpkg.json /workspace/vcpkg.json
-WORKDIR /workspace
-RUN ${VCPKG_ROOT}/vcpkg install \
-    --triplet=x64-linux \
-    --feature-flags=manifests \
-    --x-manifest-root=/workspace
-
-# Build the service
+# Build the service (vcpkg packages already in /workspace/vcpkg_installed)
 COPY . /workspace/
 RUN cmake -S . -B build \
     -G Ninja \

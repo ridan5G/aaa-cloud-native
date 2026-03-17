@@ -134,8 +134,7 @@ function ToastContainer() {
 // ─── Nav config ───────────────────────────────────────────────────────────────
 const TOP_NAV = [
   { to: '/dashboard',        label: 'Dashboard',    Icon: DashboardIcon },
-  { to: '/devices',          label: 'Devices',      Icon: SimIcon },
-  { to: '/sim-profile-types', label: 'Profile Types', Icon: LayersIcon },
+  { to: '/devices',          label: 'SIMs',         Icon: SimIcon },
   { to: '/pools',            label: 'IP Pools',     Icon: PoolIcon },
 ]
 const RANGE_CHILDREN = [
@@ -143,7 +142,8 @@ const RANGE_CHILDREN = [
   { to: '/iccid-range-configs', label: 'ICCID Range Configs' },
 ]
 const BOTTOM_NAV = [
-  { to: '/bulk-jobs', label: 'Bulk Jobs', Icon: JobsIcon },
+  { to: '/bulk-jobs',         label: 'Bulk Jobs',     Icon: JobsIcon },
+  { to: '/sim-profile-types', label: 'Documentation', Icon: LayersIcon },
 ]
 
 // ─── Layout ───────────────────────────────────────────────────────────────────

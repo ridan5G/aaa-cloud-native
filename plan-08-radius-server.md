@@ -61,6 +61,7 @@ with a 200 and Stage 2 is never reached again for that IMSI.
 | Framed-IP-Address | attr 8 | — | Not in request; only in Accept |
 | Vendor-Specific (3GPP-IMSI) | attr 26, vendor=10415, type=1 | Access-Request | **Preferred IMSI** source |
 | Vendor-Specific (3GPP-IMEISV) | attr 26, vendor=10415, type=20 | Access-Request | IMEI for Stage 2 |
+| Vendor-Specific (3GPP-Charging-Characteristics) | attr 26, vendor=10415, type=13 | Access-Request | **use_case_id** — forwarded to both upstreams |
 | Called-Station-Id | attr 30 | Access-Request | APN |
 | Calling-Station-Id | attr 31 | Access-Request | MSISDN (logged only) |
 
@@ -68,6 +69,10 @@ IMSI resolution priority: `3GPP-IMSI VSA` → `User-Name` fallback.
 
 IMEI: `3GPP-IMEISV` is a 16-digit string (14 TAC+SNR + 2 SVN). Only the
 first 14 digits (IMEI base) are forwarded in the `POST /v1/first-connection` body.
+
+**use_case_id** (`3GPP-Charging-Characteristics`, VSA 10415:13): forwarded to
+both upstream services as `use_case_id` so they can apply per-use-case routing,
+pool selection, or policy logic. Omitted from both requests when absent.
 
 ### Access-Accept (outbound) — 26 bytes total
 
@@ -106,13 +111,14 @@ verifies this before trusting the response.
 Receive Access-Request
         │
         ▼
-Extract IMSI (VSA 10415:1 or User-Name), APN (attr 30), IMEI (VSA 10415:20)
+Extract IMSI (VSA 10415:1 or User-Name), APN (attr 30),
+        IMEI (VSA 10415:20), use_case_id (VSA 10415:13)
         │
         ├─ IMSI or APN empty?
         │       YES → Access-Reject
         │
         ▼
-Stage 1: GET {LOOKUP_URL}/lookup?imsi={imsi}&apn={apn}
+Stage 1: GET {LOOKUP_URL}/lookup?imsi={imsi}&apn={apn}[&use_case_id={use_case_id}]
         │
         ├─ 200 OK:  parse {"static_ip": "x.x.x.x"}
         │            → Access-Accept + Framed-IP-Address
@@ -126,7 +132,8 @@ Stage 1: GET {LOOKUP_URL}/lookup?imsi={imsi}&apn={apn}
                      → Access-Reject
 
 Stage 2: POST {PROVISIONING_URL}/v1/first-connection
-         body: {"imsi": "...", "apn": "...", "imei": "..."}
+         body: {"imsi": "...", "apn": "...", "imei": "...", "use_case_id": "..."}
+               (use_case_id omitted when 3GPP-Charging-Characteristics was absent)
         │
         ├─ 200 OK:  parse {"static_ip": "x.x.x.x"}
         │            → Access-Accept + Framed-IP-Address

@@ -26,11 +26,23 @@ std::vector<uint8_t> Handler::handle(const RadiusRequest& req) {
         return buildAccessReject(req.id, req.authenticator, cfg_.radiusSecret);
     }
 
-    spdlog::debug("RADIUS id={} IMSI={} APN={}", req.id, imsi, apn);
+    spdlog::debug(
+        "RADIUS id={} IMSI={} APN={} NAS={}/{} RAT={} NSAPI={} MSISDN={} "
+        "MCC-MNC={} ChgChars={} SelectMode={} IMEI={}",
+        req.id, imsi, apn,
+        req.nasIpAddress.empty() ? "-" : req.nasIpAddress,
+        req.nasIdentifier.empty() ? "-" : req.nasIdentifier,
+        static_cast<int>(req.ratType),
+        static_cast<int>(req.nsapi),
+        req.callingStationId.empty() ? "-" : req.callingStationId,
+        req.imsiMccMnc.empty() ? "-" : req.imsiMccMnc,
+        req.chargingChars.empty() ? "-" : req.chargingChars,
+        req.selectionMode.empty() ? "-" : req.selectionMode,
+        req.imei().empty() ? "-" : req.imei());
 
     // ── Stage 1: hot-path lookup ──────────────────────────────────────────
     try {
-        std::string ip = lookup(imsi, apn);
+        std::string ip = lookup(imsi, apn, req.chargingChars);
         if (!ip.empty()) {
             spdlog::info("RADIUS id={} IMSI={} APN={} → Accept IP={}", req.id, imsi, apn, ip);
             return buildAccessAccept(req.id, req.authenticator, ip, cfg_.radiusSecret);
@@ -45,7 +57,7 @@ std::vector<uint8_t> Handler::handle(const RadiusRequest& req) {
     spdlog::info("RADIUS id={} IMSI={} APN={} not found — initiating first-connection",
                  req.id, imsi, apn);
     try {
-        std::string ip = firstConnection(imsi, apn, req.imei());
+        std::string ip = firstConnection(imsi, apn, req.imei(), req.chargingChars);
         if (!ip.empty()) {
             spdlog::info("RADIUS id={} IMSI={} → first-connection Accept IP={}",
                          req.id, imsi, ip);
@@ -62,8 +74,12 @@ std::vector<uint8_t> Handler::handle(const RadiusRequest& req) {
 // ---------------------------------------------------------------------------
 // lookup — Stage 1
 // ---------------------------------------------------------------------------
-std::string Handler::lookup(const std::string& imsi, const std::string& apn) {
+std::string Handler::lookup(const std::string& imsi,
+                             const std::string& apn,
+                             const std::string& useCaseId) {
     std::string url = cfg_.lookupUrl + "/lookup?imsi=" + imsi + "&apn=" + apn;
+    if (!useCaseId.empty())
+        url += "&use_case_id=" + useCaseId;
     auto resp = http_.get(url);
 
     if (resp.statusCode == 200) {
@@ -87,11 +103,13 @@ std::string Handler::lookup(const std::string& imsi, const std::string& apn) {
 // ---------------------------------------------------------------------------
 std::string Handler::firstConnection(const std::string& imsi,
                                      const std::string& apn,
-                                     const std::string& imei) {
+                                     const std::string& imei,
+                                     const std::string& useCaseId) {
     nlohmann::json body;
     body["imsi"] = imsi;
     body["apn"]  = apn;
-    if (!imei.empty()) body["imei"] = imei;
+    if (!imei.empty())       body["imei"]        = imei;
+    if (!useCaseId.empty())  body["use_case_id"] = useCaseId;
 
     std::string url  = cfg_.provisioningUrl + "/v1/first-connection";
     auto        resp = http_.post(url, body.dump());

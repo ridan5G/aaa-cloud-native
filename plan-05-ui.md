@@ -2,7 +2,7 @@
 
 ## Overview
 
-A browser-based management UI for operators to manage subscriber profiles,
+A browser-based management UI for operators to manage SIM profiles,
 IP pools, IMSI range configs, and bulk imports. It talks exclusively to
 the `subscriber-profile-api` REST endpoints — no direct DB access.
 
@@ -107,8 +107,8 @@ the `subscriber-profile-api` REST endpoints — no direct DB access.
 │   SIMs          │                                                     │
 │   IP Pools      │                                                     │
 │   Range Configs ▸│                                                   │
-│   ICCID Ranges  │                                                     │
 │   Bulk Jobs     │                                                     │
+│   Documentation │                                                     │
 │                 │                                                     │
 │  [≡ collapse]   │                                                     │
 └──────────┴───────────────────────────────────────────────────────────┘
@@ -263,31 +263,34 @@ module.exports = {
 ```
 Login
   └── Dashboard (account overview)
-        ├── Subscribers
+        ├── SIMs
         │     ├── List / Search
         │     ├── Profile Detail
         │     │     ├── Edit Profile
         │     │     └── IMSI Manager (add / remove / suspend / set priority)
-        │     ├── New Profile (form)
+        │     ├── New SIM Profile (form)
         │     └── Bulk Import (CSV upload)
         ├── IP Pools
         │     ├── Pool List
         │     ├── Pool Detail + Stats
         │     └── New Pool (form)
-        ├── IMSI Range Configs
-        │     ├── Range Config List
-        │     ├── Range Config Detail
-        │     │     └── APN Pool Manager (inline: add / remove APN→Pool overrides)
-        │     ├── New Range Config (form)
-        │     └── Edit Range Config
-        ├── ICCID Range Configs (Multi-IMSI SIM)
-        │     ├── ICCID Range Config List
-        │     ├── ICCID Range Config Detail
-        │     │     └── IMSI Slot Manager (inline: add / edit / remove slots)
-        │     ├── New ICCID Range Config (form)
-        │     └── Edit ICCID Range Config
-        └── Bulk Jobs
-              └── Job List + Status / Progress
+        ├── Range Configs
+        │     ├── IMSI Range Configs
+        │     │     ├── Range Config List
+        │     │     ├── Range Config Detail
+        │     │     │     └── APN Pool Manager (inline: add / remove APN→Pool overrides)
+        │     │     ├── New Range Config (form)
+        │     │     └── Edit Range Config
+        │     └── ICCID Range Configs (Multi-IMSI SIM)
+        │           ├── ICCID Range Config List
+        │           ├── ICCID Range Config Detail
+        │           │     └── IMSI Slot Manager (inline: add / edit / remove slots)
+        │           ├── New ICCID Range Config (form)
+        │           └── Edit ICCID Range Config
+        ├── Bulk Jobs
+        │     └── Job List + Status / Progress
+        └── Documentation
+              └── SIM Profile Types reference
 ```
 
 ---
@@ -306,16 +309,16 @@ Login
 
 ---
 
-### 2. Subscriber List / Search
+### 2. SIM List / Search
 
-**Purpose:** Find profiles by IMSI, ICCID, account name, or status.
+**Purpose:** Find SIM profiles by IMSI, ICCID, account name, or status.
 
 **Search bar:** Single text field. Auto-detects:
 - 15-digit string → searches by IMSI (`GET /profiles?imsi={v}`)
 - 19–20-digit string → searches by ICCID (`GET /profiles?iccid={v}`)
 - Anything else → searches by account_name (`GET /profiles?account_name={v}`)
 
-**Table columns:** device_id (truncated UUID), ICCID, Account, Status badge, ip_resolution, IMSI count, Actions (View / Edit / Suspend / Delete)
+**Table columns:** SIM ID (truncated UUID), ICCID, Account, Status badge, ip_resolution, IMSI count, Actions (View / Edit / Suspend / Delete)
 
 **Filters:** Status (All / Active / Suspended / Terminated), ip_resolution type
 
@@ -327,7 +330,7 @@ Login
 
 ### 3. Profile Detail
 
-**Purpose:** Read-only summary of one subscriber profile, with inline actions.
+**Purpose:** Read-only summary of one SIM profile, with inline actions.
 
 **Layout:**
 ```

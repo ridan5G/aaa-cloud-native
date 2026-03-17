@@ -1,0 +1,30 @@
+# Pre-built builder base for aaa-radius-server.
+# Contains all apt build tools + vcpkg + compiled C++ packages.
+#
+# Rebuild ONLY when vcpkg.json changes:
+#   make build-radius-base          (local: REGISTRY=aaa)
+#   make push-radius-base           (registry: REGISTRY=k3d-... or remote)
+#
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    build-essential cmake ninja-build git curl zip unzip tar pkg-config \
+    bison flex autoconf automake libtool m4 \
+    libssl-dev libcurl4-openssl-dev zlib1g-dev \
+    && update-ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV VCPKG_ROOT=/opt/vcpkg
+RUN git clone --depth=1 https://github.com/microsoft/vcpkg.git ${VCPKG_ROOT} && \
+    ${VCPKG_ROOT}/bootstrap-vcpkg.sh -disableMetrics
+
+COPY vcpkg.json /workspace/vcpkg.json
+WORKDIR /workspace
+RUN ${VCPKG_ROOT}/vcpkg install \
+    --triplet=x64-linux \
+    --feature-flags=manifests \
+    --x-manifest-root=/workspace \
+    --clean-after-build

@@ -11,6 +11,8 @@ RELEASE     := aaa-platform
 #           Remote         = your registry prefix
 REGISTRY    ?= aaa
 TAG         ?= dev
+# Tag for C++ vcpkg base images — change when vcpkg.json changes to force a rebuild
+BASE_TAG    ?= latest
 
 # Database connection — override for non-local environments
 DB_USER     ?= aaa_app
@@ -31,6 +33,7 @@ PCAP        ?= false     # set to true to attach a tcpdump sidecar: make test PC
 
 .PHONY: help \
         cluster-up cluster-down cluster-status cnpg-install nginx-install dep-update prom-crds \
+        build-cpp-bases build-lookup-base build-radius-base push-cpp-bases push-lookup-base push-radius-base \
         build-all build-api build-lookup build-radius-server build-tester push-all build-push build-ui \
         hosts bootstrap setup helm-unlock \
         deploy deploy-dry-run deploy-migration db-init db-flush-stale \
@@ -62,7 +65,7 @@ hosts:                          ## Update WSL2 /etc/hosts with .aaa.localhost en
 	@bash scripts/hosts-update.sh
 
 # ── Full dev bootstrap — k3d (first time) ─────────────────────
-bootstrap: cluster-up hosts build-all push-all dep-update prom-crds deploy db-init ## k3d: create cluster, push images, deploy everything
+bootstrap: cluster-up hosts build-cpp-bases build-all push-all dep-update prom-crds deploy db-init ## k3d: create cluster, push images, deploy everything
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════╗"
 	@echo "║  AAA Platform is running!                               ║"
@@ -74,7 +77,7 @@ bootstrap: cluster-up hosts build-all push-all dep-update prom-crds deploy db-in
 	@echo "╚══════════════════════════════════════════════════════════╝"
 
 # ── Docker Desktop setup (first time, no k3d needed) ──────────
-setup: cnpg-install nginx-install hosts build-all dep-update prom-crds deploy db-init ## Docker Desktop: install operators, build images, deploy everything (secrets created automatically by deploy)
+setup: cnpg-install nginx-install hosts build-cpp-bases build-all dep-update prom-crds deploy db-init ## Docker Desktop: install operators, build images, deploy everything (secrets created automatically by deploy)
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════╗"
 	@echo "║  AAA Platform is running on Docker Desktop!             ║"
@@ -112,18 +115,45 @@ prom-crds:                      ## Install Prometheus Operator CRDs from cached 
 	@rm -rf /tmp/kube-prometheus-stack
 	@echo "Prometheus Operator CRDs installed."
 
-# ── Image management ──────────────────────────────────────────
-SERVICES := aaa-lookup-service aaa-radius-server subscriber-profile-api aaa-management-ui aaa-regression-tester
+# ── C++ vcpkg base images (build once; rebuild only when vcpkg.json changes) ──
+build-lookup-base:              ## Build vcpkg base for aaa-lookup-service (run once or when vcpkg.json changes)
+	docker build -t $(REGISTRY)/aaa-lookup-build-base:$(BASE_TAG) \
+	  -f ./aaa-lookup-service/Dockerfile.base \
+	  ./aaa-lookup-service/
 
-build-all:                      ## Build all service images (REGISTRY=aaa TAG=dev)
-	@for svc in $(SERVICES); do \
+build-radius-base:              ## Build vcpkg base for aaa-radius-server (run once or when vcpkg.json changes)
+	docker build -t $(REGISTRY)/aaa-radius-build-base:$(BASE_TAG) \
+	  -f ./aaa-radius-server/Dockerfile.base \
+	  ./aaa-radius-server/
+
+build-cpp-bases: build-lookup-base build-radius-base  ## Build both C++ vcpkg base images
+
+push-lookup-base:               ## Push aaa-lookup-build-base to registry
+	docker push $(REGISTRY)/aaa-lookup-build-base:$(BASE_TAG)
+
+push-radius-base:               ## Push aaa-radius-build-base to registry
+	docker push $(REGISTRY)/aaa-radius-build-base:$(BASE_TAG)
+
+push-cpp-bases: push-lookup-base push-radius-base  ## Push both C++ vcpkg base images
+
+# ── Image management ──────────────────────────────────────────
+build-all:                      ## Build all service images (REGISTRY=aaa TAG=dev); run build-cpp-bases first if bases don't exist
+	docker build -t $(REGISTRY)/aaa-lookup-service:$(TAG) \
+	  --build-arg BUILD_BASE=$(REGISTRY)/aaa-lookup-build-base:$(BASE_TAG) \
+	  ./aaa-lookup-service/
+	docker build -t $(REGISTRY)/aaa-radius-server:$(TAG) \
+	  --build-arg BUILD_BASE=$(REGISTRY)/aaa-radius-build-base:$(BASE_TAG) \
+	  ./aaa-radius-server/
+	@for svc in subscriber-profile-api aaa-management-ui aaa-regression-tester; do \
 	  [ -d "./$$svc" ] || continue; \
 	  echo "── Building $$svc ──────────────────────────────────"; \
 	  docker build -t $(REGISTRY)/$$svc:$(TAG) ./$$svc/; \
 	done
 
 build-radius-server:            ## Build just the aaa-radius-server image
-	docker build -t $(REGISTRY)/aaa-radius-server:$(TAG) ./aaa-radius-server/
+	docker build -t $(REGISTRY)/aaa-radius-server:$(TAG) \
+	  --build-arg BUILD_BASE=$(REGISTRY)/aaa-radius-build-base:$(BASE_TAG) \
+	  ./aaa-radius-server/
 
 build-api:                      ## Rebuild subscriber-profile-api and restart its pod (picks up code changes with pullPolicy:Never)
 	docker build -t $(REGISTRY)/subscriber-profile-api:$(TAG) ./subscriber-profile-api/
@@ -131,7 +161,9 @@ build-api:                      ## Rebuild subscriber-profile-api and restart it
 	kubectl rollout status deployment/$(RELEASE)-subscriber-profile-api -n $(NAMESPACE)
 
 build-lookup:                   ## Rebuild aaa-lookup-service and restart its pod
-	docker build -t $(REGISTRY)/aaa-lookup-service:$(TAG) ./aaa-lookup-service/
+	docker build -t $(REGISTRY)/aaa-lookup-service:$(TAG) \
+	  --build-arg BUILD_BASE=$(REGISTRY)/aaa-lookup-build-base:$(BASE_TAG) \
+	  ./aaa-lookup-service/
 	kubectl rollout restart deployment/$(RELEASE)-aaa-lookup-service -n $(NAMESPACE)
 	kubectl rollout status deployment/$(RELEASE)-aaa-lookup-service -n $(NAMESPACE)
 

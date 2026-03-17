@@ -28,7 +28,15 @@ import pytest
 from conftest import ACCOUNT_NAME, PROVISION_BASE, JWT_TOKEN, RADIUS_HOST, RADIUS_PORT, RADIUS_SECRET
 from fixtures.pools import create_pool, delete_pool, get_pool_stats
 from fixtures.profiles import create_profile_imsi, delete_profile
-from fixtures.radius import RadiusClient, CODE_ACCESS_ACCEPT, CODE_ACCESS_REJECT
+from fixtures.radius import (
+    RadiusClient, build_access_request, parse_response,
+    CODE_ACCESS_ACCEPT, CODE_ACCESS_REJECT,
+    ATTR_FRAMED_IP_ADDRESS,
+    RAT_TYPE_EUTRAN, RAT_TYPE_NR,
+    NAS_PORT_TYPE_WIRELESS_OTHER,
+    SERVICE_TYPE_FRAMED,
+    FRAMED_PROTOCOL_GPRS_PDP,
+)
 
 # ── IMSI ranges — module 12, no overlap with any other test module ────────────
 
@@ -289,7 +297,9 @@ class TestRadiusServer:
         assert r_pre.status_code == 404, \
             f"Pre-condition failed: IMSI_FC_NEW already has a profile ({r_pre.status_code})"
 
-        resp = rc.authenticate(IMSI_FC_NEW, TEST_APN, imei="35812300000000")
+        resp = rc.authenticate(IMSI_FC_NEW, TEST_APN,
+                               imei="35812300000000",
+                               charging_chars="0800")
         assert resp.is_accept, (
             f"Expected Access-Accept via first-connection, got code={resp.code}. "
             "Check that aaa-radius-server's PROVISIONING_URL points to subscriber-profile-api."
@@ -380,3 +390,83 @@ class TestRadiusServer:
             f"Expected Access-Reject for IMSI_OOB, got code={resp.code}"
         assert resp.framed_ip is None, \
             f"Access-Reject must not carry Framed-IP-Address, got {resp.framed_ip!r}"
+
+    # 12.11 ───────────────────────────────────────────────────────────────────
+    def test_11_full_3gpp_avp_request_accepted(self, rc: RadiusClient):
+        """
+        Send a complete Access-Request with ALL standard RADIUS + 3GPP VSAs that
+        a real PGW/GGSN/SMF would send (NAS-IP-Address, NAS-Identifier,
+        Service-Type, Framed-Protocol, NAS-Port-Type, Calling-Station-Id,
+        3GPP-IMSI-MCC-MNC, 3GPP-GGSN-MCC-MNC, 3GPP-NSAPI,
+        3GPP-Selection-Mode, 3GPP-Charging-Characteristics, 3GPP-IMEISV,
+        3GPP-RAT-Type, 3GPP-User-Location-Info, 3GPP-MS-TimeZone).
+
+        Verifies that aaa-radius-server parses the full packet correctly and
+        still returns Access-Accept with the correct Framed-IP-Address.
+        """
+        resp = rc.authenticate(
+            IMSI_KNOWN,
+            TEST_APN,
+            imei="35812300000001",
+            msisdn="97250123456",
+            nas_ip="10.0.0.1",
+            nas_identifier="ggsn-01.operator.com",
+            nas_port=0,
+            nas_port_type=NAS_PORT_TYPE_WIRELESS_OTHER,
+            service_type=SERVICE_TYPE_FRAMED,
+            framed_protocol=FRAMED_PROTOCOL_GPRS_PDP,
+            mcc_mnc="27877",
+            nsapi=5,
+            selection_mode="0",
+            charging_chars="0800",
+            rat_type=RAT_TYPE_EUTRAN,
+        )
+        assert resp.is_accept, (
+            f"Full-AVP request for known IMSI must return Access-Accept, "
+            f"got code={resp.code}"
+        )
+        assert resp.framed_ip == KNOWN_STATIC_IP, (
+            f"Framed-IP-Address={resp.framed_ip!r}, expected {KNOWN_STATIC_IP!r}"
+        )
+        assert ATTR_FRAMED_IP_ADDRESS in resp.raw_attrs, \
+            "Access-Accept must contain Framed-IP-Address attribute (attr 8)"
+
+    # 12.12 ───────────────────────────────────────────────────────────────────
+    def test_12_3gpp_imsi_vsa_preferred_over_user_name(self, rc: RadiusClient):
+        """
+        RFC 2865 + TS 29.061: when both User-Name (attr 1) and
+        3GPP-IMSI VSA (attr 26, vendor=10415, type=1) are present, the server
+        MUST use the 3GPP-IMSI VSA as the authoritative IMSI.
+
+        Test setup:
+          User-Name        = IMSI_OOB  (not provisioned → would reject if used)
+          3GPP-IMSI VSA    = IMSI_KNOWN (provisioned     → Accept with static IP)
+
+        If the server incorrectly uses User-Name the response will be a Reject.
+        If it correctly uses the VSA the response will be an Accept.
+        """
+        pkt_id = 201
+        packet, req_auth = build_access_request(
+            pkt_id,
+            imsi=IMSI_KNOWN,            # 3GPP-IMSI VSA carries the real IMSI
+            apn=TEST_APN,
+            user_name_override=IMSI_OOB,  # User-Name carries a different IMSI
+        )
+
+        with __import__("socket").socket(
+            __import__("socket").AF_INET,
+            __import__("socket").SOCK_DGRAM,
+        ) as sock:
+            sock.settimeout(rc.timeout)
+            sock.sendto(packet, (rc.host, rc.port))
+            raw, _ = sock.recvfrom(4096)
+
+        resp = parse_response(raw, req_auth, rc.secret)
+        assert resp.is_accept, (
+            f"Server must prefer 3GPP-IMSI VSA over User-Name. "
+            f"Got code={resp.code} — server may be using User-Name instead of VSA."
+        )
+        assert resp.framed_ip == KNOWN_STATIC_IP, (
+            f"Framed-IP-Address={resp.framed_ip!r}, expected {KNOWN_STATIC_IP!r} "
+            f"(resolves only if 3GPP-IMSI VSA = IMSI_KNOWN was used)"
+        )

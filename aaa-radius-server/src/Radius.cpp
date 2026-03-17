@@ -7,17 +7,43 @@
 #include <stdexcept>
 
 // ---------------------------------------------------------------------------
-// Attribute / VSA constants
+// Standard RADIUS attribute type constants (RFC 2865)
 // ---------------------------------------------------------------------------
 static constexpr uint8_t  ATTR_USER_NAME          = 1;
+static constexpr uint8_t  ATTR_NAS_IP_ADDRESS     = 4;
+static constexpr uint8_t  ATTR_NAS_PORT           = 5;
+static constexpr uint8_t  ATTR_SERVICE_TYPE       = 6;
+static constexpr uint8_t  ATTR_FRAMED_PROTOCOL    = 7;
 static constexpr uint8_t  ATTR_FRAMED_IP_ADDRESS  = 8;
 static constexpr uint8_t  ATTR_VENDOR_SPECIFIC    = 26;
 static constexpr uint8_t  ATTR_CALLED_STATION_ID  = 30;
 static constexpr uint8_t  ATTR_CALLING_STATION_ID = 31;
+static constexpr uint8_t  ATTR_NAS_IDENTIFIER     = 32;
+static constexpr uint8_t  ATTR_NAS_PORT_TYPE      = 61;
 
-static constexpr uint32_t VENDOR_3GPP    = 10415;   // 0x000028AF
-static constexpr uint8_t  VSA_3GPP_IMSI  = 1;       // 3GPP-IMSI
-static constexpr uint8_t  VSA_3GPP_IMEISV = 20;     // 3GPP-IMEISV
+// ---------------------------------------------------------------------------
+// 3GPP vendor and VSA sub-type constants (TS 29.061 §16.4)
+// ---------------------------------------------------------------------------
+static constexpr uint32_t VENDOR_3GPP             = 10415;  // 0x000028AF
+static constexpr uint8_t  VSA_3GPP_IMSI           = 1;      // 3GPP-IMSI
+static constexpr uint8_t  VSA_3GPP_IMSI_MCC_MNC   = 8;      // 3GPP-IMSI-MCC-MNC
+static constexpr uint8_t  VSA_3GPP_GGSN_MCC_MNC   = 9;      // 3GPP-GGSN-MCC-MNC
+static constexpr uint8_t  VSA_3GPP_NSAPI          = 10;     // 3GPP-NSAPI
+static constexpr uint8_t  VSA_3GPP_SELECTION_MODE = 12;     // 3GPP-Selection-Mode
+static constexpr uint8_t  VSA_3GPP_CHG_CHARS      = 13;     // 3GPP-Charging-Characteristics
+static constexpr uint8_t  VSA_3GPP_IMEISV         = 20;     // 3GPP-IMEISV
+static constexpr uint8_t  VSA_3GPP_RAT_TYPE       = 21;     // 3GPP-RAT-Type
+static constexpr uint8_t  VSA_3GPP_ULI            = 22;     // 3GPP-User-Location-Info
+static constexpr uint8_t  VSA_3GPP_MS_TIMEZONE    = 23;     // 3GPP-MS-TimeZone
+
+// ---------------------------------------------------------------------------
+// Helper: read uint32 in network (big-endian) byte order
+// ---------------------------------------------------------------------------
+static uint32_t readUint32BE(const uint8_t* p) {
+    uint32_t v;
+    std::memcpy(&v, p, 4);
+    return ntohl(v);
+}
 
 // ---------------------------------------------------------------------------
 // parseAccessRequest
@@ -51,6 +77,26 @@ std::optional<RadiusRequest> parseAccessRequest(const uint8_t* data, std::size_t
             req.userName.assign(reinterpret_cast<const char*>(aVal), vLen);
             break;
 
+        case ATTR_NAS_IP_ADDRESS:
+            if (vLen == 4) {
+                char buf[INET_ADDRSTRLEN]{};
+                if (inet_ntop(AF_INET, aVal, buf, sizeof(buf)))
+                    req.nasIpAddress = buf;
+            }
+            break;
+
+        case ATTR_NAS_PORT:
+            if (vLen == 4) req.nasPort = readUint32BE(aVal);
+            break;
+
+        case ATTR_SERVICE_TYPE:
+            if (vLen == 4) req.serviceType = readUint32BE(aVal);
+            break;
+
+        case ATTR_FRAMED_PROTOCOL:
+            if (vLen == 4) req.framedProtocol = readUint32BE(aVal);
+            break;
+
         case ATTR_CALLED_STATION_ID:
             req.calledStationId.assign(reinterpret_cast<const char*>(aVal), vLen);
             break;
@@ -59,30 +105,67 @@ std::optional<RadiusRequest> parseAccessRequest(const uint8_t* data, std::size_t
             req.callingStationId.assign(reinterpret_cast<const char*>(aVal), vLen);
             break;
 
+        case ATTR_NAS_IDENTIFIER:
+            req.nasIdentifier.assign(reinterpret_cast<const char*>(aVal), vLen);
+            break;
+
+        case ATTR_NAS_PORT_TYPE:
+            if (vLen == 4) req.nasPortType = readUint32BE(aVal);
+            break;
+
         case ATTR_VENDOR_SPECIFIC: {
-            // Vendor-Specific layout: vendor-id(4) + sub-type(1) + sub-len(1) + value
+            // VSA layout: vendor-id(4) + sub-type(1) + sub-len(1) + value
+            // sub-len includes the 2-byte sub-type and sub-len fields.
             if (vLen < 6) break;
-            uint32_t vendorId;
-            std::memcpy(&vendorId, aVal, 4);
-            vendorId = ntohl(vendorId);
-            if (vendorId != VENDOR_3GPP) break;
+            uint32_t vendorId = readUint32BE(aVal);
+            if (vendorId != VENDOR_3GPP) break;   // ignore non-3GPP VSAs
 
             uint8_t vsaType = aVal[4];
-            uint8_t vsaLen  = aVal[5];      // includes the 2-byte type+len prefix
+            uint8_t vsaLen  = aVal[5];   // includes the 2-byte type+len prefix
             if (vsaLen < 2) break;
             std::size_t vsaVLen = static_cast<std::size_t>(vsaLen) - 2;
             if (vsaVLen > vLen - 6) break;  // bounds check
             const uint8_t* vsaVal = aVal + 6;
 
-            if (vsaType == VSA_3GPP_IMSI)
+            switch (vsaType) {
+            case VSA_3GPP_IMSI:
                 req.imsi3gpp.assign(reinterpret_cast<const char*>(vsaVal), vsaVLen);
-            else if (vsaType == VSA_3GPP_IMEISV)
+                break;
+            case VSA_3GPP_IMSI_MCC_MNC:
+                req.imsiMccMnc.assign(reinterpret_cast<const char*>(vsaVal), vsaVLen);
+                break;
+            case VSA_3GPP_GGSN_MCC_MNC:
+                req.ggsnMccMnc.assign(reinterpret_cast<const char*>(vsaVal), vsaVLen);
+                break;
+            case VSA_3GPP_NSAPI:
+                if (vsaVLen >= 1) req.nsapi = vsaVal[0];
+                break;
+            case VSA_3GPP_SELECTION_MODE:
+                req.selectionMode.assign(reinterpret_cast<const char*>(vsaVal), vsaVLen);
+                break;
+            case VSA_3GPP_CHG_CHARS:
+                req.chargingChars.assign(reinterpret_cast<const char*>(vsaVal), vsaVLen);
+                break;
+            case VSA_3GPP_IMEISV:
                 req.imeiSv.assign(reinterpret_cast<const char*>(vsaVal), vsaVLen);
+                break;
+            case VSA_3GPP_RAT_TYPE:
+                if (vsaVLen >= 1) req.ratType = vsaVal[0];
+                break;
+            case VSA_3GPP_ULI:
+                req.userLocationInfo.assign(vsaVal, vsaVal + vsaVLen);
+                break;
+            case VSA_3GPP_MS_TIMEZONE:
+                req.msTimeZone.assign(vsaVal, vsaVal + vsaVLen);
+                break;
+            default:
+                break;   // unknown 3GPP VSA — silently ignored
+            }
             break;
         }
 
         default:
-            break;
+            break;   // unknown standard attr — silently ignored
         }
 
         pos += aLen;
@@ -148,7 +231,7 @@ static std::vector<uint8_t> buildPacket(
 }
 
 // ---------------------------------------------------------------------------
-// buildAccessAccept — Framed-IP-Address (attr 8, 6 bytes)
+// buildAccessAccept — Framed-IP-Address (attr 8, total packet = 26 bytes)
 // ---------------------------------------------------------------------------
 std::vector<uint8_t> buildAccessAccept(
     uint8_t            id,
@@ -160,7 +243,7 @@ std::vector<uint8_t> buildAccessAccept(
     if (inet_aton(framedIp.c_str(), &addr) == 0)
         throw std::invalid_argument("Invalid Framed-IP-Address: " + framedIp);
 
-    // s_addr is in network byte order; cast to byte array for RFC-compliant output
+    // s_addr is already in network byte order
     const auto* ipBytes = reinterpret_cast<const uint8_t*>(&addr.s_addr);
     std::vector<uint8_t> attrs = {
         ATTR_FRAMED_IP_ADDRESS, 6,

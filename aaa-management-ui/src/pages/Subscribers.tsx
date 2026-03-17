@@ -50,7 +50,7 @@ function DeviceList() {
       <div className="flex items-center justify-between">
         <div>
           <p className="text-xs text-gray-400 uppercase tracking-widest font-medium">Provisioning</p>
-          <h1 className="page-title">Devices</h1>
+          <h1 className="page-title">SIMs</h1>
         </div>
         <div className="flex gap-2">
           <Link to="bulk" className="btn-outline">↑ Bulk Import</Link>
@@ -81,7 +81,7 @@ function DeviceList() {
           <>
             <table className="tbl">
               <thead><tr>
-                <th>Device ID</th><th>ICCID</th><th>Account</th>
+                <th>SIM ID</th><th>ICCID</th><th>Account</th>
                 <th>Status</th><th>IP Resolution</th><th>IMSIs</th><th>Created</th><th />
               </tr></thead>
               <tbody>
@@ -238,7 +238,7 @@ function ProfileDetail() {
   return (
     <div className="space-y-4 max-w-4xl">
       <div className="flex items-center gap-2 text-sm">
-        <button onClick={() => navigate('/devices')} className="text-primary hover:underline">Devices</button>
+        <button onClick={() => navigate('/devices')} className="text-primary hover:underline">SIMs</button>
         <span className="text-gray-400">/</span>
         <span className="font-mono text-xs text-gray-600">{profile.device_id.slice(0, 16)}…</span>
       </div>
@@ -478,11 +478,11 @@ function NewProfile() {
   return (
     <div className="max-w-2xl space-y-4">
       <div className="flex items-center gap-2 text-sm">
-        <button onClick={() => navigate('/devices')} className="text-primary hover:underline">Devices</button>
+        <button onClick={() => navigate('/devices')} className="text-primary hover:underline">SIMs</button>
         <span className="text-gray-400">/</span>
         <span className="text-gray-600">New Profile</span>
       </div>
-      <h1 className="page-title">New Device Profile</h1>
+      <h1 className="page-title">New SIM Profile</h1>
       {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-lg">{error}</div>}
 
       <form onSubmit={submit} className="card p-6 space-y-5">
@@ -569,7 +569,7 @@ function BulkImport() {
       ',8944501012345678901,Melita,active,imsi,278773000002002,,100.65.120.5,pool-uuid-abc',
     ].join('\n')
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
-    Object.assign(document.createElement('a'), { href: url, download: 'device-profiles-template.csv' }).click()
+    Object.assign(document.createElement('a'), { href: url, download: 'sim-profiles-template.csv' }).click()
     URL.revokeObjectURL(url)
   }
 
@@ -600,7 +600,7 @@ function BulkImport() {
   return (
     <div className="max-w-2xl space-y-4">
       <div className="flex items-center gap-2 text-sm">
-        <button onClick={() => navigate('/devices')} className="text-primary hover:underline">Devices</button>
+        <button onClick={() => navigate('/devices')} className="text-primary hover:underline">SIMs</button>
         <span className="text-gray-400">/</span>
         <span className="text-gray-600">Bulk Import</span>
       </div>
