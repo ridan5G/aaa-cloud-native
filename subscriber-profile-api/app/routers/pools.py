@@ -9,7 +9,7 @@ router = APIRouter()
 
 
 class PoolCreate(BaseModel):
-    pool_name: str
+    name: str
     account_name: Optional[str] = None
     subnet: str
     start_ip: Optional[str] = None
@@ -17,7 +17,7 @@ class PoolCreate(BaseModel):
 
 
 class PoolPatch(BaseModel):
-    pool_name: Optional[str] = None
+    name: Optional[str] = None
     status: Optional[str] = None
 
 
@@ -67,7 +67,7 @@ async def create_pool(body: PoolCreate, conn=Depends(get_conn)):
         RETURNING pool_id::text
         """,
         body.account_name,
-        body.pool_name,
+        body.name,
         body.subnet,
         stored_start,
         stored_end,
@@ -89,7 +89,7 @@ async def create_pool(body: PoolCreate, conn=Depends(get_conn)):
 async def get_pool(pool_id: str, conn=Depends(get_conn)):
     row = await conn.fetchrow(
         """
-        SELECT pool_id::text, account_name, pool_name,
+        SELECT pool_id::text, account_name, pool_name AS name,
                subnet::text, start_ip::text, end_ip::text,
                status, created_at, updated_at
         FROM ip_pools WHERE pool_id = $1::uuid
@@ -133,7 +133,7 @@ async def list_pools(
     total = await conn.fetchval(f"SELECT COUNT(*) FROM ip_pools {where}", *params)
     rows = await conn.fetch(
         f"""
-        SELECT pool_id::text, account_name, pool_name,
+        SELECT pool_id::text, account_name, pool_name AS name,
                subnet::text, start_ip::text, end_ip::text, status
         FROM ip_pools {where}
         ORDER BY created_at DESC
@@ -196,10 +196,10 @@ async def patch_pool(pool_id: str, body: PoolPatch, conn=Depends(get_conn)):
             detail={"error": "not_found", "resource": "ip_pool", "pool_id": pool_id},
         )
 
-    if body.pool_name is not None:
+    if body.name is not None:
         await conn.execute(
             "UPDATE ip_pools SET pool_name=$1, updated_at=now() WHERE pool_id=$2::uuid",
-            body.pool_name,
+            body.name,
             pool_id,
         )
     if body.status is not None:

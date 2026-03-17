@@ -1,7 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
-import Subscribers from './pages/Subscribers'
+import Devices from './pages/Subscribers'
 import Pools from './pages/Pools'
 import RangeConfigs from './pages/RangeConfigs'
 import IccidRangeConfigs from './pages/IccidRangeConfigs'
@@ -14,7 +14,7 @@ export default function App() {
       <Route path="/" element={<Layout />}>
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard"             element={<Dashboard />} />
-        <Route path="subscribers/*"         element={<Subscribers />} />
+        <Route path="devices/*"              element={<Devices />} />
         <Route path="pools/*"               element={<Pools />} />
         <Route path="range-configs/*"       element={<RangeConfigs />} />
         <Route path="iccid-range-configs/*" element={<IccidRangeConfigs />} />

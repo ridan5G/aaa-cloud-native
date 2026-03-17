@@ -231,6 +231,29 @@ async def delete_iccid_range_config(config_id: int, conn=Depends(get_conn)):
     await conn.execute("DELETE FROM iccid_range_configs WHERE id = $1", config_id)
 
 
+@router.get("/iccid-range-configs/{config_id}/imsi-slots", dependencies=[Depends(require_auth)])
+async def list_imsi_slots(config_id: int, conn=Depends(get_conn)):
+    parent = await conn.fetchrow(
+        "SELECT id FROM iccid_range_configs WHERE id = $1", config_id
+    )
+    if not parent:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "resource": "iccid_range_config", "id": config_id},
+        )
+    rows = await conn.fetch(
+        """
+        SELECT id, imsi_slot, f_imsi, t_imsi, pool_id::text, ip_resolution,
+               description, status
+        FROM imsi_range_configs
+        WHERE iccid_range_id = $1
+        ORDER BY imsi_slot
+        """,
+        config_id,
+    )
+    return {"items": [dict(r) for r in rows]}
+
+
 @router.post("/iccid-range-configs/{config_id}/imsi-slots", status_code=201, dependencies=[Depends(require_auth)])
 async def add_imsi_slot(config_id: int, body: ImsiSlotCreate, conn=Depends(get_conn)):
     parent = await conn.fetchrow(

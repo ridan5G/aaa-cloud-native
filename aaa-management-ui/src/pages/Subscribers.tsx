@@ -13,7 +13,7 @@ function fmtDate(s: string) {
 }
 
 // ─── List ─────────────────────────────────────────────────────────────────────
-function SubscriberList() {
+function DeviceList() {
   const navigate  = useNavigate()
   const [items,   setItems]   = useState<Profile[]>([])
   const [total,   setTotal]   = useState(0)
@@ -50,7 +50,7 @@ function SubscriberList() {
       <div className="flex items-center justify-between">
         <div>
           <p className="text-xs text-gray-400 uppercase tracking-widest font-medium">Provisioning</p>
-          <h1 className="page-title">Subscribers</h1>
+          <h1 className="page-title">Devices</h1>
         </div>
         <div className="flex gap-2">
           <Link to="bulk" className="btn-outline">↑ Bulk Import</Link>
@@ -238,7 +238,7 @@ function ProfileDetail() {
   return (
     <div className="space-y-4 max-w-4xl">
       <div className="flex items-center gap-2 text-sm">
-        <button onClick={() => navigate('/subscribers')} className="text-primary hover:underline">Subscribers</button>
+        <button onClick={() => navigate('/devices')} className="text-primary hover:underline">Devices</button>
         <span className="text-gray-400">/</span>
         <span className="font-mono text-xs text-gray-600">{profile.device_id.slice(0, 16)}…</span>
       </div>
@@ -466,7 +466,7 @@ function NewProfile() {
       if (Object.keys(meta).length) body.metadata = meta
       const res = await apiClient.post('/profiles', body)
       show('success', `Profile created: ${res.data.device_id}`)
-      navigate(`/subscribers/${res.data.device_id}`)
+      navigate(`/devices/${res.data.device_id}`)
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { error?: string } } })?.response?.data
       setError(d?.error ?? String(e))
@@ -478,11 +478,11 @@ function NewProfile() {
   return (
     <div className="max-w-2xl space-y-4">
       <div className="flex items-center gap-2 text-sm">
-        <button onClick={() => navigate('/subscribers')} className="text-primary hover:underline">Subscribers</button>
+        <button onClick={() => navigate('/devices')} className="text-primary hover:underline">Devices</button>
         <span className="text-gray-400">/</span>
         <span className="text-gray-600">New Profile</span>
       </div>
-      <h1 className="page-title">New Subscriber Profile</h1>
+      <h1 className="page-title">New Device Profile</h1>
       {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-lg">{error}</div>}
 
       <form onSubmit={submit} className="card p-6 space-y-5">
@@ -544,7 +544,7 @@ function NewProfile() {
 
         <div className="flex gap-3 pt-2 border-t border-border">
           <button type="submit" disabled={saving} className="btn-primary">{saving ? 'Creating…' : 'Create Profile'}</button>
-          <button type="button" onClick={() => navigate('/subscribers')} className="btn-ghost">Cancel</button>
+          <button type="button" onClick={() => navigate('/devices')} className="btn-ghost">Cancel</button>
         </div>
       </form>
     </div>
@@ -569,7 +569,7 @@ function BulkImport() {
       ',8944501012345678901,Melita,active,imsi,278773000002002,,100.65.120.5,pool-uuid-abc',
     ].join('\n')
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
-    Object.assign(document.createElement('a'), { href: url, download: 'subscriber-profiles-template.csv' }).click()
+    Object.assign(document.createElement('a'), { href: url, download: 'device-profiles-template.csv' }).click()
     URL.revokeObjectURL(url)
   }
 
@@ -600,7 +600,7 @@ function BulkImport() {
   return (
     <div className="max-w-2xl space-y-4">
       <div className="flex items-center gap-2 text-sm">
-        <button onClick={() => navigate('/subscribers')} className="text-primary hover:underline">Subscribers</button>
+        <button onClick={() => navigate('/devices')} className="text-primary hover:underline">Devices</button>
         <span className="text-gray-400">/</span>
         <span className="text-gray-600">Bulk Import</span>
       </div>
@@ -638,7 +638,7 @@ function BulkImport() {
           </div>
         )}
         <div className="flex gap-3 pt-2 border-t border-border">
-          <button onClick={() => navigate('/subscribers')} className="btn-ghost">Cancel</button>
+          <button onClick={() => navigate('/devices')} className="btn-ghost">Cancel</button>
           <button onClick={upload} disabled={!file || !!error || busy} className="btn-primary ml-auto">
             {busy ? 'Uploading…' : 'Upload & Import'}
           </button>
@@ -649,10 +649,10 @@ function BulkImport() {
 }
 
 // ─── Router ───────────────────────────────────────────────────────────────────
-export default function Subscribers() {
+export default function Devices() {
   return (
     <Routes>
-      <Route index            element={<SubscriberList />} />
+      <Route index            element={<DeviceList />} />
       <Route path="new"       element={<NewProfile />} />
       <Route path="bulk"      element={<BulkImport />} />
       <Route path=":device_id" element={<ProfileDetail />} />

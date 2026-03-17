@@ -134,7 +134,7 @@ function ToastContainer() {
 // ─── Nav config ───────────────────────────────────────────────────────────────
 const TOP_NAV = [
   { to: '/dashboard',        label: 'Dashboard',    Icon: DashboardIcon },
-  { to: '/subscribers',      label: 'Subscribers',  Icon: SimIcon },
+  { to: '/devices',          label: 'Devices',      Icon: SimIcon },
   { to: '/sim-profile-types', label: 'Profile Types', Icon: LayersIcon },
   { to: '/pools',            label: 'IP Pools',     Icon: PoolIcon },
 ]

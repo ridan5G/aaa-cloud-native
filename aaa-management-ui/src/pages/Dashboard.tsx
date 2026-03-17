@@ -157,8 +157,8 @@ export default function Dashboard() {
       <div>
         <h2 className="text-sm font-semibold text-gray-700 mb-3">Quick Actions</h2>
         <div className="flex flex-wrap gap-3">
-          <Link to="/subscribers/new"      className="btn-primary">+ New Profile</Link>
-          <Link to="/subscribers/bulk"     className="btn-outline">↑ Bulk Import</Link>
+          <Link to="/devices/new"           className="btn-primary">+ New Profile</Link>
+          <Link to="/devices/bulk"          className="btn-outline">↑ Bulk Import</Link>
           <Link to="/pools?new=1"          className="btn-outline">+ New Pool</Link>
           <Link to="/iccid-range-configs?new=1" className="btn-outline">+ ICCID Range Config</Link>
         </div>

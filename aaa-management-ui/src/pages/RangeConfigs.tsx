@@ -276,7 +276,7 @@ function RangeConfigDetail() {
         <div className="card p-6 space-y-4">
           <h3 className="text-sm font-semibold text-gray-900">APN Pool Overrides</h3>
           <p className="text-xs text-gray-400">
-            Per-APN pool routing — when a subscriber connects on a specific APN, traffic is routed through its designated pool.
+            Per-APN pool routing — when a device connects on a specific APN, traffic is routed through its designated pool.
           </p>
 
           {apnPools.length === 0 ? (

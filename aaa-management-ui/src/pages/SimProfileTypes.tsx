@@ -204,7 +204,7 @@ function ProfileTypeCard({ def }: { def: ProfileTypeDef }) {
           <p className="text-xs text-gray-500 mt-0.5">{def.subtitle}</p>
         </div>
         <Link
-          to={`/subscribers/new`}
+          to={`/devices/new`}
           className="btn-outline text-xs py-1 px-2.5 shrink-0">
           Create →
         </Link>
@@ -283,7 +283,7 @@ function DbSchemaVisualization() {
     <div className="card p-6 space-y-6">
       <div>
         <h3 className="text-sm font-semibold text-gray-900 mb-1">Data Model</h3>
-        <p className="text-xs text-gray-500">How subscriber data is stored across database tables</p>
+        <p className="text-xs text-gray-500">How device data is stored across database tables</p>
       </div>
 
       {/* Core tables */}
@@ -409,7 +409,7 @@ export default function SimProfileTypes() {
         <p className="text-xs text-gray-400 uppercase tracking-widest font-medium">Reference</p>
         <h1 className="page-title">SIM Profile Types</h1>
         <p className="text-sm text-gray-500 mt-1 max-w-2xl">
-          Each subscriber profile has an <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">ip_resolution</code> mode that
+          Each device profile has an <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">ip_resolution</code> mode that
           determines how IP addresses are allocated — per IMSI, per APN, or at the physical card (ICCID) level.
         </p>
       </div>
