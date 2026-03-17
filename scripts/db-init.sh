@@ -84,23 +84,23 @@ BEGIN
     RAISE NOTICE 'Dropped stale Plan-1 table subscriber_apn_ips';
   END IF;
 
-  -- subscriber_iccid_ips → replaced by device_apn_ips
+  -- subscriber_iccid_ips → replaced by sim_apn_ips
   IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'subscriber_iccid_ips' AND relkind = 'r')
-  AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'device_apn_ips'   AND relkind = 'r') THEN
+  AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'sim_apn_ips'      AND relkind = 'r') THEN
     DROP TABLE subscriber_iccid_ips CASCADE;
     RAISE NOTICE 'Dropped stale Plan-1 table subscriber_iccid_ips';
   END IF;
 
-  -- subscriber_imsis  → replaced by imsi2device  (keep if new table also absent)
+  -- subscriber_imsis  → replaced by imsi2sim  (keep if new table also absent)
   IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'subscriber_imsis' AND relkind = 'r')
-  AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'imsi2device'  AND relkind = 'r') THEN
+  AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'imsi2sim'     AND relkind = 'r') THEN
     DROP TABLE subscriber_imsis CASCADE;
     RAISE NOTICE 'Dropped stale Plan-1 table subscriber_imsis';
   END IF;
 
-  -- subscriber_profiles → replaced by device_profiles
+  -- subscriber_profiles → replaced by sim_profiles
   IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'subscriber_profiles' AND relkind = 'r')
-  AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'device_profiles'  AND relkind = 'r') THEN
+  AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'sim_profiles'    AND relkind = 'r') THEN
     DROP TABLE subscriber_profiles CASCADE;
     RAISE NOTICE 'Dropped stale Plan-1 table subscriber_profiles';
   END IF;

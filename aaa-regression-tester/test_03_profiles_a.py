@@ -21,7 +21,7 @@ STATIC_IP   = "100.65.140.5"
 
 class TestProfileA:
     pool_id:   str | None = None
-    device_id: str | None = None
+    sim_id: str | None = None
 
     @classmethod
     def setup_class(cls):
@@ -37,8 +37,8 @@ class TestProfileA:
         with httpx.Client(base_url=PROVISION_BASE,
                           headers={"Authorization": f"Bearer {JWT_TOKEN}"},
                           timeout=30.0) as c:
-            if cls.device_id:
-                delete_profile(c, cls.device_id)
+            if cls.sim_id:
+                delete_profile(c, cls.sim_id)
             if cls.pool_id:
                 delete_pool(c, cls.pool_id)
 
@@ -53,13 +53,13 @@ class TestProfileA:
             static_ip=STATIC_IP,
             pool_id=TestProfileA.pool_id,
         )
-        assert "device_id" in body
-        TestProfileA.device_id = body["device_id"]
+        assert "sim_id" in body
+        TestProfileA.sim_id = body["sim_id"]
 
     # 3.2 ─────────────────────────────────────────────────────────────────────
     def test_02_get_profile(self, http: httpx.Client):
-        """GET /profiles/{device_id} → 200; iccid_ips[0].static_ip correct."""
-        resp = http.get(f"/profiles/{TestProfileA.device_id}")
+        """GET /profiles/{sim_id} → 200; iccid_ips[0].static_ip correct."""
+        resp = http.get(f"/profiles/{TestProfileA.sim_id}")
         assert resp.status_code == 200
         body = resp.json()
         assert body["iccid"] == ICCID
@@ -96,7 +96,7 @@ class TestProfileA:
     # 3.6 ─────────────────────────────────────────────────────────────────────
     def test_06_suspend_sim(self, http: httpx.Client):
         """PATCH status=suspended → 200."""
-        resp = http.patch(f"/profiles/{TestProfileA.device_id}",
+        resp = http.patch(f"/profiles/{TestProfileA.sim_id}",
                           json={"status": "suspended"})
         assert resp.status_code == 200
 
@@ -111,7 +111,7 @@ class TestProfileA:
     # 3.8 ─────────────────────────────────────────────────────────────────────
     def test_08_reactivate_and_lookup(self, http: httpx.Client, lookup_http: httpx.Client):
         """PATCH status=active → 200; subsequent GET /lookup resolves again."""
-        resp = http.patch(f"/profiles/{TestProfileA.device_id}",
+        resp = http.patch(f"/profiles/{TestProfileA.sim_id}",
                           json={"status": "active"})
         assert resp.status_code == 200
         resp = lookup_http.get("/lookup",
@@ -121,10 +121,10 @@ class TestProfileA:
 
     # 3.9 ─────────────────────────────────────────────────────────────────────
     def test_09_delete_profile(self, http: httpx.Client):
-        """DELETE /profiles/{device_id} → 204; subsequent GET returns 404."""
-        resp = http.delete(f"/profiles/{TestProfileA.device_id}")
+        """DELETE /profiles/{sim_id} → 204; subsequent GET returns 404."""
+        resp = http.delete(f"/profiles/{TestProfileA.sim_id}")
         assert resp.status_code == 204
 
-        resp = http.get(f"/profiles/{TestProfileA.device_id}")
+        resp = http.get(f"/profiles/{TestProfileA.sim_id}")
         assert resp.status_code == 404
-        TestProfileA.device_id = None
+        TestProfileA.sim_id = None

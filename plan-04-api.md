@@ -2,7 +2,7 @@
 
 ## Role
 
-The provisioning service is the CRUD interface for all subscriber data. Operators,
+The provisioning service is the CRUD interface for all SIM data. Operators,
 BSS/OSS systems, and migration scripts use it. It is entirely separate from the
 AAA hot path — no latency SLA applies, but it must be correct and consistent.
 
@@ -34,28 +34,28 @@ AAA hot path — no latency SLA applies, but it must be correct and consistent.
 
 ## Complete Endpoint Reference
 
-### Subscriber Profiles
+### SIM Profiles
 
 | Method | Path | Description | Success | Notes |
 |---|---|---|---|---|
-| `POST` | `/profiles` | Create profile | 201 `{device_id, created_at}` | Validates ip_resolution rules before insert |
-| `GET` | `/profiles/{device_id}` | Get full profile by UUID | 200 full profile JSON | |
+| `POST` | `/profiles` | Create profile | 201 `{sim_id, created_at}` | Validates ip_resolution rules before insert |
+| `GET` | `/profiles/{sim_id}` | Get full profile by UUID | 200 full profile JSON | |
 | `GET` | `/profiles?iccid={iccid}` | Find by ICCID | 200 or 404 | |
 | `GET` | `/profiles?imsi={imsi}` | Find by IMSI | 200 or 404 | Admin/debug use |
 | `GET` | `/profiles?account_name={name}&status=active&ip_resolution={mode}&pool_id={uuid}&page=1&limit=100` | Paginated list | 200 `{items[], total, page}` | Max limit=1000; `pool_id` matches profiles with any IP from that pool |
-| `PUT` | `/profiles/{device_id}` | Replace full profile | 200 | All fields replaced; device_id immutable |
-| `PATCH` | `/profiles/{device_id}` | Partial update (JSON Merge Patch) | 200 | Used to set iccid, change status, update metadata |
-| `DELETE` | `/profiles/{device_id}` | Soft-delete | 204 | Sets status=terminated; data retained |
+| `PUT` | `/profiles/{sim_id}` | Replace full profile | 200 | All fields replaced; sim_id immutable |
+| `PATCH` | `/profiles/{sim_id}` | Partial update (JSON Merge Patch) | 200 | Used to set iccid, change status, update metadata |
+| `DELETE` | `/profiles/{sim_id}` | Soft-delete | 204 | Sets status=terminated; data retained |
 
 ### IMSI Operations
 
 | Method | Path | Description | Success |
 |---|---|---|---|
-| `GET` | `/profiles/{device_id}/imsis` | List all IMSIs on device | 200 `[{imsi, status, priority, apn_ips[]}, ...]` |
-| `GET` | `/profiles/{device_id}/imsis/{imsi}` | Get specific IMSI + apn_ips | 200 |
-| `POST` | `/profiles/{device_id}/imsis` | Add IMSI + apn_ips | 201 |
-| `PATCH` | `/profiles/{device_id}/imsis/{imsi}` | Update IMSI status, priority, or apn_ips | 200 |
-| `DELETE` | `/profiles/{device_id}/imsis/{imsi}` | Remove IMSI and all its apn_ips | 204 |
+| `GET` | `/profiles/{sim_id}/imsis` | List all IMSIs on SIM | 200 `[{imsi, status, priority, apn_ips[]}, ...]` |
+| `GET` | `/profiles/{sim_id}/imsis/{imsi}` | Get specific IMSI + apn_ips | 200 |
+| `POST` | `/profiles/{sim_id}/imsis` | Add IMSI + apn_ips | 201 |
+| `PATCH` | `/profiles/{sim_id}/imsis/{imsi}` | Update IMSI status, priority, or apn_ips | 200 |
+| `DELETE` | `/profiles/{sim_id}/imsis/{imsi}` | Remove IMSI and all its apn_ips | 204 |
 
 ### IP Pools
 
@@ -83,7 +83,7 @@ AAA hot path — no latency SLA applies, but it must be correct and consistent.
 Defines the **APN catalog** for `ip_resolution = "imsi_apn"` or `"iccid_apn"`. Serves
 two purposes simultaneously:
 
-1. **APN catalog** — the full list of APNs to provision per subscriber. On first-connection,
+1. **APN catalog** — the full list of APNs to provision per SIM. On first-connection,
    IPs are allocated for **every APN in this table** in a single transaction, enabling full
    multi-APN auto-allocation (e.g. 2 IMSIs × 2 APNs = 4 IPs per SIM card with no manual
    provisioning). If the connecting APN is absent from the table it is added using the
@@ -127,7 +127,7 @@ This is the only write path that runs in the AAA authentication flow.
 
 | Method | Path | Description | Success | Error |
 |---|---|---|---|---|
-| `POST` | `/first-connection` | Allocate IP and permanently create subscriber profile | 201 new / 200 reused | 404 not in range; 503 pool exhausted |
+| `POST` | `/first-connection` | Allocate IP and permanently create SIM profile | 201 new / 200 reused | 404 not in range; 503 pool exhausted |
 
 **Note:** Returns 201 on first allocation, 200 on idempotent re-request (IMSI already provisioned). aaa-radius-server handles both as Access-Accept.
 
@@ -216,7 +216,7 @@ Content-Type: application/json
 }
 
 HTTP/1.1 201 Created
-{ "device_id": "550e8400-e29b-41d4-a716-446655440000", "created_at": "2026-02-26T10:00:00Z" }
+{ "sim_id": "550e8400-e29b-41d4-a716-446655440000", "created_at": "2026-02-26T10:00:00Z" }
 ```
 
 ### Enrich ICCID
@@ -253,7 +253,7 @@ Content-Type: application/json
 
 {
   "mode": "upsert",
-  "profiles": [ ...up to 100K subscriber_profile objects... ]
+  "profiles": [ ...up to 100K SIM profile objects... ]
 }
 
 HTTP/1.1 202 Accepted
@@ -274,7 +274,7 @@ Content-Type: multipart/form-data; boundary=...
 Content-Disposition: form-data; name="file"; filename="batch.csv"
 Content-Type: text/csv
 
-device_id,iccid,account_name,status,ip_resolution,...
+sim_id,iccid,account_name,status,ip_resolution,...
 ...
 
 HTTP/1.1 202 Accepted
@@ -381,10 +381,10 @@ Content-Type: application/json
 { "imsi": "278770000000042", "apn": "internet.operator.com", "imei": "865914030178379" }
 
 HTTP/1.1 201 Created       ← new allocation
-{ "device_id": "550e8400-e29b-41d4-a716-446655440000", "static_ip": "100.65.120.5" }
+{ "sim_id": "550e8400-e29b-41d4-a716-446655440000", "static_ip": "100.65.120.5" }
 
 HTTP/1.1 200 OK            ← IMSI already provisioned (idempotent re-request)
-{ "device_id": "550e8400-e29b-41d4-a716-446655440000", "static_ip": "100.65.120.5" }
+{ "sim_id": "550e8400-e29b-41d4-a716-446655440000", "static_ip": "100.65.120.5" }
 
 # IMSI not in any active range config:
 HTTP/1.1 404 Not Found
@@ -413,13 +413,13 @@ For the multi-IMSI SIM case above (`imsi_slot` match):
 }
 
 // 404 — Not found
-{ "error": "not_found", "resource": "subscriber_profile", "device_id": "..." }
+{ "error": "not_found", "resource": "subscriber_profile", "sim_id": "..." }
 
 // 409 — ICCID conflict
-{ "error": "iccid_conflict", "iccid": "8944501012345678901", "existing_device_id": "..." }
+{ "error": "iccid_conflict", "iccid": "8944501012345678901", "existing_sim_id": "..." }
 
 // 409 — IMSI conflict
-{ "error": "imsi_conflict", "imsi": "278773000002002", "existing_device_id": "..." }
+{ "error": "imsi_conflict", "imsi": "278773000002002", "existing_sim_id": "..." }
 
 // 409 — Pool in use (on pool DELETE)
 { "error": "pool_in_use", "pool_id": "pool-uuid-abc", "allocated": 1234 }
@@ -456,8 +456,8 @@ No separate worker process or message queue is needed at this scale.
 2. Thread pool picks up job → processes profiles in batches of 1000
    For each batch:
      a. Validate each profile (same rules as single POST)
-     b. INSERT INTO device_profiles ON CONFLICT (device_id) DO UPDATE
-     c. INSERT INTO imsi2device ON CONFLICT (imsi) DO NOTHING
+     b. INSERT INTO sim_profiles ON CONFLICT (sim_id) DO UPDATE
+     c. INSERT INTO imsi2sim ON CONFLICT (imsi) DO NOTHING
      d. INSERT INTO imsi_apn_ips ON CONFLICT DO NOTHING
      e. Accumulate per-row errors (do not abort the whole job on a single bad row)
 3. Update job record: status=completed, processed=N, failed=M, errors=[...]
@@ -476,7 +476,7 @@ One row per IMSI. Rules:
   `account_name` — one row per APN.
 - Multi-IMSI SIM cards in `iccid` / `iccid_apn` mode: one row per IMSI sharing the same `iccid`.
 - The `apn` column is used only for `imsi_apn` / `iccid_apn` modes; leave blank for `imsi` / `iccid`.
-- `static_ip` and `pool_id` may be blank for auto-allocated subscribers (IP assigned on first
+- `static_ip` and `pool_id` may be blank for auto-allocated SIMs (IP assigned on first
   RADIUS connect via range config).
 - For profiles with more than one IMSI and multiple APNs per IMSI, use the JSON bulk endpoint.
 
@@ -521,8 +521,8 @@ only `imsi`, `apn`, and `imei`.
      Claim IP from ip_pool_available (SELECT FOR UPDATE SKIP LOCKED)
      → No IP: ROLLBACK, return 503
 
-     INSERT device_profiles (iccid=NULL, account_name, ip_resolution=$ip_resolution)
-     INSERT imsi2device (imsi, device_id, priority=1)
+     INSERT sim_profiles (iccid=NULL, account_name, ip_resolution=$ip_resolution)
+     INSERT imsi2sim (imsi, sim_id, priority=1)
 
      IF ip_resolution IN ('imsi', 'imsi_apn'):
        INSERT imsi_apn_ips (
@@ -532,8 +532,8 @@ only `imsi`, `apn`, and `imei`.
          pool_id
        )
      ELSIF ip_resolution IN ('iccid', 'iccid_apn'):
-       INSERT device_apn_ips (
-         device_id,
+       INSERT sim_apn_ips (
+         sim_id,
          apn = NULL if 'iccid' else $apn,
          static_ip = $allocated_ip,
          pool_id
@@ -546,30 +546,30 @@ only `imsi`, `apn`, and `imei`.
    derived_iccid = zero-pad(numeric(f_iccid) + offset, len(f_iccid))
 
    BEGIN
-     SELECT device_id FROM device_profiles
+     SELECT sim_id FROM sim_profiles
      WHERE iccid = $derived_iccid FOR UPDATE
 
      IF found (another slot already connected first):
-       Reuse existing device_id and existing static_ip from the card
-       INSERT imsi2device (imsi, device_id, priority=imsi_slot) ON CONFLICT DO NOTHING
+       Reuse existing sim_id and existing static_ip from the card
+       INSERT imsi2sim (imsi, sim_id, priority=imsi_slot) ON CONFLICT DO NOTHING
        IF ip_resolution IN ('imsi', 'imsi_apn'):
          INSERT imsi_apn_ips (imsi, apn=NULL/'$apn', existing_ip) ON CONFLICT DO NOTHING
-       -- iccid/iccid_apn: device_apn_ips already covers all IMSIs on this card
+       -- iccid/iccid_apn: sim_apn_ips already covers all IMSIs on this card
 
      ELSE (first slot to connect for this card):
        Claim one IP from ip_pool_available (SELECT FOR UPDATE SKIP LOCKED)
        → No IP: ROLLBACK, return 503
 
-       INSERT device_profiles (iccid=derived_iccid, account_name,
-                                   ip_resolution=$ip_resolution)
+       INSERT sim_profiles (iccid=derived_iccid, account_name,
+                                ip_resolution=$ip_resolution)
 
        IF ip_resolution IN ('iccid', 'iccid_apn'):
-         INSERT device_apn_ips (device_id, apn=NULL/'$apn', static_ip, pool_id)
+         INSERT sim_apn_ips (sim_id, apn=NULL/'$apn', static_ip, pool_id)
          -- One card-level row covers all sibling IMSIs; no per-IMSI rows needed
 
        FOR each sibling slot in imsi_range_configs WHERE iccid_range_id = X:
          sibling_imsi = zero-pad(numeric(sibling.f_imsi) + offset, 15)
-         INSERT imsi2device (sibling_imsi, device_id, priority=slot) ON CONFLICT DO NOTHING
+         INSERT imsi2sim (sibling_imsi, sim_id, priority=slot) ON CONFLICT DO NOTHING
          IF ip_resolution IN ('imsi', 'imsi_apn'):
            -- Load APN catalog for this sibling's slot; each slot has independent overrides.
            sibling_apn_pools = _load_apn_pools(sibling.id, sibling_base_pool, ip_resolution, $apn)
@@ -578,7 +578,7 @@ only `imsi`, `apn`, and `imei`.
              → No IP: ROLLBACK, return 503
              INSERT imsi_apn_ips (sibling_imsi, apn_val, sibling_ip, apn_pool)
              ON CONFLICT DO NOTHING
-         -- iccid / iccid_apn: device_apn_ips rows already inserted above cover all IMSIs on the card
+         -- iccid / iccid_apn: sim_apn_ips rows already inserted above cover all IMSIs on the card
    COMMIT
    Return 200 {"static_ip": $allocated_ip or $existing_ip}
 ```
@@ -589,8 +589,8 @@ only `imsi`, `apn`, and `imei`.
 |---|---|---|---|
 | `imsi` | NULL (wildcard) | `imsi_apn_ips` | Per IMSI |
 | `imsi_apn` | APN from Access-Request | `imsi_apn_ips` | Per IMSI |
-| `iccid` | NULL (wildcard) | `device_apn_ips` | Card-level (shared by all IMSIs) |
-| `iccid_apn` | APN from Access-Request | `device_apn_ips` | Card-level |
+| `iccid` | NULL (wildcard) | `sim_apn_ips` | Card-level (shared by all IMSIs) |
+| `iccid_apn` | APN from Access-Request | `sim_apn_ips` | Card-level |
 
 **Concurrency safety:** `SELECT ... FOR UPDATE` on the ICCID check prevents two concurrent
 connections from the same multi-IMSI card racing to create duplicate profiles.
@@ -604,7 +604,7 @@ Structured logs per request:
 {
   "ts": "...", "method": "POST", "path": "/profiles",
   "status": 201, "latency_ms": 8.2,
-  "device_id": "550e8400-...", "account_name": "Melita"
+  "sim_id": "550e8400-...", "account_name": "Melita"
 }
 ```
 
@@ -642,5 +642,5 @@ or directly via `COPY` into PostgreSQL staging tables. The provisioning API does
 to know about migration specifically — it just receives the same POST/bulk calls as any
 other provisioning source.
 
-The `PATCH /profiles/{device_id}` endpoint is the mechanism for all post-migration
+The `PATCH /profiles/{sim_id}` endpoint is the mechanism for all post-migration
 ICCID enrichment and APN label renaming.

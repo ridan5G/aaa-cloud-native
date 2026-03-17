@@ -23,7 +23,7 @@ POOL_SUBNET = "100.65.150.0/24"
 
 class TestProfileB:
     pool_id:   str | None = None
-    device_id: str | None = None
+    sim_id: str | None = None
 
     @classmethod
     def setup_class(cls):
@@ -39,8 +39,8 @@ class TestProfileB:
         with httpx.Client(base_url=PROVISION_BASE,
                           headers={"Authorization": f"Bearer {JWT_TOKEN}"},
                           timeout=30.0) as c:
-            if cls.device_id:
-                delete_profile(c, cls.device_id)
+            if cls.sim_id:
+                delete_profile(c, cls.sim_id)
             if cls.pool_id:
                 delete_pool(c, cls.pool_id)
 
@@ -56,8 +56,8 @@ class TestProfileB:
                 {"imsi": IMSI2, "static_ip": IP2, "pool_id": TestProfileB.pool_id},
             ],
         )
-        assert "device_id" in body
-        TestProfileB.device_id = body["device_id"]
+        assert "sim_id" in body
+        TestProfileB.sim_id = body["sim_id"]
 
     # 4.2 ─────────────────────────────────────────────────────────────────────
     def test_02_lookup_imsi1(self, lookup_http: httpx.Client):
@@ -86,15 +86,15 @@ class TestProfileB:
     # 4.5 ─────────────────────────────────────────────────────────────────────
     def test_05_enrich_iccid(self, http: httpx.Client):
         """PATCH iccid → 200; GET confirms iccid populated."""
-        r = http.patch(f"/profiles/{TestProfileB.device_id}", json={"iccid": ICCID})
+        r = http.patch(f"/profiles/{TestProfileB.sim_id}", json={"iccid": ICCID})
         assert r.status_code == 200
-        body = http.get(f"/profiles/{TestProfileB.device_id}").json()
+        body = http.get(f"/profiles/{TestProfileB.sim_id}").json()
         assert body["iccid"] == ICCID
 
     # 4.6 ─────────────────────────────────────────────────────────────────────
     def test_06_suspend_imsi1(self, http: httpx.Client):
-        """PATCH /profiles/{device_id}/imsis/{imsi1} status=suspended → 200."""
-        r = http.patch(f"/profiles/{TestProfileB.device_id}/imsis/{IMSI1}",
+        """PATCH /profiles/{sim_id}/imsis/{imsi1} status=suspended → 200."""
+        r = http.patch(f"/profiles/{TestProfileB.sim_id}/imsis/{IMSI1}",
                        json={"status": "suspended"})
         assert r.status_code == 200
 
@@ -118,7 +118,7 @@ class TestProfileB:
     def test_09_update_imsi1_ip(self, http: httpx.Client, lookup_http: httpx.Client):
         """PATCH imsi1 static_ip → 200; subsequent GET /lookup returns new IP."""
         # Reactivate + change IP
-        r = http.patch(f"/profiles/{TestProfileB.device_id}/imsis/{IMSI1}",
+        r = http.patch(f"/profiles/{TestProfileB.sim_id}/imsis/{IMSI1}",
                        json={"status": "active", "static_ip": IP_NEW,
                              "pool_id": TestProfileB.pool_id})
         assert r.status_code == 200

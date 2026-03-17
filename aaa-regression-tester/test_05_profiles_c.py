@@ -32,7 +32,7 @@ APN_UNKNOWN = "smf9.unknown.com"
 
 class TestProfileC:
     pool_id:   str | None = None
-    device_id: str | None = None
+    sim_id: str | None = None
 
     @classmethod
     def setup_class(cls):
@@ -48,8 +48,8 @@ class TestProfileC:
         with httpx.Client(base_url=PROVISION_BASE,
                           headers={"Authorization": f"Bearer {JWT_TOKEN}"},
                           timeout=30.0) as c:
-            if cls.device_id:
-                delete_profile(c, cls.device_id)
+            if cls.sim_id:
+                delete_profile(c, cls.sim_id)
             if cls.pool_id:
                 delete_pool(c, cls.pool_id)
 
@@ -79,8 +79,8 @@ class TestProfileC:
                 },
             ],
         )
-        assert "device_id" in body
-        TestProfileC.device_id = body["device_id"]
+        assert "sim_id" in body
+        TestProfileC.sim_id = body["sim_id"]
 
     # 5.2 ─────────────────────────────────────────────────────────────────────
     def test_02_lookup_imsi1_smf1(self, lookup_http: httpx.Client):
@@ -118,7 +118,7 @@ class TestProfileC:
     def test_06_add_wildcard_apn_entry(self, http: httpx.Client):
         """PATCH imsi1 — add {apn:null, static_ip:IP_D} wildcard entry → 200."""
         r = http.patch(
-            f"/profiles/{TestProfileC.device_id}/imsis/{IMSI1}",
+            f"/profiles/{TestProfileC.sim_id}/imsis/{IMSI1}",
             json={
                 "apn_ips": [
                     {"apn": APN_SMF1, "static_ip": IP_A,

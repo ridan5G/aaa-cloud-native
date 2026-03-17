@@ -22,7 +22,7 @@ aaa-regression-tester/
 ├── fixtures/
 │   ├── pools.py              # create/teardown ip_pools
 │   ├── range_configs.py      # create/teardown imsi_range_configs
-│   └── profiles.py           # create/teardown device_profiles
+│   └── profiles.py           # create/teardown sim_profiles
 ├── test_01_pools.py          # IP pool CRUD + stats
 ├── test_02_range_configs.py  # IMSI range config CRUD
 ├── test_03_profiles_a.py     # Profile A (ip_resolution=iccid) CRUD + lookup
@@ -106,15 +106,15 @@ All GET /lookup calls use **IMSI + APN as input** and expect `{"static_ip": "...
 
 | # | Test | Expected |
 |---|---|---|
-| 3.1 | POST /profiles — iccid mode, 2 IMSIs, 1 iccid_ip (no apn field) | 201, `device_id` returned |
-| 3.2 | GET /profiles/{device_id} | 200, `iccid_ips[0].static_ip` = 100.65.120.5 |
+| 3.1 | POST /profiles — iccid mode, 2 IMSIs, 1 iccid_ip (no apn field) | 201, `sim_id` returned |
+| 3.2 | GET /profiles/{sim_id} | 200, `iccid_ips[0].static_ip` = 100.65.120.5 |
 | 3.3 | GET /lookup?imsi={imsi1}&apn=internet.operator.com | 200, `{"static_ip":"100.65.120.5"}` |
 | 3.4 | GET /lookup?imsi={imsi2}&apn=ims.operator.com | 200, same IP (different IMSI, APN ignored) |
 | 3.5 | GET /lookup?imsi={imsi1}&apn=any.garbage.apn | 200, same IP (APN irrelevant in iccid mode) |
-| 3.6 | PATCH /profiles/{device_id} — change status to suspended | 200 |
+| 3.6 | PATCH /profiles/{sim_id} — change status to suspended | 200 |
 | 3.7 | GET /lookup after SIM suspended | 403 `{"error":"suspended"}` |
 | 3.8 | PATCH status back to active; GET /lookup | 200, IP resolves again |
-| 3.9 | DELETE /profiles/{device_id} | 204, subsequent GET returns 404 |
+| 3.9 | DELETE /profiles/{sim_id} | 204, subsequent GET returns 404 |
 
 ---
 
@@ -126,11 +126,11 @@ All GET /lookup calls use **IMSI + APN as input** and expect `{"static_ip": "...
 | 4.2 | GET /lookup?imsi={imsi1}&apn=internet.operator.com | 200, `{"static_ip":"100.65.120.5"}` |
 | 4.3 | GET /lookup?imsi={imsi1}&apn=ims.operator.com | 200, same IP (APN ignored in imsi mode) |
 | 4.4 | GET /lookup?imsi={imsi2}&apn=internet.operator.com | 200, `{"static_ip":"101.65.120.5"}` |
-| 4.5 | PATCH /profiles/{device_id} — set real iccid | 200; GET shows iccid populated |
-| 4.6 | PATCH /profiles/{device_id}/imsis/{imsi1} — suspend IMSI #1 | 200 |
+| 4.5 | PATCH /profiles/{sim_id} — set real iccid | 200; GET shows iccid populated |
+| 4.6 | PATCH /profiles/{sim_id}/imsis/{imsi1} — suspend IMSI #1 | 200 |
 | 4.7 | GET /lookup?imsi={imsi1}&apn=internet.operator.com | 403 `{"error":"suspended"}` |
 | 4.8 | GET /lookup?imsi={imsi2}&apn=internet.operator.com | 200, IMSI #2 still resolves |
-| 4.9 | PATCH /profiles/{device_id}/imsis/{imsi1} — update static_ip | 200; GET /lookup returns new IP |
+| 4.9 | PATCH /profiles/{sim_id}/imsis/{imsi1} — update static_ip | 200; GET /lookup returns new IP |
 
 ---
 
@@ -143,7 +143,7 @@ All GET /lookup calls use **IMSI + APN as input** and expect `{"static_ip": "...
 | 5.3 | GET /lookup?imsi={imsi1}&apn=smf2.operator.com | 200, `{"static_ip":"IP_B"}` |
 | 5.4 | GET /lookup?imsi={imsi2}&apn=smf3.operator.com | 200, `{"static_ip":"IP_C"}` |
 | 5.5 | GET /lookup?imsi={imsi1}&apn=smf9.unknown.com (no match, no wildcard) | 404 `{"error":"apn_not_found"}` |
-| 5.6 | POST /profiles/{device_id}/imsis/{imsi1} — add apn_ip {apn:null, ip:IP_D} (wildcard) | 200 |
+| 5.6 | POST /profiles/{sim_id}/imsis/{imsi1} — add apn_ip {apn:null, ip:IP_D} (wildcard) | 200 |
 | 5.7 | GET /lookup?imsi={imsi1}&apn=smf9.unknown.com | 200, `{"static_ip":"IP_D"}` (wildcard fires) |
 | 5.8 | GET /lookup?imsi={imsi1}&apn=smf1.operator.com after wildcard added | 200, `{"static_ip":"IP_A"}` (exact wins) |
 | 5.9 | Two concurrent GET /lookup for smf1 + smf2 same IMSI | both return their respective IPs |
@@ -154,13 +154,13 @@ All GET /lookup calls use **IMSI + APN as input** and expect `{"static_ip": "...
 
 | # | Test | Expected |
 |---|---|---|
-| 6.1 | GET /profiles/{device_id}/imsis | 200, list contains current IMSIs |
-| 6.2 | POST /profiles/{device_id}/imsis — add new IMSI with apn_ips | 201 |
+| 6.1 | GET /profiles/{sim_id}/imsis | 200, list contains current IMSIs |
+| 6.2 | POST /profiles/{sim_id}/imsis — add new IMSI with apn_ips | 201 |
 | 6.3 | GET /lookup?imsi={new_imsi}&apn=internet.operator.com | 200, `{"static_ip":"..."}` |
-| 6.4 | GET /profiles/{device_id}/imsis/{new_imsi} | 200, apn_ips correct |
-| 6.5 | DELETE /profiles/{device_id}/imsis/{new_imsi} | 204 |
+| 6.4 | GET /profiles/{sim_id}/imsis/{new_imsi} | 200, apn_ips correct |
+| 6.5 | DELETE /profiles/{sim_id}/imsis/{new_imsi} | 204 |
 | 6.6 | GET /lookup after IMSI deleted | 404 |
-| 6.7 | POST /profiles/{device_id}/imsis — IMSI already assigned to another device | 409 `imsi_conflict` |
+| 6.7 | POST /profiles/{sim_id}/imsis — IMSI already assigned to another SIM | 409 `imsi_conflict` |
 | 6.8 | DELETE last IMSI on a profile | 400 (profile must have at least 1 IMSI) or allowed (business decision to record) |
 
 ---
@@ -172,7 +172,7 @@ Allocation is transparent: caller always uses `GET /lookup`, same endpoint as no
 | # | Test | Expected |
 |---|---|---|
 | 7.1 | Setup: pool + active range config covering IMSI range | — |
-| 7.2 | IMSI in range, not yet in device_profiles → GET /lookup?imsi={imsi}&apn=internet.operator.com | 200, `{"static_ip":"..."}` — profile created |
+| 7.2 | IMSI in range, not yet in sim_profiles → GET /lookup?imsi={imsi}&apn=internet.operator.com | 200, `{"static_ip":"..."}` — profile created |
 | 7.3 | Same IMSI again → GET /lookup | 200, same IP (existing profile, no re-allocation) |
 | 7.4 | GET /pools/{pool_id}/stats after allocation | `allocated` +1, `available` -1 |
 | 7.5 | GET /profiles?imsi={imsi} — verify auto-created profile | 200, ip_resolution=imsi, iccid=null |
@@ -189,11 +189,11 @@ Allocation is transparent: caller always uses `GET /lookup`, same endpoint as no
 |---|---|---|
 | 8.1 | POST /profiles/bulk with 500 Profile-A + 500 Profile-B + 500 Profile-C | 202, `job_id` returned |
 | 8.2 | Poll GET /jobs/{job_id} until status=completed (max 10 min timeout) | `processed=1500`, `failed=0` |
-| 8.3 | Spot-check 10 random device_ids → GET /profiles/{device_id} | 200, profile fields correct |
+| 8.3 | Spot-check 10 random sim_ids → GET /profiles/{sim_id} | 200, profile fields correct |
 | 8.4 | GET /lookup for 10 random IMSIs from the batch | 200, all return correct static_ip |
 | 8.5 | POST /profiles/bulk with 1 valid + 1 invalid IMSI (14 digits) | 202; job completed; `failed=1`, `processed=1` |
 | 8.6 | GET /jobs/{job_id} errors array contains field=imsi details | 200, error row present |
-| 8.7 | Bulk upsert same device_id twice (idempotency) | second upsert updates, total profile count unchanged |
+| 8.7 | Bulk upsert same sim_id twice (idempotency) | second upsert updates, total profile count unchanged |
 | 8.8 | POST /profiles/bulk with CSV file upload (multipart/form-data) | 202, same job flow |
 
 ---
@@ -204,7 +204,7 @@ Runs the migration script against a controlled sample MariaDB dump (fixture data
 
 | # | Test | Expected |
 |---|---|---|
-| 9.1 | Run migration script on Athens-only sample dump | device_profiles count = distinct ICCID-groups + unmatched IMSIs |
+| 9.1 | Run migration script on Athens-only sample dump | sim_profiles count = distinct ICCID-groups + unmatched IMSIs |
 | 9.2 | IMSI in imsi_iccid_map.csv → GET /profiles?imsi={imsi} | `iccid` = real ICCID from map |
 | 9.3 | IMSI not in map → GET /profiles?imsi={imsi} | `iccid` = null |
 | 9.4 | IMSI in 2 dumps, different IPs, same client → GET /profiles?imsi={imsi} | ip_resolution=imsi_apn, 2 apn_ips with apn=pgw1 and apn=pgw2 |
@@ -226,7 +226,7 @@ Runs the migration script against a controlled sample MariaDB dump (fixture data
 | 10.6 | POST /profiles — duplicate IMSI | 409 `imsi_conflict` |
 | 10.7 | GET /profiles/{unknown_uuid} | 404 |
 | 10.8 | DELETE terminated profile | 404 |
-| 10.9 | PATCH /profiles/{device_id} — ICCID already used by another profile | 409 |
+| 10.9 | PATCH /profiles/{sim_id} — ICCID already used by another profile | 409 |
 | 10.10 | GET /lookup — suspended SIM | 403 `{"error":"suspended"}` |
 | 10.11 | PATCH ip_resolution from imsi → imsi_apn without adding apn fields | 400 validation_failed |
 | 10.12 | PATCH ip_resolution from imsi → iccid; supply valid iccid_ips; verify old apn_ips cleared | 200; GET /lookup returns iccid_static_ip |
@@ -249,7 +249,7 @@ All timings measured end-to-end from test client to API response.
 | 11.4 | 10 concurrent POST /profiles/bulk (100 profiles each) | all complete; 0 errors |
 | 11.5 | 10 concurrent first-connection GET /lookup (distinct IMSIs, same pool) | 10 distinct IPs; 0 duplicates |
 | 11.6 | GET /pools/{pool_id}/stats with 300K allocated rows | response ≤ 200ms |
-| 11.7 | GET /profiles/{device_id} full profile (many IMSIs) | response ≤ 50ms |
+| 11.7 | GET /profiles/{sim_id} full profile (many IMSIs) | response ≤ 50ms |
 
 ---
 

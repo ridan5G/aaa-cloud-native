@@ -29,10 +29,10 @@ SELECT
     sa.static_ip        AS imsi_static_ip,
     ci.apn              AS iccid_apn,
     ci.static_ip        AS iccid_static_ip
-FROM        imsi2device    si
-JOIN        device_profiles sp ON sp.device_id = si.device_id
+FROM        imsi2sim       si
+JOIN        sim_profiles   sp ON sp.sim_id    = si.sim_id
 LEFT JOIN   imsi_apn_ips  sa ON sa.imsi       = si.imsi
-LEFT JOIN   device_apn_ips ci ON ci.device_id = sp.device_id
+LEFT JOIN   sim_apn_ips   ci ON ci.sim_id     = sp.sim_id
 WHERE       si.imsi = $1
 )SQL";
 

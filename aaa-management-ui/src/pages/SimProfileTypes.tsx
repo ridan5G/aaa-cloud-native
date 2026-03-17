@@ -176,7 +176,7 @@ const PROFILE_TYPES: ProfileTypeDef[] = [
     title:       'ICCID',
     subtitle:    'Card-level, APN-agnostic',
     accentColor: 'border-purple-400',
-    storage:     'device_apn_ips  (apn = NULL)',
+    storage:     'sim_apn_ips  (apn = NULL)',
     description: 'The physical SIM card (ICCID) gets one IP address, shared across all IMSIs loaded onto it. First-connection auto-provisions all sibling IMSIs.',
     useCases:    ['Multi-IMSI SIM roaming profiles', 'Dual-SIM hotspot cards', 'Carrier aggregation scenarios'],
     Diagram:     IccidDiagram,
@@ -186,7 +186,7 @@ const PROFILE_TYPES: ProfileTypeDef[] = [
     title:       'ICCID + APN',
     subtitle:    'Card-level, per-APN',
     accentColor: 'border-green-400',
-    storage:     'device_apn_ips  (apn = <value>)',
+    storage:     'sim_apn_ips  (apn = <value>)',
     description: 'The physical SIM card shares IPs per APN across all its IMSIs. Combines card-level sharing with per-service traffic steering.',
     useCases:    ['Multi-IMSI SIM with VoLTE', 'Roaming profiles with IMS split', 'Complex multi-profile IoT cards'],
     Diagram:     IccidApnDiagram,
@@ -246,7 +246,7 @@ function ComparisonTable() {
     { label: 'IP stored at', imsi: 'IMSI level', imsi_apn: 'IMSI level', iccid: 'Card (ICCID)', iccid_apn: 'Card (ICCID)' },
     { label: 'APN-aware', imsi: '✗', imsi_apn: '✓', iccid: '✗', iccid_apn: '✓' },
     { label: 'IMSIs share IP', imsi: '✗', imsi_apn: '✗', iccid: '✓', iccid_apn: '✓ per APN' },
-    { label: 'DB table', imsi: 'imsi_apn_ips', imsi_apn: 'imsi_apn_ips', iccid: 'device_apn_ips', iccid_apn: 'device_apn_ips' },
+    { label: 'DB table', imsi: 'imsi_apn_ips', imsi_apn: 'imsi_apn_ips', iccid: 'sim_apn_ips', iccid_apn: 'sim_apn_ips' },
     { label: 'Auto-sibling provisioning', imsi: '—', imsi_apn: '—', iccid: '✓', iccid_apn: '✓' },
   ]
   return (
@@ -283,7 +283,7 @@ function DbSchemaVisualization() {
     <div className="card p-6 space-y-6">
       <div>
         <h3 className="text-sm font-semibold text-gray-900 mb-1">Data Model</h3>
-        <p className="text-xs text-gray-500">How device data is stored across database tables</p>
+        <p className="text-xs text-gray-500">How SIM data is stored across database tables</p>
       </div>
 
       {/* Core tables */}
@@ -291,23 +291,23 @@ function DbSchemaVisualization() {
         <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">Profile Data Flow</p>
         <div className="overflow-x-auto pb-2">
           <div className="flex items-center gap-2 min-w-max">
-            <DbTable name="device_profiles" fields={['device_id (PK)', 'iccid', 'account_name', 'status', 'ip_resolution', 'metadata']} accent="navy" />
+            <DbTable name="sim_profiles" fields={['sim_id (PK)', 'iccid', 'account_name', 'status', 'ip_resolution', 'metadata']} accent="navy" />
             <div className="flex flex-col gap-6 items-start">
               <div className="flex items-center gap-2">
                 <Arrow />
-                <DbTable name="imsi2device" fields={['imsi (PK)', 'device_id (FK)', 'priority', 'status']} accent="blue" />
+                <DbTable name="imsi2sim" fields={['imsi (PK)', 'sim_id (FK)', 'priority', 'status']} accent="blue" />
                 <Arrow />
                 <DbTable name="imsi_apn_ips" fields={['imsi (FK)', 'apn (nullable)', 'static_ip', 'pool_id (FK)']} accent="green" />
               </div>
               <div className="flex items-center gap-2">
                 <Arrow />
-                <DbTable name="device_apn_ips" fields={['device_id (FK)', 'apn (nullable)', 'static_ip', 'pool_id (FK)']} accent="purple" />
+                <DbTable name="sim_apn_ips" fields={['sim_id (FK)', 'apn (nullable)', 'static_ip', 'pool_id (FK)']} accent="purple" />
               </div>
             </div>
           </div>
           <p className="text-xs text-gray-400 mt-2 ml-2 italic">
             imsi_apn_ips used for <code className="bg-gray-100 px-1 rounded">imsi / imsi_apn</code> modes ·
-            device_apn_ips used for <code className="bg-gray-100 px-1 rounded">iccid / iccid_apn</code> modes
+            sim_apn_ips used for <code className="bg-gray-100 px-1 rounded">iccid / iccid_apn</code> modes
           </p>
         </div>
 
@@ -409,7 +409,7 @@ export default function SimProfileTypes() {
         <p className="text-xs text-gray-400 uppercase tracking-widest font-medium">Reference</p>
         <h1 className="page-title">SIM Profile Types</h1>
         <p className="text-sm text-gray-500 mt-1 max-w-2xl">
-          Each device profile has an <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">ip_resolution</code> mode that
+          Each SIM profile has an <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">ip_resolution</code> mode that
           determines how IP addresses are allocated — per IMSI, per APN, or at the physical card (ICCID) level.
         </p>
       </div>

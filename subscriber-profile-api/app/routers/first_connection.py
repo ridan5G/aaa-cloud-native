@@ -114,11 +114,11 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
 
     # ── Idempotency: return existing allocation if IMSI already provisioned ────
     existing_imsi = await conn.fetchrow(
-        "SELECT device_id::text FROM imsi2device WHERE imsi = $1",
+        "SELECT sim_id::text FROM imsi2sim WHERE imsi = $1",
         body.imsi,
     )
     if existing_imsi:
-        device_id = existing_imsi["device_id"]
+        sim_id = existing_imsi["sim_id"]
         # Prefer exact APN match; fall back to apn=NULL (imsi/iccid modes store NULL).
         static_ip = await conn.fetchval(
             "SELECT host(static_ip) FROM imsi_apn_ips WHERE imsi = $1 AND (apn = $2 OR apn IS NULL) ORDER BY apn NULLS LAST LIMIT 1",
@@ -126,8 +126,8 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
         )
         if not static_ip:
             static_ip = await conn.fetchval(
-                "SELECT host(static_ip) FROM device_apn_ips WHERE device_id = $1::uuid AND (apn = $2 OR apn IS NULL) ORDER BY apn NULLS LAST LIMIT 1",
-                device_id, body.apn,
+                "SELECT host(static_ip) FROM sim_apn_ips WHERE sim_id = $1::uuid AND (apn = $2 OR apn IS NULL) ORDER BY apn NULLS LAST LIMIT 1",
+                sim_id, body.apn,
             )
         first_connection_total.labels(result="reused").inc()
         logger.info(
@@ -136,7 +136,7 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
         )
         return JSONResponse(
             status_code=200,
-            content={"device_id": device_id, "static_ip": static_ip},
+            content={"sim_id": sim_id, "static_ip": static_ip},
         )
 
     # Step 1: Find matching range config.
@@ -178,18 +178,18 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
             allocated_ip = None
 
             metadata = json.dumps({"tags": ["auto-allocated"], "imei": body.imei})
-            device_id = await conn.fetchval(
+            sim_id = await conn.fetchval(
                 """
-                INSERT INTO device_profiles (account_name, status, ip_resolution, metadata)
+                INSERT INTO sim_profiles (account_name, status, ip_resolution, metadata)
                 VALUES ($1, 'active', $2, $3::jsonb)
-                RETURNING device_id::text
+                RETURNING sim_id::text
                 """,
                 account_name, ip_resolution, metadata,
             )
 
             await conn.execute(
-                "INSERT INTO imsi2device (imsi, device_id, status, priority) VALUES ($1, $2::uuid, 'active', 1)",
-                body.imsi, device_id,
+                "INSERT INTO imsi2sim (imsi, sim_id, status, priority) VALUES ($1, $2::uuid, 'active', 1)",
+                body.imsi, sim_id,
             )
 
             request_apn_val = body.apn if ip_resolution in ("imsi_apn", "iccid_apn") else None
@@ -209,8 +209,8 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
                     )
                 else:  # iccid / iccid_apn
                     await conn.execute(
-                        "INSERT INTO device_apn_ips (device_id, apn, static_ip, pool_id) VALUES ($1::uuid, $2, $3::inet, $4::uuid)",
-                        device_id, apn_val, ip, apn_pool,
+                        "INSERT INTO sim_apn_ips (sim_id, apn, static_ip, pool_id) VALUES ($1::uuid, $2, $3::inet, $4::uuid)",
+                        sim_id, apn_val, ip, apn_pool,
                     )
                 if apn_val == request_apn_val:
                     allocated_ip = ip
@@ -224,7 +224,7 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
         )
         return JSONResponse(
             status_code=201,
-            content={"device_id": device_id, "static_ip": allocated_ip},
+            content={"sim_id": sim_id, "static_ip": allocated_ip},
         )
 
     # ── Multi-IMSI SIM path ───────────────────────────────────────────────────
@@ -236,18 +236,18 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
 
     async with conn.transaction():
         existing = await conn.fetchrow(
-            "SELECT device_id::text FROM device_profiles WHERE iccid = $1 FOR UPDATE",
+            "SELECT sim_id::text FROM sim_profiles WHERE iccid = $1 FOR UPDATE",
             derived_iccid,
         )
 
         if existing:
             # Card already exists — sibling slot connected first and pre-provisioned
             # all siblings including this one. This branch is the safety net for edge
-            # cases (crash mid-transaction, manual imsi2device removal, etc.).
-            device_id = existing["device_id"]
+            # cases (crash mid-transaction, manual imsi2sim removal, etc.).
+            sim_id = existing["sim_id"]
             await conn.execute(
-                "INSERT INTO imsi2device (imsi, device_id, status, priority) VALUES ($1, $2::uuid, 'active', $3) ON CONFLICT DO NOTHING",
-                body.imsi, device_id, range_row["imsi_slot"],
+                "INSERT INTO imsi2sim (imsi, sim_id, status, priority) VALUES ($1, $2::uuid, 'active', $3) ON CONFLICT DO NOTHING",
+                body.imsi, sim_id, range_row["imsi_slot"],
             )
 
             if ip_resolution in ("imsi", "imsi_apn"):
@@ -278,8 +278,8 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
             else:
                 apn_val = None if ip_resolution == "iccid" else body.apn
                 allocated_ip = await conn.fetchval(
-                    "SELECT host(static_ip) FROM device_apn_ips WHERE device_id = $1::uuid AND apn IS NOT DISTINCT FROM $2 LIMIT 1",
-                    device_id, apn_val,
+                    "SELECT host(static_ip) FROM sim_apn_ips WHERE sim_id = $1::uuid AND apn IS NOT DISTINCT FROM $2 LIMIT 1",
+                    sim_id, apn_val,
                 )
 
             first_connection_total.labels(result="reused").inc()
@@ -290,7 +290,7 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
             )
             return JSONResponse(
                 status_code=200,
-                content={"device_id": device_id, "static_ip": allocated_ip},
+                content={"sim_id": sim_id, "static_ip": allocated_ip},
             )
 
         # ── First slot to connect for this card ───────────────────────────────
@@ -299,18 +299,18 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
         allocated_ip = None
 
         metadata = json.dumps({"tags": ["auto-allocated", "multi-imsi"], "imei": body.imei})
-        device_id = await conn.fetchval(
+        sim_id = await conn.fetchval(
             """
-            INSERT INTO device_profiles (account_name, status, ip_resolution, iccid, metadata)
+            INSERT INTO sim_profiles (account_name, status, ip_resolution, iccid, metadata)
             VALUES ($1, 'active', $2, $3, $4::jsonb)
-            RETURNING device_id::text
+            RETURNING sim_id::text
             """,
             account_name, ip_resolution, derived_iccid, metadata,
         )
 
         await conn.execute(
-            "INSERT INTO imsi2device (imsi, device_id, status, priority) VALUES ($1, $2::uuid, 'active', $3)",
-            body.imsi, device_id, range_row["imsi_slot"],
+            "INSERT INTO imsi2sim (imsi, sim_id, status, priority) VALUES ($1, $2::uuid, 'active', $3)",
+            body.imsi, sim_id, range_row["imsi_slot"],
         )
 
         request_apn_val = body.apn if ip_resolution in ("imsi_apn", "iccid_apn") else None
@@ -330,8 +330,8 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
                 )
             else:  # iccid / iccid_apn
                 await conn.execute(
-                    "INSERT INTO device_apn_ips (device_id, apn, static_ip, pool_id) VALUES ($1::uuid, $2, $3::inet, $4::uuid)",
-                    device_id, apn_val, ip, apn_pool,
+                    "INSERT INTO sim_apn_ips (sim_id, apn, static_ip, pool_id) VALUES ($1::uuid, $2, $3::inet, $4::uuid)",
+                    sim_id, apn_val, ip, apn_pool,
                 )
             if apn_val == request_apn_val:
                 allocated_ip = ip
@@ -353,8 +353,8 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
             sibling_base_pool = sibling["pool_id"] or pool_id
 
             await conn.execute(
-                "INSERT INTO imsi2device (imsi, device_id, status, priority) VALUES ($1, $2::uuid, 'active', $3) ON CONFLICT DO NOTHING",
-                sibling_imsi, device_id, sibling["imsi_slot"],
+                "INSERT INTO imsi2sim (imsi, sim_id, status, priority) VALUES ($1, $2::uuid, 'active', $3) ON CONFLICT DO NOTHING",
+                sibling_imsi, sim_id, sibling["imsi_slot"],
             )
 
             if ip_resolution in ("imsi", "imsi_apn"):
@@ -374,7 +374,7 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
                         "INSERT INTO imsi_apn_ips (imsi, apn, static_ip, pool_id) VALUES ($1, $2, $3::inet, $4::uuid) ON CONFLICT DO NOTHING",
                         sibling_imsi, apn_val, sibling_ip, apn_pool,
                     )
-            # iccid/iccid_apn: card-level device_apn_ips rows already inserted above.
+            # iccid/iccid_apn: card-level sim_apn_ips rows already inserted above.
 
             siblings_provisioned += 1
 
@@ -390,5 +390,5 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
     )
     return JSONResponse(
         status_code=201,
-        content={"device_id": device_id, "static_ip": allocated_ip},
+        content={"sim_id": sim_id, "static_ip": allocated_ip},
     )

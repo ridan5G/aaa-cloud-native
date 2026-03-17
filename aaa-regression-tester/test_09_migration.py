@@ -72,7 +72,7 @@ class TestMigration:
 
     pool_id:      str | None = None
     range_cfg_id: str | None = None
-    device_ids:   list[str] = []
+    sim_ids:   list[str] = []
 
     @classmethod
     def setup_class(cls):
@@ -112,7 +112,7 @@ class TestMigration:
                                "pool_name": "athens-migrated"}],
             })
             assert r.status_code == 201, f"seed IMSI_WITH_ICCID: {r.text}"
-            cls.device_ids.append(r.json()["device_id"])
+            cls.sim_ids.append(r.json()["sim_id"])
 
             # ── IMSI_NO_ICCID profile (imsi mode, iccid=null) ─────────────────
             r = c.post("/profiles", json={
@@ -128,7 +128,7 @@ class TestMigration:
                 ],
             })
             assert r.status_code == 201, f"seed IMSI_NO_ICCID: {r.text}"
-            cls.device_ids.append(r.json()["device_id"])
+            cls.sim_ids.append(r.json()["sim_id"])
 
             # ── IMSI_DUAL_APN (imsi_apn mode, 2 different IPs, 2 APNs) ────────
             r = c.post("/profiles", json={
@@ -153,7 +153,7 @@ class TestMigration:
                 ],
             })
             assert r.status_code == 201, f"seed IMSI_DUAL_APN: {r.text}"
-            cls.device_ids.append(r.json()["device_id"])
+            cls.sim_ids.append(r.json()["sim_id"])
 
             # ── IMSI_SAME_IP (imsi mode, same IP in both dumps → deduplicated) ─
             r = c.post("/profiles", json={
@@ -169,7 +169,7 @@ class TestMigration:
                 ],
             })
             assert r.status_code == 201, f"seed IMSI_SAME_IP: {r.text}"
-            cls.device_ids.append(r.json()["device_id"])
+            cls.sim_ids.append(r.json()["sim_id"])
 
     @classmethod
     def teardown_class(cls):
@@ -179,7 +179,7 @@ class TestMigration:
         with httpx.Client(base_url=PROVISION_BASE,
                           headers={"Authorization": f"Bearer {JWT_TOKEN}"},
                           timeout=30.0) as c:
-            for did in cls.device_ids:
+            for did in cls.sim_ids:
                 try:
                     c.delete(f"/profiles/{did}")
                 except Exception:
@@ -235,9 +235,9 @@ class TestMigration:
         assert profile["ip_resolution"] == "imsi_apn", \
             f"Expected imsi_apn, got {profile['ip_resolution']}"
 
-        # GET /profile/{device_id} to check apn_ips count
-        device_id = profile["device_id"]
-        r2 = http.get(f"/profiles/{device_id}")
+        # GET /profile/{sim_id} to check apn_ips count
+        sim_id = profile["sim_id"]
+        r2 = http.get(f"/profiles/{sim_id}")
         assert r2.status_code == 200
         imsis = r2.json().get("imsis", [])
         apn_ips = next(

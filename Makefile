@@ -220,7 +220,7 @@ db-flush-stale:                 ## Full profile cleanup: truncates all device/IM
 	  -o jsonpath='{.items[0].metadata.name}'); \
 	kubectl exec -i "$$POD" -n $(NAMESPACE) -- \
 	  psql -U postgres -d $(DB_NAME) -v ON_ERROR_STOP=1 \
-	  -c "TRUNCATE imsi_apn_ips, device_apn_ips, imsi2device, device_profiles CASCADE"
+	  -c "TRUNCATE imsi_apn_ips, sim_apn_ips, imsi2sim, sim_profiles CASCADE"
 	@echo "All profile data removed. Pools and range configs preserved."
 
 # ── Regression tests ──────────────────────────────────────────

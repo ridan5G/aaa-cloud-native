@@ -86,10 +86,10 @@ function DeviceList() {
               </tr></thead>
               <tbody>
                 {items.map(p => (
-                  <tr key={p.device_id}
+                  <tr key={p.sim_id}
                     className="border-b border-border hover:bg-page transition-colors cursor-pointer"
-                    onClick={() => navigate(p.device_id)}>
-                    <td className="px-4 py-3 font-mono text-xs text-gray-500">{p.device_id.slice(0, 8)}…</td>
+                    onClick={() => navigate(p.sim_id)}>
+                    <td className="px-4 py-3 font-mono text-xs text-gray-500">{p.sim_id.slice(0, 8)}…</td>
                     <td className="px-4 py-3 text-sm font-mono text-xs">
                       {p.iccid ? p.iccid.slice(0, 12) + '…' : <span className="text-gray-400">—</span>}
                     </td>
@@ -170,7 +170,7 @@ function ImsiApnIpsList({ apnIps }: { apnIps: { apn: string | null; static_ip: s
 
 // ─── Profile Detail ───────────────────────────────────────────────────────────
 function ProfileDetail() {
-  const { device_id } = useParams<{ device_id: string }>()
+  const { sim_id } = useParams<{ sim_id: string }>()
   const navigate = useNavigate()
   const { show } = useToasts()
   const [profile, setProfile] = useState<Profile | null>(null)
@@ -182,12 +182,12 @@ function ProfileDetail() {
   const [saving,  setSaving]  = useState(false)
 
   async function load() {
-    if (!device_id) return
+    if (!sim_id) return
     setLoading(true)
     try {
       const [pr, ir] = await Promise.all([
-        apiClient.get(`/profiles/${device_id}`),
-        apiClient.get(`/profiles/${device_id}/imsis`).catch(() => ({ data: [] })),
+        apiClient.get(`/profiles/${sim_id}`),
+        apiClient.get(`/profiles/${sim_id}/imsis`).catch(() => ({ data: [] })),
       ])
       setProfile(pr.data)
       const d = ir.data
@@ -195,21 +195,21 @@ function ProfileDetail() {
     } catch (e) { setError(String(e)) } finally { setLoading(false) }
   }
 
-  useEffect(() => { load() }, [device_id]) // eslint-disable-line
+  useEffect(() => { load() }, [sim_id]) // eslint-disable-line
 
   async function patchProfile(body: Record<string, unknown>) {
-    try { await apiClient.patch(`/profiles/${device_id}`, body); show('success', 'Updated'); load() }
+    try { await apiClient.patch(`/profiles/${sim_id}`, body); show('success', 'Updated'); load() }
     catch (e) { show('error', String(e)) }
   }
 
   async function patchImsi(imsi: string, body: Record<string, unknown>) {
-    try { await apiClient.patch(`/profiles/${device_id}/imsis/${imsi}`, body); show('success', 'Updated'); load() }
+    try { await apiClient.patch(`/profiles/${sim_id}/imsis/${imsi}`, body); show('success', 'Updated'); load() }
     catch (e) { show('error', String(e)) }
   }
 
   async function deleteImsi(imsi: string) {
     if (!confirm(`Remove IMSI ${imsi}?`)) return
-    try { await apiClient.delete(`/profiles/${device_id}/imsis/${imsi}`); show('success', 'IMSI removed'); load() }
+    try { await apiClient.delete(`/profiles/${sim_id}/imsis/${imsi}`); show('success', 'IMSI removed'); load() }
     catch (e) { show('error', String(e)) }
   }
 
@@ -218,7 +218,7 @@ function ProfileDetail() {
     try {
       const apn_ips = newImsi.static_ip || newImsi.pool_id
         ? [{ apn: null, static_ip: newImsi.static_ip || null, pool_id: newImsi.pool_id || null }] : []
-      await apiClient.post(`/profiles/${device_id}/imsis`, {
+      await apiClient.post(`/profiles/${sim_id}/imsis`, {
         imsi: newImsi.imsi, priority: parseInt(newImsi.priority, 10), apn_ips,
       })
       show('success', 'IMSI added'); setShowForm(false)
@@ -240,7 +240,7 @@ function ProfileDetail() {
       <div className="flex items-center gap-2 text-sm">
         <button onClick={() => navigate('/devices')} className="text-primary hover:underline">SIMs</button>
         <span className="text-gray-400">/</span>
-        <span className="font-mono text-xs text-gray-600">{profile.device_id.slice(0, 16)}…</span>
+        <span className="font-mono text-xs text-gray-600">{profile.sim_id.slice(0, 16)}…</span>
       </div>
 
       {/* Profile card */}
@@ -249,9 +249,9 @@ function ProfileDetail() {
           <div>
             <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">SIM Profile</p>
             <div className="flex items-center gap-2 mt-1">
-              <span className="font-mono text-sm text-gray-700">{profile.device_id}</span>
+              <span className="font-mono text-sm text-gray-700">{profile.sim_id}</span>
               <button className="text-xs text-gray-400 hover:text-gray-600 border border-gray-200 rounded px-1.5 py-0.5"
-                onClick={() => { navigator.clipboard.writeText(profile.device_id); show('info', 'Copied!') }}>
+                onClick={() => { navigator.clipboard.writeText(profile.sim_id); show('info', 'Copied!') }}>
                 Copy
               </button>
             </div>
@@ -465,8 +465,8 @@ function NewProfile() {
       if (form.tags) meta.tags = form.tags.split(',').map(t => t.trim()).filter(Boolean)
       if (Object.keys(meta).length) body.metadata = meta
       const res = await apiClient.post('/profiles', body)
-      show('success', `Profile created: ${res.data.device_id}`)
-      navigate(`/devices/${res.data.device_id}`)
+      show('success', `Profile created: ${res.data.sim_id}`)
+      navigate(`/devices/${res.data.sim_id}`)
     } catch (e: unknown) {
       const d = (e as { response?: { data?: { error?: string } } })?.response?.data
       setError(d?.error ?? String(e))
@@ -565,7 +565,7 @@ function BulkImport() {
 
   function downloadTemplate() {
     const csv = [
-      'device_id,iccid,account_name,status,ip_resolution,imsi,apn,static_ip,pool_id',
+      'sim_id,iccid,account_name,status,ip_resolution,imsi,apn,static_ip,pool_id',
       ',8944501012345678901,Melita,active,imsi,278773000002002,,100.65.120.5,pool-uuid-abc',
     ].join('\n')
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
@@ -655,7 +655,7 @@ export default function Devices() {
       <Route index            element={<DeviceList />} />
       <Route path="new"       element={<NewProfile />} />
       <Route path="bulk"      element={<BulkImport />} />
-      <Route path=":device_id" element={<ProfileDetail />} />
+      <Route path=":sim_id" element={<ProfileDetail />} />
     </Routes>
   )
 }

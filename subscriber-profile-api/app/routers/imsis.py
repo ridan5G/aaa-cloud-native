@@ -41,21 +41,21 @@ class ImsiPatch(BaseModel):
     apn_ips: Optional[list[ApnIpEntry]] = None
 
 
-async def _require_profile(device_id: str, conn):
+async def _require_profile(sim_id: str, conn):
     row = await conn.fetchrow(
-        "SELECT device_id FROM device_profiles WHERE device_id = $1::uuid AND status != 'terminated'",
-        device_id,
+        "SELECT sim_id FROM sim_profiles WHERE sim_id = $1::uuid AND status != 'terminated'",
+        sim_id,
     )
     if not row:
         raise HTTPException(
             status_code=404,
-            detail={"error": "not_found", "resource": "subscriber_profile", "device_id": device_id},
+            detail={"error": "not_found", "resource": "subscriber_profile", "sim_id": sim_id},
         )
 
 
-@router.get("/profiles/{device_id}/imsis", dependencies=[Depends(require_auth)])
-async def list_imsis(device_id: str, conn=Depends(get_conn)):
-    await _require_profile(device_id, conn)
+@router.get("/profiles/{sim_id}/imsis", dependencies=[Depends(require_auth)])
+async def list_imsis(sim_id: str, conn=Depends(get_conn)):
+    await _require_profile(sim_id, conn)
     rows = await conn.fetch(
         """
         SELECT si.imsi, si.status, si.priority,
@@ -71,13 +71,13 @@ async def list_imsis(device_id: str, conn=Depends(get_conn)):
                    ) FILTER (WHERE sa.id IS NOT NULL),
                    '[]'::json
                ) AS apn_ips
-        FROM imsi2device si
+        FROM imsi2sim si
         LEFT JOIN imsi_apn_ips sa ON sa.imsi = si.imsi
-        WHERE si.device_id = $1::uuid
+        WHERE si.sim_id = $1::uuid
         GROUP BY si.imsi, si.status, si.priority
         ORDER BY si.priority, si.imsi
         """,
-        device_id,
+        sim_id,
     )
     result = []
     for row in rows:
@@ -88,9 +88,9 @@ async def list_imsis(device_id: str, conn=Depends(get_conn)):
     return result
 
 
-@router.get("/profiles/{device_id}/imsis/{imsi}", dependencies=[Depends(require_auth)])
-async def get_imsi(device_id: str, imsi: str, conn=Depends(get_conn)):
-    await _require_profile(device_id, conn)
+@router.get("/profiles/{sim_id}/imsis/{imsi}", dependencies=[Depends(require_auth)])
+async def get_imsi(sim_id: str, imsi: str, conn=Depends(get_conn)):
+    await _require_profile(sim_id, conn)
     row = await conn.fetchrow(
         """
         SELECT si.imsi, si.status, si.priority,
@@ -106,12 +106,12 @@ async def get_imsi(device_id: str, imsi: str, conn=Depends(get_conn)):
                    ) FILTER (WHERE sa.id IS NOT NULL),
                    '[]'::json
                ) AS apn_ips
-        FROM imsi2device si
+        FROM imsi2sim si
         LEFT JOIN imsi_apn_ips sa ON sa.imsi = si.imsi
-        WHERE si.device_id = $1::uuid AND si.imsi = $2
+        WHERE si.sim_id = $1::uuid AND si.imsi = $2
         GROUP BY si.imsi, si.status, si.priority
         """,
-        device_id,
+        sim_id,
         imsi,
     )
     if not row:
@@ -125,15 +125,15 @@ async def get_imsi(device_id: str, imsi: str, conn=Depends(get_conn)):
     return d
 
 
-@router.post("/profiles/{device_id}/imsis", status_code=201, dependencies=[Depends(require_auth)])
-async def add_imsi(device_id: str, body: ImsiCreate, conn=Depends(get_conn)):
-    await _require_profile(device_id, conn)
+@router.post("/profiles/{sim_id}/imsis", status_code=201, dependencies=[Depends(require_auth)])
+async def add_imsi(sim_id: str, body: ImsiCreate, conn=Depends(get_conn)):
+    await _require_profile(sim_id, conn)
 
     if not IMSI_RE.match(body.imsi):
         _val_err("imsi", "must be exactly 15 digits")
 
     existing = await conn.fetchval(
-        "SELECT device_id::text FROM imsi2device WHERE imsi = $1", body.imsi
+        "SELECT sim_id::text FROM imsi2sim WHERE imsi = $1", body.imsi
     )
     if existing:
         raise HTTPException(
@@ -141,14 +141,14 @@ async def add_imsi(device_id: str, body: ImsiCreate, conn=Depends(get_conn)):
             detail={
                 "error": "imsi_conflict",
                 "imsi": body.imsi,
-                "existing_device_id": existing,
+                "existing_sim_id": existing,
             },
         )
 
     async with conn.transaction():
         await conn.execute(
-            "INSERT INTO imsi2device (imsi, device_id, status, priority) VALUES ($1, $2::uuid, 'active', $3)",
-            body.imsi, device_id, body.priority,
+            "INSERT INTO imsi2sim (imsi, sim_id, status, priority) VALUES ($1, $2::uuid, 'active', $3)",
+            body.imsi, sim_id, body.priority,
         )
         for aip in body.apn_ips:
             await conn.execute(
@@ -156,15 +156,15 @@ async def add_imsi(device_id: str, body: ImsiCreate, conn=Depends(get_conn)):
                 body.imsi, aip.apn, aip.static_ip, aip.pool_id, aip.pool_name,
             )
 
-    return {"imsi": body.imsi, "device_id": device_id}
+    return {"imsi": body.imsi, "sim_id": sim_id}
 
 
-@router.patch("/profiles/{device_id}/imsis/{imsi}", dependencies=[Depends(require_auth)])
-async def patch_imsi(device_id: str, imsi: str, body: ImsiPatch, conn=Depends(get_conn)):
-    await _require_profile(device_id, conn)
+@router.patch("/profiles/{sim_id}/imsis/{imsi}", dependencies=[Depends(require_auth)])
+async def patch_imsi(sim_id: str, imsi: str, body: ImsiPatch, conn=Depends(get_conn)):
+    await _require_profile(sim_id, conn)
     row = await conn.fetchrow(
-        "SELECT imsi FROM imsi2device WHERE device_id = $1::uuid AND imsi = $2",
-        device_id, imsi,
+        "SELECT imsi FROM imsi2sim WHERE sim_id = $1::uuid AND imsi = $2",
+        sim_id, imsi,
     )
     if not row:
         raise HTTPException(
@@ -176,13 +176,13 @@ async def patch_imsi(device_id: str, imsi: str, body: ImsiPatch, conn=Depends(ge
         if body.status not in ("active", "suspended"):
             _val_err("status", "must be active or suspended")
         await conn.execute(
-            "UPDATE imsi2device SET status=$1, updated_at=now() WHERE imsi=$2",
+            "UPDATE imsi2sim SET status=$1, updated_at=now() WHERE imsi=$2",
             body.status, imsi,
         )
 
     if body.priority is not None:
         await conn.execute(
-            "UPDATE imsi2device SET priority=$1, updated_at=now() WHERE imsi=$2",
+            "UPDATE imsi2sim SET priority=$1, updated_at=now() WHERE imsi=$2",
             body.priority, imsi,
         )
 
@@ -201,15 +201,15 @@ async def patch_imsi(device_id: str, imsi: str, body: ImsiPatch, conn=Depends(ge
                     imsi, aip.apn, aip.static_ip, aip.pool_id, aip.pool_name,
                 )
 
-    return await get_imsi(device_id, imsi, conn)
+    return await get_imsi(sim_id, imsi, conn)
 
 
-@router.delete("/profiles/{device_id}/imsis/{imsi}", status_code=204, dependencies=[Depends(require_auth)])
-async def delete_imsi(device_id: str, imsi: str, conn=Depends(get_conn)):
-    await _require_profile(device_id, conn)
+@router.delete("/profiles/{sim_id}/imsis/{imsi}", status_code=204, dependencies=[Depends(require_auth)])
+async def delete_imsi(sim_id: str, imsi: str, conn=Depends(get_conn)):
+    await _require_profile(sim_id, conn)
     row = await conn.fetchrow(
-        "SELECT imsi FROM imsi2device WHERE device_id = $1::uuid AND imsi = $2",
-        device_id, imsi,
+        "SELECT imsi FROM imsi2sim WHERE sim_id = $1::uuid AND imsi = $2",
+        sim_id, imsi,
     )
     if not row:
         raise HTTPException(
@@ -217,4 +217,4 @@ async def delete_imsi(device_id: str, imsi: str, conn=Depends(get_conn)):
             detail={"error": "not_found", "resource": "subscriber_imsi", "imsi": imsi},
         )
     # CASCADE removes imsi_apn_ips
-    await conn.execute("DELETE FROM imsi2device WHERE imsi = $1", imsi)
+    await conn.execute("DELETE FROM imsi2sim WHERE imsi = $1", imsi)

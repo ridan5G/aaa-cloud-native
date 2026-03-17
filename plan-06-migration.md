@@ -33,7 +33,7 @@ The remaining ~7.4M rows are unallocated pool slots and are skipped entirely.
 | Table | Key fields | Approx rows | Disposition |
 |---|---|---|---|
 | `tbl_clients` | id, name | ~20–50 / dump | Build mapping file only — not loaded to PostgreSQL |
-| `tbl_clients_ips` | client_id, imsi, ip, imei | ~8M total (650K non-NULL IMSI) | Core migration — device_profiles + imsis + apn_ips |
+| `tbl_clients_ips` | client_id, imsi, ip, imei | ~8M total (650K non-NULL IMSI) | Core migration — sim_profiles + imsis + apn_ips |
 | `tbl_ip_pools` | id, client_id, name, start_ip, subnet | ~5–20 / dump | → ip_pools + ip_pool_available |
 | `tbl_imsi_range_config` | client_id, f_imsi, t_imsi | ~328 total | → imsi_range_configs |
 | `tbl_snat_dnat` | iccid, internal_ip, external_ip | 0 rows (Melita POC only) | Skip; document as future work |
@@ -68,10 +68,10 @@ All tables are created by the DB plan schema before migration starts.
 
 | Target Table | Populated from |
 |---|---|
-| `device_profiles` | Transform output of `tbl_clients_ips` |
-| `imsi2device` | Transform output of `tbl_clients_ips` |
+| `sim_profiles` | Transform output of `tbl_clients_ips` |
+| `imsi2sim` | Transform output of `tbl_clients_ips` |
 | `imsi_apn_ips` | Transform output of `tbl_clients_ips` |
-| `device_apn_ips` | Empty at migration time; populated post-cutover if Profile A is adopted |
+| `sim_apn_ips` | Empty at migration time; populated post-cutover if Profile A is adopted |
 | `ip_pools` | `tbl_ip_pools` |
 | `ip_pool_available` | Computed from `ip_pools` minus already-allocated IPs |
 | `imsi_range_configs` | `tbl_imsi_range_config` — all rows get `iccid_range_id = NULL` (standalone/single-IMSI mode) |
@@ -185,7 +185,7 @@ Else:
 ```
 
 This correctly models Multi-IMSI SIM cards: two IMSIs sharing the same ICCID under the
-same client become one `device_profiles` row with two rows in `imsi2device`.
+same client become one `sim_profiles` row with two rows in `imsi2sim`.
 
 ### Transform Pseudocode
 
@@ -211,21 +211,21 @@ for each dump in sorted(dump_files):
 
         group[card_key][row.imsi] += { ip: row.ip, source: dump_name }
 
-# Emit one device_profiles row per card_key
+# Emit one sim_profiles row per card_key
 for each (card_key, imsi_groups) in groups:
     client_id, iccid_or_sentinel = card_key
     iccid        = iccid_or_sentinel if not starts_with("IMSI:") else None
-    device_id    = generate_uuid()
+    sim_id    = generate_uuid()
     account_name = client_id_map[client_id]   # may be None
 
     any_multi_ip = any(len(deduplicate(entries)) > 1
                        for entries in imsi_groups.values())
     ip_resolution = "imsi_apn" if any_multi_ip else "imsi"
 
-    emit → out_device_profiles.csv
+    emit → out_sim_profiles.csv
 
     for each imsi, entries in imsi_groups.items():
-        emit → out_imsi2device.csv
+        emit → out_imsi2sim.csv
 
         unique_ips = deduplicate(entries)   # {source → ip}
         if len(unique_ips) == 1:
@@ -239,12 +239,12 @@ for each (card_key, imsi_groups) in groups:
 
 | Case | ip_resolution | apn values | Action |
 |---|---|---|---|
-| 1 dump, 1 IP, ICCID known | `imsi` | NULL | All IMSIs on same card → one `device_id` |
-| 1 dump, 1 IP, ICCID unknown | `imsi` | NULL | Each IMSI gets its own `device_id` |
+| 1 dump, 1 IP, ICCID known | `imsi` | NULL | All IMSIs on same card → one `sim_id` |
+| 1 dump, 1 IP, ICCID unknown | `imsi` | NULL | Each IMSI gets its own `sim_id` |
 | N dumps, same IP, same client_id | `imsi` | NULL | Deduplicate to 1 `apn_ips` row |
 | N dumps, different IPs, same client_id | `imsi_apn` | pgw1, pgw2, … | N `apn_ips` rows per IMSI |
 | Same IMSI, different client_id | `imsi` | NULL | Both valid — insert independently |
-| Multiple IMSIs, same ICCID, same client_id | `imsi` | NULL | Grouped onto one `device_id` |
+| Multiple IMSIs, same ICCID, same client_id | `imsi` | NULL | Grouped onto one `sim_id` |
 
 ### Known Conflict Counts
 
@@ -253,7 +253,7 @@ for each (card_key, imsi_groups) in groups:
 | Same IMSI, same IP, same client_id, multiple dumps | Common | Deduplicate → 1 row |
 | Same IMSI, **different IPs**, same client_id | ~3 known | `imsi_apn` with pgw labels |
 | Same IMSI, different client_id | ~105K (Miami/Telefonica) | Not a conflict — different tenants |
-| Multiple IMSIs, same ICCID | Known Multi-IMSI SIMs | Grouped onto one `device_id` |
+| Multiple IMSIs, same ICCID | Known Multi-IMSI SIMs | Grouped onto one `sim_id` |
 | IMSI in range_config but not in `tbl_clients_ips` | Range-only | Skip; record in audit log |
 | IMSI not in `imsi_iccid_map.csv` | Some | `iccid = NULL`; enriched in Step 6 |
 
@@ -261,20 +261,20 @@ for each (card_key, imsi_groups) in groups:
 
 | File | Description |
 |---|---|
-| `out_device_profiles.csv` | One row per physical SIM card |
-| `out_imsi2device.csv` | One row per IMSI |
+| `out_sim_profiles.csv` | One row per physical SIM card |
+| `out_imsi2sim.csv` | One row per IMSI |
 | `out_imsi_apn_ips.csv` | One row per IMSI+APN IP entry |
-| `out_device_apn_ips.csv` | Empty — populated post-cutover if Profile A adopted |
+| `out_sim_apn_ips.csv` | Empty — populated post-cutover if Profile A adopted |
 | `out_ip_pools.csv` | Transformed pool definitions |
 | `out_pool_map.csv` | old_pool_id → new UUID mapping (used in Step 3 and post-cutover) |
 | `out_imsi_range_configs.csv` | Range configs with resolved pool_ids |
 | `migration_audit.log` | Per-row decisions: deduplication, pgw label assignments, skips |
 
 **Go / No-Go gate:**
-- [ ] `out_device_profiles.csv` row count matches expected card count (not IMSI count)
-- [ ] `out_imsi2device.csv` row count ≈ 650K
-- [ ] No duplicate `device_id` in `out_device_profiles.csv`
-- [ ] No duplicate `imsi` in `out_imsi2device.csv`
+- [ ] `out_sim_profiles.csv` row count matches expected card count (not IMSI count)
+- [ ] `out_imsi2sim.csv` row count ≈ 650K
+- [ ] No duplicate `sim_id` in `out_sim_profiles.csv`
+- [ ] No duplicate `imsi` in `out_imsi2sim.csv`
 - [ ] All `static_ip` values in `out_imsi_apn_ips.csv` resolve to a `pool_id` in `out_ip_pools.csv`
 - [ ] `migration_audit.log` reviewed; unexpected deduplication counts investigated
 
@@ -350,9 +350,9 @@ ON CONFLICT DO NOTHING;
 
 ```sql
 -- Staging table (explicit columns — do NOT use LIKE INCLUDING ALL,
--- that copies GENERATED ALWAYS AS IDENTITY and breaks loading pre-generated device_ids)
+-- that copies GENERATED ALWAYS AS IDENTITY and breaks loading pre-generated sim_ids)
 CREATE TEMP TABLE staging_profiles (
-    device_id       UUID,
+    sim_id       UUID,
     iccid           TEXT,
     account_name    TEXT,
     status          TEXT,
@@ -361,26 +361,26 @@ CREATE TEMP TABLE staging_profiles (
     created_at      TIMESTAMPTZ,
     updated_at      TIMESTAMPTZ
 );
-\COPY staging_profiles FROM 'out_device_profiles.csv' WITH (FORMAT csv, HEADER true);
+\COPY staging_profiles FROM 'out_sim_profiles.csv' WITH (FORMAT csv, HEADER true);
 
-INSERT INTO device_profiles
-    (device_id, iccid, account_name, status, ip_resolution, metadata)
-    SELECT device_id, iccid, account_name, status, ip_resolution, metadata
+INSERT INTO sim_profiles
+    (sim_id, iccid, account_name, status, ip_resolution, metadata)
+    SELECT sim_id, iccid, account_name, status, ip_resolution, metadata
     FROM staging_profiles
-    ON CONFLICT (device_id) DO NOTHING;
+    ON CONFLICT (sim_id) DO NOTHING;
 -- ON CONFLICT (iccid) is handled by the UNIQUE constraint automatically;
 -- duplicate real ICCIDs will be silently skipped (already logged in audit).
 
 CREATE TEMP TABLE staging_imsis (
     imsi        TEXT,
-    device_id   UUID,
+    sim_id   UUID,
     status      TEXT,
     priority    SMALLINT
 );
-\COPY staging_imsis FROM 'out_imsi2device.csv' WITH (FORMAT csv, HEADER true);
+\COPY staging_imsis FROM 'out_imsi2sim.csv' WITH (FORMAT csv, HEADER true);
 
-INSERT INTO imsi2device (imsi, device_id, status, priority)
-    SELECT imsi, device_id, status, priority
+INSERT INTO imsi2sim (imsi, sim_id, status, priority)
+    SELECT imsi, sim_id, status, priority
     FROM staging_imsis
     ON CONFLICT (imsi) DO NOTHING;
 
@@ -420,8 +420,8 @@ ON CONFLICT DO NOTHING;
 **Post-load verification queries:**
 ```sql
 -- Row counts
-SELECT COUNT(*) FROM device_profiles;    -- expect: card count from transform
-SELECT COUNT(*) FROM imsi2device;       -- expect: ~650K
+SELECT COUNT(*) FROM sim_profiles;    -- expect: card count from transform
+SELECT COUNT(*) FROM imsi2sim;       -- expect: ~650K
 SELECT COUNT(*) FROM imsi_apn_ips;     -- expect: ~650K + extra for pgw1/pgw2 profiles
 SELECT COUNT(*) FROM ip_pools;
 SELECT COUNT(*) FROM imsi_range_configs;     -- expect: ~328
@@ -434,8 +434,8 @@ SELECT COUNT(*) FROM imsi_range_configs WHERE iccid_range_id IS NOT NULL;
 
 -- Spot-check 10 random IMSIs from core_extract.csv
 SELECT si.imsi, sp.iccid, sp.ip_resolution, sa.apn, sa.static_ip
-FROM imsi2device si
-JOIN device_profiles sp ON sp.device_id = si.device_id
+FROM imsi2sim si
+JOIN sim_profiles sp ON sp.sim_id = si.sim_id
 JOIN imsi_apn_ips sa  ON sa.imsi = si.imsi
 WHERE si.imsi IN ('278773000002002', ...);
 
@@ -542,8 +542,8 @@ T+24h     Full review of error rates, latency, mismatch log (now zero expected)
 
 **T+25 min final checks:**
 ```sql
--- PostgreSQL: confirm no new first-connection profiles have NULL device_id
-SELECT COUNT(*) FROM device_profiles WHERE device_id IS NULL;  -- expect 0
+-- PostgreSQL: confirm no new first-connection profiles have NULL sim_id
+SELECT COUNT(*) FROM sim_profiles WHERE sim_id IS NULL;  -- expect 0
 
 -- Confirm all migrated range configs remain in standalone mode
 SELECT COUNT(*) FROM imsi_range_configs WHERE iccid_range_id IS NOT NULL;  -- expect 0
@@ -588,9 +588,9 @@ any IMSIs not covered by the original `imsi_iccid_map.csv`.
 ### Find Remaining NULL-ICCID Profiles
 
 ```sql
-SELECT si.imsi, sp.device_id, sp.account_name
-FROM imsi2device si
-JOIN device_profiles sp ON sp.device_id = si.device_id
+SELECT si.imsi, sp.sim_id, sp.account_name
+FROM imsi2sim si
+JOIN sim_profiles sp ON sp.sim_id = si.sim_id
 WHERE sp.iccid IS NULL
 ORDER BY sp.account_name, si.imsi;
 -- Export result to send to operator for ICCID lookup
@@ -604,14 +604,14 @@ Operator provides `iccid_map_supplement.csv` with columns: `imsi, real_iccid`
 CREATE TEMP TABLE iccid_mapping (imsi TEXT, real_iccid TEXT);
 \COPY iccid_mapping FROM 'iccid_map_supplement.csv' WITH (FORMAT csv, HEADER true);
 
-UPDATE device_profiles sp
+UPDATE sim_profiles sp
 SET    iccid = m.real_iccid, updated_at = now()
 FROM   iccid_mapping m
-JOIN   imsi2device si ON si.imsi = m.imsi AND si.device_id = sp.device_id
+JOIN   imsi2sim si ON si.imsi = m.imsi AND si.sim_id = sp.sim_id
 WHERE  sp.iccid IS NULL;
 
 -- Verify
-SELECT COUNT(*) FROM device_profiles WHERE iccid IS NULL;
+SELECT COUNT(*) FROM sim_profiles WHERE iccid IS NULL;
 -- Target: 0 (or reduced to only truly unknown ICCIDs)
 ```
 
@@ -620,11 +620,11 @@ SELECT COUNT(*) FROM device_profiles WHERE iccid IS NULL;
 After real ICCIDs are applied, operators may optionally:
 
 1. **Switch single-IP SIM cards to Profile A:** Change `ip_resolution` from `"imsi"` to
-   `"iccid"` via `PATCH /profiles/{device_id}` for SIM cards where all IMSIs share one IP.
+   `"iccid"` via `PATCH /profiles/{sim_id}` for SIM cards where all IMSIs share one IP.
    This simplifies the lookup to card-level and eliminates per-IMSI IP rows.
 
 2. **Rename synthetic APN labels:** For profiles with `apn="pgw1"`, `"pgw2"` (from multi-IP
-   deduplication in Step 2), update to real APN values via `PATCH /profiles/{device_id}/imsis/{imsi}`.
+   deduplication in Step 2), update to real APN values via `PATCH /profiles/{sim_id}/imsis/{imsi}`.
    Example: `pgw1` → `internet.operator.com`, `pgw2` → `ims.operator.com`.
 
 Both operations are performed through the standard Provisioning API — no direct DB access required.
@@ -654,12 +654,12 @@ These are the automated checks the regression suite runs against migration outpu
 
 | # | Test | Expected |
 |---|---|---|
-| 9.1 | Run migration script on Athens-only sample dump | device_profiles count = distinct ICCID-groups + unmatched IMSIs |
+| 9.1 | Run migration script on Athens-only sample dump | sim_profiles count = distinct ICCID-groups + unmatched IMSIs |
 | 9.2 | IMSI in `imsi_iccid_map.csv` → GET /profiles?imsi={imsi} | `iccid` = real ICCID from map |
 | 9.3 | IMSI not in map → GET /profiles?imsi={imsi} | `iccid` = null |
 | 9.4 | IMSI in 2 dumps, different IPs, same client → GET /profiles?imsi={imsi} | ip_resolution=imsi_apn, 2 apn_ips entries: apn=pgw1, apn=pgw2 |
 | 9.5 | IMSI in 2 dumps, same IP → GET /profiles?imsi={imsi} | ip_resolution=imsi, 1 apn_ips entry with apn=null |
-| 9.6 | Two IMSIs sharing same ICCID, same client → GET /profiles?imsi={imsi1} and GET /profiles?imsi={imsi2} | Both return same `device_id` (grouped onto one profile) |
+| 9.6 | Two IMSIs sharing same ICCID, same client → GET /profiles?imsi={imsi1} and GET /profiles?imsi={imsi2} | Both return same `sim_id` (grouped onto one profile) |
 | 9.7 | Range config rows → GET /range-configs?account_name={name} | count = tbl_imsi_range_config rows for that client |
 | 9.8 | All migrated range-configs have iccid_range_id = NULL | SELECT COUNT(*) FROM imsi_range_configs WHERE iccid_range_id IS NOT NULL = 0 |
 | 9.9 | iccid_range_configs table is empty post-migration | SELECT COUNT(*) FROM iccid_range_configs = 0 |
@@ -679,10 +679,10 @@ These are the automated checks the regression suite runs against migration outpu
 | `core_extract.csv` | Step 1 extract | Step 2 transform |
 | `staging_ranges.csv` | Step 1 extract | Step 2 transform |
 | `pool_map.csv` | Step 2 transform | Step 3 load |
-| `out_device_profiles.csv` | Step 2 transform | Step 3 load |
-| `out_imsi2device.csv` | Step 2 transform | Step 3 load |
+| `out_sim_profiles.csv` | Step 2 transform | Step 3 load |
+| `out_imsi2sim.csv` | Step 2 transform | Step 3 load |
 | `out_imsi_apn_ips.csv` | Step 2 transform | Step 3 load |
-| `out_device_apn_ips.csv` | Step 2 transform (empty) | Step 3 load (no-op) |
+| `out_sim_apn_ips.csv` | Step 2 transform (empty) | Step 3 load (no-op) |
 | `out_ip_pools.csv` | Step 2 transform | Step 3 load |
 | `out_imsi_range_configs.csv` | Step 2 transform | Step 3 load |
 | `migration_audit.log` | Step 2 transform | Review before Step 3 |

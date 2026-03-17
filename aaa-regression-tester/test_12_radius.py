@@ -77,10 +77,10 @@ def _radius_available(host: str, port: int, secret: str) -> bool:
 class TestRadiusServer:
     # Set by setup_class; read by all test methods
     known_pool_id:   str | None = None
-    known_device_id: str | None = None
+    known_sim_id: str | None = None
     fc_pool_id:      str | None = None
     fc_range_id:     str | None = None
-    fc_device_id:    str | None = None   # filled by test_06
+    fc_sim_id:    str | None = None   # filled by test_06
     fc_allocated_ip: str | None = None   # filled by test_06
 
     @classmethod
@@ -98,7 +98,7 @@ class TestRadiusServer:
                     data = r.json()
                     items = data if isinstance(data, list) else data.get("profiles", data.get("items", []))
                     for p in items:
-                        c.delete(f"/profiles/{p['device_id']}")
+                        c.delete(f"/profiles/{p['sim_id']}")
             except Exception:
                 pass
 
@@ -158,7 +158,7 @@ class TestRadiusServer:
                 }],
                 pool_name="pool-radius-known-12",
             )
-            cls.known_device_id = profile["device_id"]
+            cls.known_sim_id = profile["sim_id"]
 
             # ── Pool B + range config (for tests 12.6–12.7) ──────────────────
             from fixtures.range_configs import create_range_config
@@ -188,7 +188,7 @@ class TestRadiusServer:
             timeout=30.0,
         ) as c:
             # Remove profiles created during tests
-            for did in filter(None, [cls.known_device_id, cls.fc_device_id]):
+            for did in filter(None, [cls.known_sim_id, cls.fc_sim_id]):
                 try:
                     c.delete(f"/profiles/{did}")
                 except Exception:
@@ -251,7 +251,7 @@ class TestRadiusServer:
         Expected RADIUS response: Access-Reject (code=3).
         """
         # Suspend
-        r = http.patch(f"/profiles/{TestRadiusServer.known_device_id}",
+        r = http.patch(f"/profiles/{TestRadiusServer.known_sim_id}",
                        json={"status": "suspended"})
         assert r.status_code == 200, f"PATCH suspend failed: {r.status_code} {r.text}"
 
@@ -260,7 +260,7 @@ class TestRadiusServer:
             f"Expected Access-Reject for suspended subscriber, got code={resp.code}"
 
         # Verify lookup also reflects suspension
-        r2 = http.get(f"/profiles/{TestRadiusServer.known_device_id}")
+        r2 = http.get(f"/profiles/{TestRadiusServer.known_sim_id}")
         assert r2.json().get("status") == "suspended"
 
     # 12.5 ────────────────────────────────────────────────────────────────────
@@ -270,7 +270,7 @@ class TestRadiusServer:
         PATCH subscriber status=active → GET /lookup returns 200 again.
         Expected RADIUS response: Access-Accept with the original Framed-IP.
         """
-        r = http.patch(f"/profiles/{TestRadiusServer.known_device_id}",
+        r = http.patch(f"/profiles/{TestRadiusServer.known_sim_id}",
                        json={"status": "active"})
         assert r.status_code == 200, f"PATCH reactivate failed: {r.status_code} {r.text}"
 
@@ -288,7 +288,7 @@ class TestRadiusServer:
         Stage 2: aaa-radius-server calls POST /v1/first-connection → allocates IP.
         Expected RADIUS response: Access-Accept with the allocated Framed-IP.
 
-        After the test the profile is stored in cls.fc_device_id for teardown
+        After the test the profile is stored in cls.fc_sim_id for teardown
         and subsequent idempotency check (test_07).
         """
         # Confirm no profile exists before the test
@@ -310,13 +310,13 @@ class TestRadiusServer:
         # Store for teardown and test_07
         TestRadiusServer.fc_allocated_ip = resp.framed_ip
 
-        # Fetch the auto-created device_id for teardown
+        # Fetch the auto-created sim_id for teardown
         r_profile = http.get("/profiles", params={"imsi": IMSI_FC_NEW})
         if r_profile.status_code == 200:
             data = r_profile.json()
             profiles = data if isinstance(data, list) else data.get("profiles", [])
             if profiles:
-                TestRadiusServer.fc_device_id = profiles[0]["device_id"]
+                TestRadiusServer.fc_sim_id = profiles[0]["sim_id"]
 
         # Stage 1 should now resolve the newly allocated IP
         r_post = lookup_http.get("/lookup",

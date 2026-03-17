@@ -477,8 +477,8 @@ const doc = new Document({
           [
             ["imsi",      "1",          "M (1 per slot)",        "imsi_apn_ips (apn=NULL)"],
             ["imsi_apn",  "N per IMSI", "M × N",                 "imsi_apn_ips (apn=APN)"],
-            ["iccid",     "1",          "1 (shared card IP)",    "device_apn_ips (apn=NULL)"],
-            ["iccid_apn", "N per card", "N (shared card IPs)",   "device_apn_ips (apn=APN)"],
+            ["iccid",     "1",          "1 (shared card IP)",    "sim_apn_ips (apn=NULL)"],
+            ["iccid_apn", "N per card", "N (shared card IPs)",   "sim_apn_ips (apn=APN)"],
           ],
           [1800, 1600, 2400, 3560]
         ),
@@ -523,7 +523,7 @@ const doc = new Document({
           [
             ["1. Create range config", "POST /v1/range-configs  { ip_resolution: \"iccid\", pool_id: <pool>, ... }"],
             ["2. APN catalog", "Not required"],
-            ["On first connect", "1 IP allocated, stored in device_apn_ips with apn=NULL. All IMSIs share this device_id."],
+            ["On first connect", "1 IP allocated, stored in sim_apn_ips with apn=NULL. All IMSIs share this sim_id."],
             ["Subsequent connects", "Any IMSI, any APN: returns same IP."],
           ],
           [2600, 6760]
@@ -537,7 +537,7 @@ const doc = new Document({
           [
             ["1. Create range config", "POST /v1/range-configs  { ip_resolution: \"iccid_apn\", pool_id: <default-pool>, ... }"],
             ["2. Add APN catalog", "POST /v1/range-configs/{id}/apn-pools  { apn: \"internet\", pool_id: <pool-A> }\nPOST /v1/range-configs/{id}/apn-pools  { apn: \"corporate\", pool_id: <pool-B> }"],
-            ["On first connect", "N IPs allocated, stored in device_apn_ips (one row per APN). All IMSIs on the card share these IPs."],
+            ["On first connect", "N IPs allocated, stored in sim_apn_ips (one row per APN). All IMSIs on the card share these IPs."],
             ["Subsequent connects", "Any IMSI + APN combination returns the pre-provisioned card-level IP."],
           ],
           [2600, 6760]
@@ -552,7 +552,7 @@ const doc = new Document({
             ["1. Create ICCID range", "POST /v1/iccid-range-configs  { ip_resolution: \"imsi\", pool_id: <shared-pool>, imsi_count: M, ... }"],
             ["2. Add IMSI slots", "POST /v1/iccid-range-configs/{id}/imsi-slots (×M) — each slot can override pool_id for per-slot routing"],
             ["3. APN catalog", "Not required"],
-            ["On first connect", "M IPs allocated (1 per slot), each from its slot pool. All M imsi2device rows inserted in one transaction."],
+            ["On first connect", "M IPs allocated (1 per slot), each from its slot pool. All M imsi2sim rows inserted in one transaction."],
             ["Subsequent connects", "Any slot IMSI returns its pre-provisioned IP immediately from the hot path."],
           ],
           [2600, 6760]
@@ -584,7 +584,7 @@ const doc = new Document({
             ["1. Create ICCID range", "POST /v1/iccid-range-configs  { ip_resolution: \"iccid\", pool_id: <pool>, imsi_count: M }"],
             ["2. Add IMSI slots", "POST /v1/iccid-range-configs/{id}/imsi-slots (×M)"],
             ["3. APN catalog", "Not required"],
-            ["On first connect", "1 IP allocated. All M slots share the same device_id and return the same IP."],
+            ["On first connect", "1 IP allocated. All M slots share the same sim_id and return the same IP."],
           ],
           [2600, 6760]
         ),
@@ -598,13 +598,13 @@ const doc = new Document({
             ["1. Create ICCID range", "POST /v1/iccid-range-configs  { ip_resolution: \"iccid_apn\", pool_id: <default-pool>, imsi_count: M }"],
             ["2. Add IMSI slots", "POST /v1/iccid-range-configs/{id}/imsi-slots (×M)"],
             ["3. Add APN catalog", "POST /v1/range-configs/{any-slot-rc-id}/apn-pools for each APN"],
-            ["On first connect", "N IPs allocated as card-level device_apn_ips rows. All M slots share these N IPs."],
+            ["On first connect", "N IPs allocated as card-level sim_apn_ips rows. All M slots share these N IPs."],
             ["Subsequent connects", "Any slot IMSI + any defined APN: returns the shared card-level IP for that APN."],
           ],
           [2600, 6760]
         ),
         spacer(60),
-        noteBox("Idempotency applies to all scenarios", "If the same IMSI re-connects on any APN, the platform finds it in imsi2device and returns the existing IP with no allocation. All sibling IMSIs pre-provisioned in the original transaction are served instantly from the hot-path on every subsequent connection — zero write pressure at steady state."),
+        noteBox("Idempotency applies to all scenarios", "If the same IMSI re-connects on any APN, the platform finds it in imsi2sim and returns the existing IP with no allocation. All sibling IMSIs pre-provisioned in the original transaction are served instantly from the hot-path on every subsequent connection — zero write pressure at steady state."),
 
         // ── 4. Subscriber Provisioning ──────────────────────────────────
         new Paragraph({ children: [new PageBreak()] }),
@@ -629,7 +629,7 @@ const doc = new Document({
         code("  ]"),
         code("}"),
         code(""),
-        code("Response 201: {\"device_id\": \"550e8400-...\", \"created_at\": \"2026-03-13T10:00:00Z\"}"),
+        code("Response 201: {\"sim_id\": \"550e8400-...\", \"created_at\": \"2026-03-13T10:00:00Z\"}"),
         spacer(80),
 
         hdr("4.2 Create a Profile (Profile Mode C - APN-specific IP)", HeadingLevel.HEADING_2),
@@ -913,7 +913,7 @@ const doc = new Document({
         numbered("aaa-radius-server falls through to Stage 2: sends POST /v1/first-connection to subscriber-profile-api"),
         numbered("subscriber-profile-api matches IMSI to a range config, resolves pool (APN override → slot pool → parent pool), claims an IP atomically"),
         numbered("For Multi-IMSI SIM configs: ALL sibling IMSI slots are pre-provisioned in the same transaction, each drawing from their own pool — subsequent slot connections return instantly from the hot path"),
-        numbered("subscriber-profile-api returns 201 with device_id and static_ip"),
+        numbered("subscriber-profile-api returns 201 with sim_id and static_ip"),
         numbered("aaa-radius-server sets Framed-IP-Address and issues RADIUS Access-Accept"),
         numbered("On next connect: aaa-lookup-service returns 200 immediately — Stage 2 is skipped entirely"),
         spacer(80),
@@ -936,7 +936,7 @@ const doc = new Document({
         code("GET /v1/profiles?imsi=278773000002042"),
         code(""),
         code("# Check the assigned IP"),
-        code("GET /v1/profiles/{device_id}/imsis/278773000002042"),
+        code("GET /v1/profiles/{sim_id}/imsis/278773000002042"),
         code(""),
         code("# Check pool utilization"),
         code("GET /v1/pools/{pool_id}/stats"),
@@ -1011,7 +1011,7 @@ const doc = new Document({
           [
             ["400 Bad Request", "Validation error", "Invalid IMSI length, unknown ip_resolution, CIDR overlaps, missing required field"],
             ["401 Unauthorized", "Invalid or missing JWT", "Token expired, wrong public key, JWT_SKIP_VERIFY not set in dev"],
-            ["404 Not Found", "Resource not found", "Wrong device_id, IMSI not in DB, range config missing"],
+            ["404 Not Found", "Resource not found", "Wrong sim_id, IMSI not in DB, range config missing"],
             ["409 Conflict", "Duplicate resource", "IMSI already assigned to another profile, ICCID already exists"],
             ["422 Unprocessable", "Semantic validation failure", "IP not in pool range, pool status suspended"],
             ["503 Service Unavailable", "Pool exhausted or DB down", "IP pool has no available IPs; DB primary unreachable"],
@@ -1080,7 +1080,7 @@ const doc = new Document({
         code("DB_HOST=prod-db.example.com DB_PASSWORD=secret make psql"),
         code(""),
         code("-- Check subscriber count"),
-        code("SELECT COUNT(*) FROM device_profiles;"),
+        code("SELECT COUNT(*) FROM sim_profiles;"),
         code(""),
         code("-- Check pool availability"),
         code("SELECT p.pool_name, COUNT(a.ip) AS available"),

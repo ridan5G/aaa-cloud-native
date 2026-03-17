@@ -26,7 +26,7 @@ export interface Imsi {
 }
 
 export interface Profile {
-  device_id:     string
+  sim_id:        string
   iccid:         string | null
   account_name:  string | null
   status:        ProfileStatus

@@ -150,7 +150,7 @@ class TestPerformance:
         # NOTE: We intentionally do NOT delete the seeded pool/profiles here.
         # The 300K dataset takes ~3 min to seed; destroying it would force a
         # re-seed on the next run.  Clean up manually with:
-        #   DELETE FROM device_profiles WHERE account_name='PerfAccount';
+        #   DELETE FROM sim_profiles WHERE account_name='PerfAccount';
         pass
 
     # ── Async helper ──────────────────────────────────────────────────────────
@@ -326,7 +326,7 @@ class TestPerformance:
             rc2_id = rc2["id"]
 
         allocated_ips: list[str] = []
-        device_ids:    list[str] = []
+        sim_ids:    list[str] = []
         errors:        list[Exception] = []
         lock = threading.Lock()
 
@@ -337,7 +337,7 @@ class TestPerformance:
                                     "apn": "internet.operator.com"})
                 if r.status_code == 201:
                     with lock:
-                        device_ids.append(r.json()["device_id"])
+                        sim_ids.append(r.json()["sim_id"])
                         allocated_ips.append(r.json()["static_ip"])
             except Exception as ex:
                 with lock:
@@ -358,7 +358,7 @@ class TestPerformance:
                           headers={"Authorization": f"Bearer {jwt}"},
                           timeout=30.0) as c:
             from fixtures.range_configs import delete_range_config
-            for did in device_ids:
+            for did in sim_ids:
                 c.delete(f"/profiles/{did}")
             delete_range_config(c, rc2_id)
             delete_pool(c, pool2_id)
@@ -385,7 +385,7 @@ class TestPerformance:
     # 11.7 ────────────────────────────────────────────────────────────────────
     def test_07_get_profile_response_time(
             self, http: httpx.Client, timing: TimingRecorder):
-        """GET /profiles/{device_id} for a full profile (many IMSIs) → ≤ 50 ms."""
+        """GET /profiles/{sim_id} for a full profile (many IMSIs) → ≤ 50 ms."""
         # Find a profile that exists in the seeded dataset
         r_list = http.get("/profiles", params={"imsi": make_imsi(MODULE, 1)})
         assert r_list.status_code == 200
@@ -393,12 +393,12 @@ class TestPerformance:
         profiles = data if isinstance(data, list) else data.get("profiles", [])
         assert profiles, "Seed profile not found — seed must have succeeded"
 
-        device_id = profiles[0]["device_id"]
+        sim_id = profiles[0]["sim_id"]
 
         latencies: list[float] = []
         for _ in range(20):
             t0 = time.perf_counter()
-            r = http.get(f"/profiles/{device_id}")
+            r = http.get(f"/profiles/{sim_id}")
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
             assert r.status_code == 200
             latencies.append(elapsed_ms)

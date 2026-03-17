@@ -303,7 +303,7 @@ const doc = new Document({
         hdr("2.1 aaa-radius-server — RADIUS Frontend", HeadingLevel.HEADING_2),
         para("aaa-radius-server is the RADIUS authentication gateway for the platform. It receives RADIUS Access-Request messages from network equipment (e.g., PGW, ePDG) and orchestrates the two-stage authentication flow:"),
         bullet("Stage 1 — Hot path: On every Access-Request, aaa-radius-server sends a GET /lookup request to aaa-lookup-service with the subscriber IMSI and APN. If the lookup succeeds (HTTP 200), aaa-radius-server extracts the Framed-IP-Address from the response and issues a RADIUS Access-Accept immediately. End-to-end latency target: <15ms p99."),
-        bullet("Stage 2 — First connection: If aaa-lookup-service returns HTTP 404 (IMSI not yet provisioned), aaa-radius-server falls through to a POST /v1/first-connection call on subscriber-profile-api. The API dynamically allocates an IP address, creates the subscriber profile, and returns a device_id and static_ip. aaa-radius-server then issues an Access-Accept with the assigned IP."),
+        bullet("Stage 2 — First connection: If aaa-lookup-service returns HTTP 404 (IMSI not yet provisioned), aaa-radius-server falls through to a POST /v1/first-connection call on subscriber-profile-api. The API dynamically allocates an IP address, creates the subscriber profile, and returns a sim_id and static_ip. aaa-radius-server then issues an Access-Accept with the assigned IP."),
         bullet("Reject path: If subscriber-profile-api returns 404 (no matching range config) or the subscriber is suspended (HTTP 403), aaa-radius-server issues a RADIUS Access-Reject."),
         spacer(80),
 
@@ -341,10 +341,10 @@ const doc = new Document({
         table(
           ["Table", "Primary Key", "Description"],
           [
-            ["device_profiles", "device_id (UUID)", "One row per physical SIM card. Stores ICCID, account, status, and ip_resolution mode."],
-            ["imsi2device", "imsi (TEXT, 15 digits)", "One row per IMSI. Multiple IMSIs may share the same device_id (Multi-IMSI SIM)."],
+            ["sim_profiles", "sim_id (UUID)", "One row per physical SIM card. Stores ICCID, account, status, and ip_resolution mode."],
+            ["imsi2sim", "imsi (TEXT, 15 digits)", "One row per IMSI. Multiple IMSIs may share the same sim_id (Multi-IMSI SIM)."],
             ["imsi_apn_ips", "id (BIGINT)", "Per-IMSI static IP assignments. APN may be NULL for wildcard (any APN)."],
-            ["device_apn_ips", "id (BIGINT)", "Card-level static IP assignments shared by all IMSIs on the card."],
+            ["sim_apn_ips", "id (BIGINT)", "Card-level static IP assignments shared by all IMSIs on the card."],
           ],
           [2400, 2000, 4960]
         ),
@@ -374,15 +374,15 @@ const doc = new Document({
         spacer(80),
 
         hdr("3.4 IP Resolution Modes", HeadingLevel.HEADING_2),
-        para("The ip_resolution field on device_profiles controls how the lookup service selects the IP address for an Access-Request:"),
+        para("The ip_resolution field on sim_profiles controls how the lookup service selects the IP address for an Access-Request:"),
         spacer(60),
         table(
           ["Mode", "IP Storage Table", "Description"],
           [
             ["imsi", "imsi_apn_ips", "One IP per IMSI, APN-agnostic. All APNs get the same IP."],
             ["imsi_apn", "imsi_apn_ips", "One IP per IMSI per APN. Different APNs may have different IPs."],
-            ["iccid", "device_apn_ips", "One IP per SIM card, APN-agnostic. All IMSIs on the card share one IP."],
-            ["iccid_apn", "device_apn_ips", "One IP per SIM card per APN."],
+            ["iccid", "sim_apn_ips", "One IP per SIM card, APN-agnostic. All IMSIs on the card share one IP."],
+            ["iccid_apn", "sim_apn_ips", "One IP per SIM card per APN."],
           ],
           [1600, 2400, 5360]
         ),
@@ -400,12 +400,12 @@ const doc = new Document({
           ["Method", "Path", "Description", "Status"],
           [
             ["POST", "/v1/profiles", "Create a new subscriber profile with IMSIs and IP assignments", "201 Created"],
-            ["GET", "/v1/profiles/{device_id}", "Get profile by UUID", "200 OK"],
+            ["GET", "/v1/profiles/{sim_id}", "Get profile by UUID", "200 OK"],
             ["GET", "/v1/profiles?iccid={iccid}", "Find profile by ICCID", "200 / 404"],
             ["GET", "/v1/profiles?account_name={name}", "Paginated list by account (max 1000/page)", "200 OK"],
-            ["PUT", "/v1/profiles/{device_id}", "Replace full profile", "200 OK"],
-            ["PATCH", "/v1/profiles/{device_id}", "Partial update (JSON Merge Patch)", "200 OK"],
-            ["DELETE", "/v1/profiles/{device_id}", "Soft-delete (sets status=terminated)", "204 No Content"],
+            ["PUT", "/v1/profiles/{sim_id}", "Replace full profile", "200 OK"],
+            ["PATCH", "/v1/profiles/{sim_id}", "Partial update (JSON Merge Patch)", "200 OK"],
+            ["DELETE", "/v1/profiles/{sim_id}", "Soft-delete (sets status=terminated)", "204 No Content"],
           ],
           [900, 2900, 3860, 1700]
         ),
@@ -478,7 +478,7 @@ const doc = new Document({
         hdr("Step-by-Step", HeadingLevel.HEADING_3),
         numbered("aaa-radius-server sends: GET /lookup?imsi={imsi}&apn={apn} with Bearer JWT"),
         numbered("aaa-lookup-service validates the JWT (RS256) and queries the READ_REPLICA using the core lookup SQL"),
-        numbered("Resolver applies ip_resolution logic: for mode 'imsi', returns imsi_apn_ips.static_ip; for 'iccid', returns device_apn_ips.static_ip"),
+        numbered("Resolver applies ip_resolution logic: for mode 'imsi', returns imsi_apn_ips.static_ip; for 'iccid', returns sim_apn_ips.static_ip"),
         numbered("Response 200 {\"static_ip\": \"100.65.120.5\"} is returned"),
         numbered("aaa-radius-server sets Framed-IP-Address attribute and sends Access-Accept"),
         spacer(80),
@@ -497,17 +497,17 @@ const doc = new Document({
         spacer(80),
 
         hdr("Core Lookup SQL (executed on every RADIUS request)", HeadingLevel.HEADING_3),
-        codeBlock("SELECT sp.device_id, sp.status AS sim_status, sp.ip_resolution,"),
+        codeBlock("SELECT sp.sim_id, sp.status AS sim_status, sp.ip_resolution,"),
         codeBlock("       si.status AS imsi_status,"),
         codeBlock("       sa.apn AS imsi_apn,    sa.static_ip AS imsi_static_ip,"),
         codeBlock("       ci.apn AS iccid_apn,   ci.static_ip AS iccid_static_ip"),
-        codeBlock("FROM   imsi2device si"),
-        codeBlock("JOIN   device_profiles sp ON sp.device_id = si.device_id"),
+        codeBlock("FROM   imsi2sim si"),
+        codeBlock("JOIN   sim_profiles sp ON sp.sim_id = si.sim_id"),
         codeBlock("LEFT JOIN imsi_apn_ips  sa ON sa.imsi = si.imsi"),
-        codeBlock("LEFT JOIN device_apn_ips ci ON ci.device_id = sp.device_id"),
+        codeBlock("LEFT JOIN sim_apn_ips ci ON ci.sim_id = sp.sim_id"),
         codeBlock("WHERE  si.imsi = $1;"),
         spacer(60),
-        para("Performance: Index seek on imsi2device.imsi (PK) -> nested loop on device_profiles (PK) -> left-joins on low-cardinality IP tables. Typical: p50 1-3ms, p99 3-8ms on a warm replica.", { italic: true, color: DARK_GRAY }),
+        para("Performance: Index seek on imsi2sim.imsi (PK) -> nested loop on sim_profiles (PK) -> left-joins on low-cardinality IP tables. Typical: p50 1-3ms, p99 3-8ms on a warm replica.", { italic: true, color: DARK_GRAY }),
 
         // Flow 2
         new Paragraph({ children: [new PageBreak()] }),
@@ -517,26 +517,26 @@ const doc = new Document({
 
         hdr("Stage 1 (aaa-lookup-service) -> 404", HeadingLevel.HEADING_3),
         numbered("aaa-radius-server sends: GET /lookup?imsi=278773000002042&apn=internet.operator.com"),
-        numbered("Query returns 0 rows: IMSI not in imsi2device"),
+        numbered("Query returns 0 rows: IMSI not in imsi2sim"),
         numbered("aaa-lookup-service responds: 404 {\"error\": \"not_found\"}"),
         numbered("aaa-radius-server falls through to Stage 2"),
         spacer(80),
 
         hdr("Stage 2 (subscriber-profile-api) - Single-IMSI Path", HeadingLevel.HEADING_3),
         numbered("aaa-radius-server sends: POST /v1/first-connection {\"imsi\": \"278773000002042\", \"apn\": \"internet.operator.com\", \"imei\": \"...\"}"),
-        numbered("Idempotency check: SELECT from imsi2device WHERE imsi=$1. If found, return existing IP immediately."),
+        numbered("Idempotency check: SELECT from imsi2sim WHERE imsi=$1. If found, return existing IP immediately."),
         numbered("Range config lookup: SELECT from imsi_range_configs WHERE $imsi BETWEEN f_imsi AND t_imsi AND status='active'"),
         numbered("If no range config found: return 404 (IMSI not authorized for auto-provisioning)"),
         numbered("BEGIN TRANSACTION on PRIMARY"),
         numbered("Claim IP (atomic, race-safe): DELETE FROM ip_pool_available WHERE ip = (SELECT ip ... FOR UPDATE SKIP LOCKED) RETURNING ip"),
         numbered("If pool empty: ROLLBACK, return 503 {\"error\": \"pool_exhausted\"}"),
-        numbered("INSERT device_profiles, imsi2device, imsi_apn_ips (or iccid_ips based on ip_resolution mode)"),
+        numbered("INSERT sim_profiles, imsi2sim, imsi_apn_ips (or iccid_ips based on ip_resolution mode)"),
         numbered("COMMIT"),
-        numbered("Return 200 {\"device_id\": \"...\", \"static_ip\": \"100.65.120.5\"}"),
+        numbered("Return 200 {\"sim_id\": \"...\", \"static_ip\": \"100.65.120.5\"}"),
         numbered("aaa-radius-server issues Access-Accept with Framed-IP-Address"),
         spacer(80),
 
-        infoBox("Idempotency Guarantee", "If aaa-radius-server retries the POST /first-connection call (e.g., on timeout), the second call detects the already-provisioned IMSI in step 2 and returns the same device_id and static_ip without creating duplicates.", GREEN_BG),
+        infoBox("Idempotency Guarantee", "If aaa-radius-server retries the POST /first-connection call (e.g., on timeout), the second call detects the already-provisioned IMSI in step 2 and returns the same sim_id and static_ip without creating duplicates.", GREEN_BG),
         spacer(120),
 
         // Flow 3
@@ -561,13 +561,13 @@ const doc = new Document({
         numbered("Stage 2: POST /first-connection with slot-1 IMSI"),
         numbered("Range config matched to an iccid_range_config (iccid_range_id IS NOT NULL)"),
         numbered("Compute offset and derive ICCID"),
-        numbered("Lock: SELECT FROM device_profiles WHERE iccid=$derived_iccid FOR UPDATE"),
+        numbered("Lock: SELECT FROM sim_profiles WHERE iccid=$derived_iccid FOR UPDATE"),
         numbered("Profile does not exist yet (first slot to connect):"),
         sub_bullet("Allocate connecting IMSI's IP from its own slot pool (pool precedence: slot pool_id → parent pool_id)"),
-        sub_bullet("INSERT device_profiles with derived ICCID"),
-        sub_bullet("For each sibling slot: compute sibling IMSI (same offset), allocate IP from sibling's pool, INSERT imsi2device + IP assignment"),
+        sub_bullet("INSERT sim_profiles with derived ICCID"),
+        sub_bullet("For each sibling slot: compute sibling IMSI (same offset), allocate IP from sibling's pool, INSERT imsi2sim + IP assignment"),
         sub_bullet("All inserts in one atomic COMMIT — thundering herd protection: sibling IMSIs are instantly ready on hot-path"),
-        numbered("Return 201 with connecting IMSI's device_id and static_ip"),
+        numbered("Return 201 with connecting IMSI's sim_id and static_ip"),
         numbered("Next time slot 2 IMSI connects: Stage 1 returns 200 immediately (already provisioned)"),
         spacer(80),
 
@@ -604,7 +604,7 @@ const doc = new Document({
         spacer(80),
 
         hdr("Idempotency and Crash Recovery", HeadingLevel.HEADING_3),
-        para("All scenarios are idempotent. On any repeat call, the platform detects the IMSI in imsi2device and returns the existing IP with a single indexed read and no allocation. For multi-IMSI SIMs, sibling slots pre-provisioned in the original transaction are served from the fast hot-path on every subsequent connection — zero write pressure at steady state."),
+        para("All scenarios are idempotent. On any repeat call, the platform detects the IMSI in imsi2sim and returns the existing IP with a single indexed read and no allocation. For multi-IMSI SIMs, sibling slots pre-provisioned in the original transaction are served from the fast hot-path on every subsequent connection — zero write pressure at steady state."),
         spacer(60),
         infoBox("Thundering Herd Protection", "When 10,000 dual-IMSI SIMs simultaneously failover from slot-1 to slot-2, slot-2 IMSIs are already provisioned (pre-provisioned in the same transaction as slot-1). Every connection hits the 15ms hot-path. No allocation races, no pool contention, no write storms.", GREEN_BG),
 
@@ -627,9 +627,9 @@ const doc = new Document({
         codeBlock("}"),
         codeBlock(""),
         codeBlock("Response 201:"),
-        codeBlock("{\"device_id\": \"550e8400-e29b-41d4-a716-446655440000\", \"created_at\": \"2026-03-13T10:00:00Z\"}"),
+        codeBlock("{\"sim_id\": \"550e8400-e29b-41d4-a716-446655440000\", \"created_at\": \"2026-03-13T10:00:00Z\"}"),
         spacer(60),
-        para("The API validates all fields (15 validation rules), runs the INSERT in a single atomic transaction, and returns the auto-generated device_id UUID."),
+        para("The API validates all fields (15 validation rules), runs the INSERT in a single atomic transaction, and returns the auto-generated sim_id UUID."),
         spacer(80),
 
         hdr("Adding ICCID to an Existing Profile", HeadingLevel.HEADING_3),

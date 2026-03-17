@@ -336,7 +336,7 @@ Login
 ```
 ┌─────────────────────────────────────────────┐
 │ SIM Profile                                  │
-│ device_id: 550e8400-...  [Copy]             │
+│ sim_id: 550e8400-...  [Copy]                │
 │ ICCID: 8944501012345678901  (or "Not set")  │
 │ Account: Melita                             │
 │ Status: ● Active    [Suspend] [Terminate]   │
@@ -361,9 +361,9 @@ Login
 - Suspend / Reactivate / Terminate the SIM
 - Set/update ICCID (PATCH with `{iccid: "..."}`)
 - Open Edit Profile (full form)
-- Add IMSI: inline form with IMSI (15 digits), Priority (integer ≥ 1), APN/IP rows → POST `/profiles/{device_id}/imsis`
-- Suspend / Reactivate / Remove individual IMSIs → PATCH or DELETE `/profiles/{device_id}/imsis/{imsi}`
-- Edit IMSI priority inline → PATCH `/profiles/{device_id}/imsis/{imsi}` with `{priority: N}`
+- Add IMSI: inline form with IMSI (15 digits), Priority (integer ≥ 1), APN/IP rows → POST `/profiles/{sim_id}/imsis`
+- Suspend / Reactivate / Remove individual IMSIs → PATCH or DELETE `/profiles/{sim_id}/imsis/{imsi}`
+- Edit IMSI priority inline → PATCH `/profiles/{sim_id}/imsis/{imsi}` with `{priority: N}`
 
 ---
 
@@ -371,7 +371,7 @@ Login
 
 **Purpose:** Edit any field on an existing profile via PATCH (JSON Merge Patch).
 
-**Form fields (all pre-populated from GET /profiles/{device_id}):**
+**Form fields (all pre-populated from GET /profiles/{sim_id}):**
 - ICCID (text, optional, 19–20 digits, validated client-side)
 - Account Name (text, optional)
 - Status (select: active / suspended / terminated)
@@ -382,13 +382,13 @@ Login
 - Changing from `imsi` to `iccid` shows a warning: "This will clear per-IMSI IP assignments"
 - Changing to `imsi_apn` adds an APN field to each IMSI row
 
-**Save:** PATCH /profiles/{device_id} with only changed fields.
+**Save:** PATCH /profiles/{sim_id} with only changed fields.
 
 ---
 
-### 5. New Profile Form
+### 5. New SIM Profile Form
 
-**Purpose:** Create a single subscriber profile via POST /profiles.
+**Purpose:** Create a single SIM profile via POST /profiles.
 
 **Step 1 — Basic info:**
 - ICCID (optional)
@@ -446,15 +446,15 @@ On conflict (409), shows which ICCID or IMSI is already in use.
 #### CSV Template
 
 The template is generated dynamically by the UI (no server round-trip needed).
-Filename: `subscriber-profiles-template.csv`
+Filename: `sim-profiles-template.csv`
 
 ```csv
-device_id,iccid,account_name,status,ip_resolution,imsi_1,static_ip_1,pool_id_1,apn_1,imsi_2,static_ip_2,pool_id_2,apn_2
+sim_id,iccid,account_name,status,ip_resolution,imsi_1,static_ip_1,pool_id_1,apn_1,imsi_2,static_ip_2,pool_id_2,apn_2
 (leave blank for new),8944501012345678901,Melita,active,imsi,278773000002002,100.65.120.5,pool-uuid-abc,,278773000002003,101.65.120.5,pool-uuid-abc,
 ```
 
 **Column rules:**
-- `device_id`: leave blank for new profiles; fill in to update existing (upsert by device_id)
+- `sim_id`: leave blank for new profiles; fill in to update existing (upsert by sim_id)
 - `iccid`: optional; blank = null
 - `apn_N`: blank = null (APN-agnostic); required for `ip_resolution=imsi_apn`
 - Up to 10 IMSI columns (`imsi_1`…`imsi_10`)
@@ -486,7 +486,7 @@ Import completed with errors:
 Row 142: IMSI "27877300000200" is 14 digits (must be 15)
 Row 891: ICCID "894450101" is 9 digits (must be 19-20)
 Row 4502: IMSI "278773000002002" is already assigned to another device
-            → device_id: 661f9511-f3ac-52e5-b827-557766551111
+            → sim_id: 661f9511-f3ac-52e5-b827-557766551111
 
 [↓ Download Error Report (CSV)]
 ```
@@ -662,7 +662,7 @@ No server endpoint needed — the template is generated in the browser:
 ```typescript
 function downloadTemplate() {
   const headers = [
-    'device_id','iccid','account_name','status','ip_resolution',
+    'sim_id','iccid','account_name','status','ip_resolution',
     'imsi_1','static_ip_1','pool_id_1','apn_1',
     'imsi_2','static_ip_2','pool_id_2','apn_2',
     // ... up to imsi_10
@@ -675,7 +675,7 @@ function downloadTemplate() {
   ].join(',');
 
   const csv = [headers, example].join('\n');
-  triggerDownload(csv, 'subscriber-profiles-template.csv');
+  triggerDownload(csv, 'sim-profiles-template.csv');
 }
 ```
 

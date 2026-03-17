@@ -97,7 +97,7 @@ class TestPools:
                     "pool_id":   pid,
                 }],
             )
-            device_id = pdata["device_id"]
+            sim_id = pdata["sim_id"]
             # Now try to delete the pool — must fail with 409
             resp = http.delete(f"/pools/{pid}")
             assert resp.status_code == 409
@@ -107,7 +107,7 @@ class TestPools:
             # Teardown: delete profile first, then pool
             try:
                 from fixtures.profiles import delete_profile
-                delete_profile(http, device_id)
+                delete_profile(http, sim_id)
             except Exception:
                 pass
             delete_pool(http, pid)

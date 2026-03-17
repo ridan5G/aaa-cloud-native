@@ -66,7 +66,7 @@ Input: imsi ($1), apn ($2)
 All operations on READ_REPLICA connection only.
 
 Step 1 — Execute hot-path SQL query:
-  SELECT sp.device_id,
+  SELECT sp.sim_id,
          sp.status        AS sim_status,
          sp.ip_resolution,
          si.status        AS imsi_status,
@@ -74,10 +74,10 @@ Step 1 — Execute hot-path SQL query:
          sa.static_ip     AS imsi_static_ip,
          ci.apn           AS iccid_apn,
          ci.static_ip     AS iccid_static_ip
-  FROM        imsi2device    si
-  JOIN        device_profiles sp ON sp.device_id = si.device_id
+  FROM        imsi2sim    si
+  JOIN        sim_profiles sp ON sp.sim_id = si.sim_id
   LEFT JOIN   imsi_apn_ips  sa ON sa.imsi = si.imsi
-  LEFT JOIN   device_apn_ips ci ON ci.device_id = sp.device_id
+  LEFT JOIN   sim_apn_ips ci ON ci.sim_id = sp.sim_id
   WHERE si.imsi = $1
 
 Step 2 — If NO rows returned:
@@ -119,7 +119,7 @@ The APN is always present in the request but is only used when `ip_resolution` r
 | ip_resolution | APN handling |
 |---|---|
 | `iccid` | Ignored — return the single card-level IP |
-| `iccid_apn` | Exact match in `device_apn_ips.apn`; fallback to `apn=NULL` wildcard |
+| `iccid_apn` | Exact match in `sim_apn_ips.apn`; fallback to `apn=NULL` wildcard |
 | `imsi` | Ignored — return the single IMSI-level IP |
 | `imsi_apn` | Exact match in `imsi_apn_ips.apn`; fallback to `apn=NULL` wildcard |
 
@@ -190,7 +190,7 @@ rest {
         tls { ... }
 
         # On 200: extract static_ip → Framed-IP-Address → Access-Accept
-        # On 403: Access-Reject, Reply-Message = "Subscriber suspended"
+        # On 403: Access-Reject, Reply-Message = "SIM suspended"
         # On 404: fall through to Stage 2 (unlang policy below)
     }
 }
@@ -202,7 +202,7 @@ policy aaa_lookup {
         accept
     }
     elsif (&rest_http_status_code == 403) {
-        update reply { Reply-Message := "Subscriber suspended" }
+        update reply { Reply-Message := "SIM suspended" }
         reject
     }
     elsif (&rest_http_status_code == 404) {
@@ -217,7 +217,7 @@ policy aaa_lookup {
             accept
         }
         elsif (&rest_http_status_code == 404) {
-            update reply { Reply-Message := "Unknown subscriber" }
+            update reply { Reply-Message := "Unknown SIM" }
             reject
         }
         elsif (&rest_http_status_code == 503) {

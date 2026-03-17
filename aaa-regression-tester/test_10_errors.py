@@ -60,7 +60,7 @@ class TestErrors:
                 static_ip=IP_EXISTING,
                 pool_id=cls.pool_id,
             )
-            cls.device_conflict = b["device_id"]
+            cls.device_conflict = b["sim_id"]
 
             # A second profile (different IMSI, different ICCID) for 10.9
             b2 = create_profile_imsi(
@@ -68,7 +68,7 @@ class TestErrors:
                 imsis=[{"imsi": IMSI_SECOND, "static_ip": IP_SECOND,
                         "pool_id": cls.pool_id}],
             )
-            cls.device_second = b2["device_id"]
+            cls.device_second = b2["sim_id"]
 
             # Profile for suspend/transition tests (10.10 / 10.11 / 10.12)
             b3 = create_profile_imsi(
@@ -76,7 +76,7 @@ class TestErrors:
                 imsis=[{"imsi": IMSI_MAIN, "static_ip": IP_MAIN_A,
                         "pool_id": cls.pool_id}],
             )
-            cls.device_main = b3["device_id"]
+            cls.device_main = b3["sim_id"]
 
     @classmethod
     def teardown_class(cls):

@@ -185,7 +185,7 @@ class TestBulk:
 
     # 8.3 ─────────────────────────────────────────────────────────────────────
     def test_03_spot_check_profiles_via_api(self, http: httpx.Client):
-        """GET /profiles/{device_id} for 10 random entries → 200, fields correct."""
+        """GET /profiles/{sim_id} for 10 random entries → 200, fields correct."""
         for sample in TestBulk.sample_profiles_a:
             # Look up by ICCID
             iccid = sample["iccid"]

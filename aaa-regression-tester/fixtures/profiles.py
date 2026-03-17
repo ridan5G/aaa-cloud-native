@@ -1,5 +1,5 @@
 """
-fixtures/profiles.py — helpers for device_profiles (all three modes).
+fixtures/profiles.py — helpers for sim_profiles (all three modes).
 """
 import httpx
 
@@ -161,10 +161,10 @@ def create_profile_iccid_apn(
     return resp.json()
 
 
-def delete_profile(http: httpx.Client, device_id: str) -> None:
-    """DELETE /profiles/{device_id} — best-effort teardown (soft-delete)."""
-    resp = http.delete(f"/profiles/{device_id}")
+def delete_profile(http: httpx.Client, sim_id: str) -> None:
+    """DELETE /profiles/{sim_id} — best-effort teardown (soft-delete)."""
+    resp = http.delete(f"/profiles/{sim_id}")
     if resp.status_code not in (204, 404):
         raise AssertionError(
-            f"delete_profile({device_id}) returned {resp.status_code}: {resp.text}"
+            f"delete_profile({sim_id}) returned {resp.status_code}: {resp.text}"
         )

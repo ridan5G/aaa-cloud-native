@@ -12,9 +12,9 @@ aaa-# \dt
  public | ip_pool_available    | table | postgres
  public | ip_pools             | table | postgres
  public | imsi_apn_ips   | table | postgres
- public | device_apn_ips | table | postgres
- public | imsi2device     | table | postgres
- public | device_profiles  | table | postgres
+ public | sim_apn_ips | table | postgres
+ public | imsi2sim     | table | postgres
+ public | sim_profiles  | table | postgres
 (8 rows)
 
 aaa-# SELECT * FROM iccid_range_configs;
@@ -22,9 +22,9 @@ SELECT * FROM imsi_range_configs;
 SELECT * FROM ip_pool_available;
 SELECT * FROM ip_pools;
 SELECT * FROM imsi_apn_ips;
-SELECT * FROM device_apn_ips;
-SELECT * FROM imsi2device;
-SELECT * FROM device_profiles;
+SELECT * FROM sim_apn_ips;
+SELECT * FROM imsi2sim;
+SELECT * FROM sim_profiles;
 
 
 aaa=# SELECT * FROM imsi_apn_ips;
@@ -35,31 +35,31 @@ aaa=# SELECT * FROM imsi_apn_ips;
   3 | 278770300000001 |          | 100.65.3.254 |         |           | 2026-03-12 16:10:29.880642+00 | 2026-03-12 16:10:29.880642+00
 (3 rows)
 
-aaa=# SELECT * FROM device_apn_ips;
- id |              device_id               | apn | static_ip  | pool_id | pool_name |          created_at           |          updated_at
+aaa=# SELECT * FROM sim_apn_ips;
+ id |              sim_id               | apn | static_ip  | pool_id | pool_name |          created_at           |          updated_at
 ----+--------------------------------------+-----+------------+---------+-----------+-------------------------------+-------------------------------
   1 | aaaaaaaa-0001-0000-0000-000000000001 |     | 100.65.1.1 |         |           | 2026-03-12 16:10:29.880642+00 | 2026-03-12 16:10:29.880642+00
 (1 row)
 
-aaa=# \SELECT * FROM imsi2device;
+aaa=# \SELECT * FROM imsi2sim;
 invalid command \SELECT
 Try \? for help.
-aaa=# SELECT * FROM device_apn_ips;
- id |              device_id               | apn | static_ip  | pool_id | pool_name |          created_at           |          updated_at
+aaa=# SELECT * FROM sim_apn_ips;
+ id |              sim_id               | apn | static_ip  | pool_id | pool_name |          created_at           |          updated_at
 ----+--------------------------------------+-----+------------+---------+-----------+-------------------------------+-------------------------------
   1 | aaaaaaaa-0001-0000-0000-000000000001 |     | 100.65.1.1 |         |           | 2026-03-12 16:10:29.880642+00 | 2026-03-12 16:10:29.880642+00
 (1 row)
 
-aaa=# SELECT * FROM imsi2device;
-      imsi       |              device_id               | status | priority |          created_at           |          updated_at
+aaa=# SELECT * FROM imsi2sim;
+      imsi       |              sim_id               | status | priority |          created_at           |          updated_at
 -----------------+--------------------------------------+--------+----------+-------------------------------+-------------------------------
  278770200000001 | aaaaaaaa-0002-0000-0000-000000000001 | active |        1 | 2026-03-12 16:10:29.880642+00 | 2026-03-12 16:10:29.880642+00
  278770100000001 | aaaaaaaa-0001-0000-0000-000000000001 | active |        1 | 2026-03-12 16:10:29.880642+00 | 2026-03-12 16:10:29.880642+00
  278770300000001 | aaaaaaaa-0003-0000-0000-000000000001 | active |        1 | 2026-03-12 16:10:29.880642+00 | 2026-03-12 16:10:29.880642+00
 (3 rows)
 
-aaa=# SELECT * FROM device_profiles;
-              device_id               |        iccid        | account_name | status | ip_resolution | metadata |          created_at           |          updated_at
+aaa=# SELECT * FROM sim_profiles;
+              sim_id               |        iccid        | account_name | status | ip_resolution | metadata |          created_at           |          updated_at
 --------------------------------------+---------------------+--------------+--------+---------------+----------+-------------------------------+-------------------------------
  aaaaaaaa-0002-0000-0000-000000000001 | 8944501020000000001 | TestAccount  | active | imsi          |          | 2026-03-12 16:10:29.880642+00 | 2026-03-12 16:10:29.880642+00
  aaaaaaaa-0001-0000-0000-000000000001 | 8944501010000000001 | TestAccount  | active | iccid         |          | 2026-03-12 16:10:29.880642+00 | 2026-03-12 16:10:29.880642+00

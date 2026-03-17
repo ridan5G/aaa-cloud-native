@@ -40,8 +40,8 @@ T_IMSI2      = "278773071000099"
 class TestDynamicAlloc:
     pool_id:         str | None = None
     range_config_id: str | None = None
-    # All auto-provisioned device_ids collected for teardown
-    alloc_device_ids: list[str] = []
+    # All auto-provisioned sim_ids collected for teardown
+    alloc_sim_ids: list[str] = []
 
     @classmethod
     def setup_class(cls):
@@ -61,14 +61,14 @@ class TestDynamicAlloc:
                 account_name="TestAccount",
             )
             cls.range_config_id = rc["id"]
-            cls.alloc_device_ids = []
+            cls.alloc_sim_ids = []
 
     @classmethod
     def teardown_class(cls):
         with httpx.Client(base_url=PROVISION_BASE,
                           headers={"Authorization": f"Bearer {JWT_TOKEN}"},
                           timeout=30.0) as c:
-            for did in cls.alloc_device_ids:
+            for did in cls.alloc_sim_ids:
                 try:
                     c.delete(f"/profiles/{did}")
                 except Exception:
@@ -118,9 +118,9 @@ class TestDynamicAlloc:
         assert r_s2.status_code == 201, \
             f"First-connection failed: {r_s2.status_code} {r_s2.text}"
         body = r_s2.json()
-        assert "device_id" in body, "Response must contain device_id"
+        assert "sim_id" in body, "Response must contain sim_id"
         assert "static_ip" in body, "Response must contain static_ip"
-        TestDynamicAlloc.alloc_device_ids.append(body["device_id"])
+        TestDynamicAlloc.alloc_sim_ids.append(body["sim_id"])
 
         # Stage 1 again — now the profile exists → 200
         r_s1b = lookup_http.get("/lookup",
@@ -225,11 +225,11 @@ class TestDynamicAlloc:
             imsi = f"2787730700{seq:05d}"
             r = self._first_connection(http, imsi, "internet.operator.com")
             if r.status_code == 201:
-                created_ids.append(r.json()["device_id"])
+                created_ids.append(r.json()["sim_id"])
             elif r.status_code == 503:
                 break   # exhausted sooner than expected (pool already had allocations)
 
-        TestDynamicAlloc.alloc_device_ids.extend(created_ids)
+        TestDynamicAlloc.alloc_sim_ids.extend(created_ids)
 
         # Now the pool must be exhausted
         overflow_imsi = "278773070000099"
@@ -285,7 +285,7 @@ class TestDynamicAlloc:
                 )
                 if r.status_code == 201:
                     with lock:
-                        created_ids.append(r.json()["device_id"])
+                        created_ids.append(r.json()["sim_id"])
                         allocated_ips.append(r.json()["static_ip"])
             except Exception as ex:
                 with lock:

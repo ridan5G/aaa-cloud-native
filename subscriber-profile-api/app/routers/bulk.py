@@ -86,7 +86,7 @@ async def _process_bulk_job(job_id: str, profiles: list[dict]):
 
 
 async def _upsert_profile(conn, profile: dict):
-    device_id = profile.get("device_id")
+    sim_id = profile.get("sim_id")
     iccid = profile.get("iccid")
     account_name = profile.get("account_name")
     status = profile.get("status", "active")
@@ -99,16 +99,16 @@ async def _upsert_profile(conn, profile: dict):
         if imsi and not IMSI_RE.match(imsi):
             raise BulkValidationError("imsi", f"IMSI '{imsi}' must be exactly 15 digits")
 
-    if device_id:
+    if sim_id:
         await conn.execute(
             """
-            INSERT INTO device_profiles (device_id, iccid, account_name, status, ip_resolution, metadata)
+            INSERT INTO sim_profiles (sim_id, iccid, account_name, status, ip_resolution, metadata)
             VALUES ($1::uuid, $2, $3, $4, $5, $6::jsonb)
-            ON CONFLICT (device_id) DO UPDATE
+            ON CONFLICT (sim_id) DO UPDATE
             SET status=EXCLUDED.status, ip_resolution=EXCLUDED.ip_resolution,
                 metadata=EXCLUDED.metadata, updated_at=now()
             """,
-            device_id,
+            sim_id,
             iccid,
             account_name,
             status,
@@ -116,14 +116,14 @@ async def _upsert_profile(conn, profile: dict):
             json.dumps(metadata) if metadata else None,
         )
     elif iccid:
-        device_id = await conn.fetchval(
+        sim_id = await conn.fetchval(
             """
-            INSERT INTO device_profiles (iccid, account_name, status, ip_resolution, metadata)
+            INSERT INTO sim_profiles (iccid, account_name, status, ip_resolution, metadata)
             VALUES ($1, $2, $3, $4, $5::jsonb)
             ON CONFLICT (iccid) DO UPDATE
             SET status=EXCLUDED.status, ip_resolution=EXCLUDED.ip_resolution,
                 metadata=EXCLUDED.metadata, updated_at=now()
-            RETURNING device_id::text
+            RETURNING sim_id::text
             """,
             iccid,
             account_name,
@@ -132,11 +132,11 @@ async def _upsert_profile(conn, profile: dict):
             json.dumps(metadata) if metadata else None,
         )
     else:
-        device_id = await conn.fetchval(
+        sim_id = await conn.fetchval(
             """
-            INSERT INTO device_profiles (account_name, status, ip_resolution, metadata)
+            INSERT INTO sim_profiles (account_name, status, ip_resolution, metadata)
             VALUES ($1, $2, $3, $4::jsonb)
-            RETURNING device_id::text
+            RETURNING sim_id::text
             """,
             account_name,
             status,
@@ -152,11 +152,11 @@ async def _upsert_profile(conn, profile: dict):
         priority = imsi_entry.get("priority", 1)
         await conn.execute(
             """
-            INSERT INTO imsi2device (imsi, device_id, priority)
+            INSERT INTO imsi2sim (imsi, sim_id, priority)
             VALUES ($1, $2::uuid, $3)
             ON CONFLICT (imsi) DO NOTHING
             """,
-            imsi, device_id, priority,
+            imsi, sim_id, priority,
         )
         for aip in imsi_entry.get("apn_ips", []):
             static_ip = aip.get("static_ip")
@@ -184,13 +184,13 @@ async def _upsert_profile(conn, profile: dict):
             continue
         await conn.execute(
             """
-            INSERT INTO device_apn_ips (device_id, apn, static_ip, pool_id, pool_name)
+            INSERT INTO sim_apn_ips (sim_id, apn, static_ip, pool_id, pool_name)
             VALUES ($1::uuid, $2, $3::inet, $4::uuid, $5)
             ON CONFLICT ON CONSTRAINT uq_iccid_ips_device_apn DO UPDATE
             SET static_ip=EXCLUDED.static_ip, pool_id=EXCLUDED.pool_id,
                 pool_name=EXCLUDED.pool_name, updated_at=now()
             """,
-            device_id,
+            sim_id,
             iip.get("apn"),
             static_ip,
             iip.get("pool_id"),

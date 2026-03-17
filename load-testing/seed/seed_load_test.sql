@@ -13,33 +13,33 @@
 
 BEGIN;
 
--- Build a temporary mapping table (seq, device_id, imsi, iccid, ip)
+-- Build a temporary mapping table (seq, sim_id, imsi, iccid, ip)
 CREATE TEMP TABLE _lt_seed AS
 SELECT
   s                                                          AS seq,
-  gen_random_uuid()                                          AS device_id,
+  gen_random_uuid()                                          AS sim_id,
   '00101' || LPAD(s::TEXT, 10, '0')                         AS imsi,
   '89' || LPAD(s::TEXT, 17, '0')                            AS iccid,
   ('100.64.' || ((s - 1) / 254) || '.' || ((s - 1) % 254 + 1))::INET AS static_ip
 FROM generate_series(1, 10000) s;
 
--- ── device_profiles ────────────────────────────────────────────
-INSERT INTO device_profiles (device_id, iccid, account_name, status, ip_resolution, metadata)
+-- ── sim_profiles ────────────────────────────────────────────
+INSERT INTO sim_profiles (sim_id, iccid, account_name, status, ip_resolution, metadata)
 SELECT
-  device_id,
+  sim_id,
   iccid,
   'LoadTestAccount',
   'active',
   'imsi_apn',
   ''
 FROM _lt_seed
-ON CONFLICT (device_id) DO NOTHING;
+ON CONFLICT (sim_id) DO NOTHING;
 
--- ── imsi2device ───────────────────────────────────────────────
-INSERT INTO imsi2device (imsi, device_id, status, priority)
+-- ── imsi2sim ───────────────────────────────────────────────
+INSERT INTO imsi2sim (imsi, sim_id, status, priority)
 SELECT
   imsi,
-  device_id,
+  sim_id,
   'active',
   1
 FROM _lt_seed
@@ -74,13 +74,13 @@ COMMIT;
 SELECT
   COUNT(*) FILTER (WHERE account_name = 'LoadTestAccount') AS profiles,
   COUNT(*) AS total_profiles
-FROM device_profiles;
+FROM sim_profiles;
 
 SELECT COUNT(*) AS imsis
-FROM imsi2device
+FROM imsi2sim
 WHERE imsi LIKE '00101%';
 
 SELECT COUNT(*) AS apn_ips
 FROM imsi_apn_ips sa
-JOIN imsi2device si ON si.imsi = sa.imsi
+JOIN imsi2sim si ON si.imsi = sa.imsi
 WHERE si.imsi LIKE '00101%';

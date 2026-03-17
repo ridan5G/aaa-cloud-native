@@ -13,7 +13,7 @@ from fixtures.profiles import create_profile_imsi, delete_profile
 IMSI1        = "278773060000001"
 IMSI2        = "278773060000002"
 NEW_IMSI     = "278773060000003"   # added in 6.2
-CONFLICT_IMSI = "278773060000004"  # on device_id2 — used to test 409 in 6.7
+CONFLICT_IMSI = "278773060000004"  # on sim_id2 — used to test 409 in 6.7
 
 POOL_SUBNET = "100.65.170.0/24"
 
@@ -25,8 +25,8 @@ CONF_IP = "100.65.170.20"
 
 class TestImsiOps:
     pool_id:    str | None = None
-    device_id:  str | None = None   # primary profile (IMSI1 + IMSI2)
-    device_id2: str | None = None   # secondary profile (CONFLICT_IMSI only)
+    sim_id:  str | None = None   # primary profile (IMSI1 + IMSI2)
+    sim_id2: str | None = None   # secondary profile (CONFLICT_IMSI only)
 
     @classmethod
     def setup_class(cls):
@@ -45,7 +45,7 @@ class TestImsiOps:
                     {"imsi": IMSI2, "static_ip": IP2, "pool_id": cls.pool_id},
                 ],
             )
-            cls.device_id = body["device_id"]
+            cls.sim_id = body["sim_id"]
 
             # Secondary profile — holds CONFLICT_IMSI (used for 6.7 conflict test)
             body2 = create_profile_imsi(
@@ -55,24 +55,24 @@ class TestImsiOps:
                      "pool_id": cls.pool_id},
                 ],
             )
-            cls.device_id2 = body2["device_id"]
+            cls.sim_id2 = body2["sim_id"]
 
     @classmethod
     def teardown_class(cls):
         with httpx.Client(base_url=PROVISION_BASE,
                           headers={"Authorization": f"Bearer {JWT_TOKEN}"},
                           timeout=30.0) as c:
-            if cls.device_id2:
-                delete_profile(c, cls.device_id2)
-            if cls.device_id:
-                delete_profile(c, cls.device_id)
+            if cls.sim_id2:
+                delete_profile(c, cls.sim_id2)
+            if cls.sim_id:
+                delete_profile(c, cls.sim_id)
             if cls.pool_id:
                 delete_pool(c, cls.pool_id)
 
     # 6.1 ─────────────────────────────────────────────────────────────────────
     def test_01_list_imsis(self, http: httpx.Client):
-        """GET /profiles/{device_id}/imsis → 200, list contains IMSI1 and IMSI2."""
-        r = http.get(f"/profiles/{TestImsiOps.device_id}/imsis")
+        """GET /profiles/{sim_id}/imsis → 200, list contains IMSI1 and IMSI2."""
+        r = http.get(f"/profiles/{TestImsiOps.sim_id}/imsis")
         assert r.status_code == 200
         data = r.json()
         imsi_values = [entry["imsi"] for entry in data] \
@@ -83,9 +83,9 @@ class TestImsiOps:
 
     # 6.2 ─────────────────────────────────────────────────────────────────────
     def test_02_add_new_imsi(self, http: httpx.Client):
-        """POST /profiles/{device_id}/imsis — add NEW_IMSI with apn_ips → 201."""
+        """POST /profiles/{sim_id}/imsis — add NEW_IMSI with apn_ips → 201."""
         r = http.post(
-            f"/profiles/{TestImsiOps.device_id}/imsis",
+            f"/profiles/{TestImsiOps.sim_id}/imsis",
             json={
                 "imsi": NEW_IMSI,
                 "apn_ips": [
@@ -109,8 +109,8 @@ class TestImsiOps:
 
     # 6.4 ─────────────────────────────────────────────────────────────────────
     def test_04_get_new_imsi_detail(self, http: httpx.Client):
-        """GET /profiles/{device_id}/imsis/{new_imsi} → 200, apn_ips contain NEW_IP."""
-        r = http.get(f"/profiles/{TestImsiOps.device_id}/imsis/{NEW_IMSI}")
+        """GET /profiles/{sim_id}/imsis/{new_imsi} → 200, apn_ips contain NEW_IP."""
+        r = http.get(f"/profiles/{TestImsiOps.sim_id}/imsis/{NEW_IMSI}")
         assert r.status_code == 200
         body = r.json()
         assert body["imsi"] == NEW_IMSI
@@ -119,8 +119,8 @@ class TestImsiOps:
 
     # 6.5 ─────────────────────────────────────────────────────────────────────
     def test_05_delete_new_imsi(self, http: httpx.Client):
-        """DELETE /profiles/{device_id}/imsis/{new_imsi} → 204."""
-        r = http.delete(f"/profiles/{TestImsiOps.device_id}/imsis/{NEW_IMSI}")
+        """DELETE /profiles/{sim_id}/imsis/{new_imsi} → 204."""
+        r = http.delete(f"/profiles/{TestImsiOps.sim_id}/imsis/{NEW_IMSI}")
         assert r.status_code == 204, \
             f"Expected 204, got {r.status_code}: {r.text}"
 
@@ -133,11 +133,11 @@ class TestImsiOps:
 
     # 6.7 ─────────────────────────────────────────────────────────────────────
     def test_07_add_conflicting_imsi_returns_409(self, http: httpx.Client):
-        """POST /profiles/{device_id}/imsis with IMSI already on another device → 409 imsi_conflict."""
+        """POST /profiles/{sim_id}/imsis with IMSI already on another device → 409 imsi_conflict."""
         r = http.post(
-            f"/profiles/{TestImsiOps.device_id}/imsis",
+            f"/profiles/{TestImsiOps.sim_id}/imsis",
             json={
-                "imsi": CONFLICT_IMSI,     # already belongs to device_id2
+                "imsi": CONFLICT_IMSI,     # already belongs to sim_id2
                 "apn_ips": [
                     {"static_ip": "100.65.170.99",
                      "pool_id":   TestImsiOps.pool_id},
@@ -157,10 +157,10 @@ class TestImsiOps:
         acceptable.  A 400 with a clear error message is the recommended
         safeguard; 204 means the profile becomes IMSI-less (orphan).
         """
-        # device_id2 was created with only CONFLICT_IMSI.
-        # After test 6.7 failed (409), device_id2 still has exactly 1 IMSI.
+        # sim_id2 was created with only CONFLICT_IMSI.
+        # After test 6.7 failed (409), sim_id2 still has exactly 1 IMSI.
         r = http.delete(
-            f"/profiles/{TestImsiOps.device_id2}/imsis/{CONFLICT_IMSI}"
+            f"/profiles/{TestImsiOps.sim_id2}/imsis/{CONFLICT_IMSI}"
         )
         assert r.status_code in (204, 400), (
             f"Expected 204 (allowed) or 400 (forbidden for last IMSI), "

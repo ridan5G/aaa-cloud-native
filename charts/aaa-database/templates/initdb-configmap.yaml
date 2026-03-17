@@ -35,13 +35,13 @@ data:
     $$;
 
     -- ================================================================
-    -- Table 1: device_profiles
+    -- Table 1: sim_profiles
     -- One row per physical SIM card.
-    -- device_id is the immutable primary key (UUID).
+    -- sim_id is the immutable primary key (UUID).
     -- iccid is optional — NULL for auto-allocated first-connection profiles.
     -- ================================================================
-    CREATE TABLE IF NOT EXISTS device_profiles (
-        device_id       UUID        NOT NULL DEFAULT gen_random_uuid(),
+    CREATE TABLE IF NOT EXISTS sim_profiles (
+        sim_id          UUID        NOT NULL DEFAULT gen_random_uuid(),
         iccid           TEXT        UNIQUE,
         account_name    TEXT,
         status          TEXT        NOT NULL DEFAULT 'active',
@@ -49,8 +49,8 @@ data:
         metadata        JSONB,
         created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-        CONSTRAINT device_profiles_pkey
-            PRIMARY KEY (device_id),
+        CONSTRAINT sim_profiles_pkey
+            PRIMARY KEY (sim_id),
         CONSTRAINT chk_status
             CHECK (status IN ('active', 'suspended', 'terminated')),
         CONSTRAINT chk_ip_resolution
@@ -63,37 +63,37 @@ data:
 
     -- Partial index: ICCID lookups (NULL ICCIDs excluded — auto-allocated profiles)
     CREATE INDEX IF NOT EXISTS idx_sp_iccid
-        ON device_profiles (iccid)
+        ON sim_profiles (iccid)
         WHERE iccid IS NOT NULL;
 
     CREATE INDEX IF NOT EXISTS idx_sp_account_name
-        ON device_profiles (account_name);
+        ON sim_profiles (account_name);
 
     -- Combined index: list by account + filter by status
     CREATE INDEX IF NOT EXISTS idx_sp_status
-        ON device_profiles (account_name, status);
+        ON sim_profiles (account_name, status);
 
     CREATE OR REPLACE TRIGGER trg_sp_updated_at
-        BEFORE UPDATE ON device_profiles
+        BEFORE UPDATE ON sim_profiles
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
     -- ================================================================
-    -- Table 2: imsi2device
-    -- One row per IMSI. Multiple rows may share one device_id (Multi-IMSI SIM).
+    -- Table 2: imsi2sim
+    -- One row per IMSI. Multiple rows may share one sim_id (Multi-IMSI SIM).
     -- imsi is the B-tree primary key — AAA hot-path entry point.
     -- ================================================================
-    CREATE TABLE IF NOT EXISTS imsi2device (
+    CREATE TABLE IF NOT EXISTS imsi2sim (
         imsi        TEXT        NOT NULL,
-        device_id   UUID        NOT NULL,
+        sim_id      UUID        NOT NULL,
         status      TEXT        NOT NULL DEFAULT 'active',
         priority    SMALLINT    NOT NULL DEFAULT 1,
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-        CONSTRAINT imsi2device_pkey
+        CONSTRAINT imsi2sim_pkey
             PRIMARY KEY (imsi),
-        CONSTRAINT imsi2device_device_fkey
-            FOREIGN KEY (device_id)
-            REFERENCES device_profiles (device_id)
+        CONSTRAINT imsi2sim_sim_fkey
+            FOREIGN KEY (sim_id)
+            REFERENCES sim_profiles (sim_id)
             ON DELETE CASCADE,
         CONSTRAINT chk_imsi_status
             CHECK (status IN ('active', 'suspended')),
@@ -101,12 +101,12 @@ data:
             CHECK (imsi ~ '^\d{15}$')
     );
 
-    -- Reverse index: device → all its IMSIs
-    CREATE INDEX IF NOT EXISTS idx_si_device_id
-        ON imsi2device (device_id);
+    -- Reverse index: sim → all its IMSIs
+    CREATE INDEX IF NOT EXISTS idx_si_sim_id
+        ON imsi2sim (sim_id);
 
     CREATE OR REPLACE TRIGGER trg_si_updated_at
-        BEFORE UPDATE ON imsi2device
+        BEFORE UPDATE ON imsi2sim
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
     -- ================================================================
@@ -128,7 +128,7 @@ data:
         updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         CONSTRAINT imsi_apn_ips_imsi_fkey
             FOREIGN KEY (imsi)
-            REFERENCES imsi2device (imsi)
+            REFERENCES imsi2sim (imsi)
             ON DELETE CASCADE,
         -- Only one wildcard (NULL apn) row permitted per IMSI
         CONSTRAINT uq_apn_ips_imsi_apn
@@ -143,35 +143,35 @@ data:
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
     -- ================================================================
-    -- Table 4: device_apn_ips
+    -- Table 4: sim_apn_ips
     -- Card-level static IP assignments. All IMSIs on the card share these IPs.
     --   apn IS NULL     → ip_resolution = 'iccid'     (all APNs)
     --   apn IS NOT NULL → ip_resolution = 'iccid_apn' (APN-specific)
     -- UNIQUE NULLS NOT DISTINCT: PostgreSQL 15+ required.
     -- ================================================================
-    CREATE TABLE IF NOT EXISTS device_apn_ips (
+    CREATE TABLE IF NOT EXISTS sim_apn_ips (
         id          BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-        device_id   UUID        NOT NULL,
+        sim_id      UUID        NOT NULL,
         apn         TEXT,
         static_ip   INET        NOT NULL,
         pool_id     UUID,
         pool_name   TEXT,
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-        CONSTRAINT device_apn_ips_device_fkey
-            FOREIGN KEY (device_id)
-            REFERENCES device_profiles (device_id)
+        CONSTRAINT sim_apn_ips_sim_fkey
+            FOREIGN KEY (sim_id)
+            REFERENCES sim_profiles (sim_id)
             ON DELETE CASCADE,
-        -- Only one wildcard (NULL apn) row permitted per device
-        CONSTRAINT uq_iccid_ips_device_apn
-            UNIQUE NULLS NOT DISTINCT (device_id, apn)
+        -- Only one wildcard (NULL apn) row permitted per sim
+        CONSTRAINT uq_iccid_ips_sim_apn
+            UNIQUE NULLS NOT DISTINCT (sim_id, apn)
     );
 
-    CREATE INDEX IF NOT EXISTS idx_sii_device_id
-        ON device_apn_ips (device_id);
+    CREATE INDEX IF NOT EXISTS idx_sii_sim_id
+        ON sim_apn_ips (sim_id);
 
     CREATE OR REPLACE TRIGGER trg_sii_updated_at
-        BEFORE UPDATE ON device_apn_ips
+        BEFORE UPDATE ON sim_apn_ips
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
     -- ================================================================

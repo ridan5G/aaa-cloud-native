@@ -244,7 +244,7 @@ function sectionLine(slide, y) {
   s.addText("How we achieve < 15ms", { x: 0.4, y: 2.55, w: 9, h: 0.35, fontSize: 14, bold: true, color: C.accent, margin: 0 });
 
   const perf = [
-    { t: "Index-only B-tree seek", d: "imsi2device.imsi is a PK — single-page lookup, no full-table scan" },
+    { t: "Index-only B-tree seek", d: "imsi2sim.imsi is a PK — single-page lookup, no full-table scan" },
     { t: "Near 100% cache hit", d: "~80MB index fits entirely in PostgreSQL shared_buffers at steady state" },
     { t: "Async C++ Drogon", d: "Non-blocking I/O with coroutines; zero context-switching overhead per request" },
     { t: "Read replica isolation", d: "Lookup never competes with write transactions on the primary" },
@@ -331,7 +331,7 @@ function sectionLine(slide, y) {
   s.addText([
     { text: "GET /lookup?imsi={imsi}&apn={apn}", options: { breakLine: true } },
     { text: "→ Queries READ REPLICA", options: { breakLine: true } },
-    { text: "→ IMSI not found in imsi2device", options: { breakLine: true } },
+    { text: "→ IMSI not found in imsi2sim", options: { breakLine: true } },
     { text: "→ Returns 404 {\"error\": \"not_found\"}", options: {} },
   ], { x: 0.4, y: 1.78, w: 4.1, h: 0.9, fontSize: 10.5, color: C.iceBlue, fontFace: "Courier New", margin: 0 });
 
@@ -355,8 +355,8 @@ function sectionLine(slide, y) {
   s.addText("Stage 2 Outcomes  (subscriber-profile-api)", { x: 5.1, y: 1.05, w: 4.5, h: 0.28, fontSize: 10, bold: true, color: C.blue, margin: 0 });
 
   const cards = [
-    { title: "200 OK — IP Allocated", body: "subscriber-profile-api creates device_id\n(gen_random_uuid). static_ip returned.\naaa-radius-server issues Access-Accept.", bg: "E8F5E9", border: C.green },
-    { title: "200 OK — Idempotent Return", body: "IMSI already existed in DB.\nSame device_id & IP returned.\nSafe to retry — no duplicates.", bg: "E3F2FD", border: C.blue },
+    { title: "200 OK — IP Allocated", body: "subscriber-profile-api creates sim_id\n(gen_random_uuid). static_ip returned.\naaa-radius-server issues Access-Accept.", bg: "E8F5E9", border: C.green },
+    { title: "200 OK — Idempotent Return", body: "IMSI already existed in DB.\nSame sim_id & IP returned.\nSafe to retry — no duplicates.", bg: "E3F2FD", border: C.blue },
     { title: "404 — No Range Config", body: "IMSI not in any active range config.\naaa-radius-server issues Access-Reject.", bg: "FFF3E0", border: C.amber },
     { title: "503 — Pool Exhausted", body: "No available IPs remaining.\nCreate a new pool.\nAlert fires automatically.", bg: "FFEBEE", border: C.coral },
   ];
@@ -425,10 +425,10 @@ function sectionLine(slide, y) {
   s.addText("SUBSCRIBER DATA", { x: 0.3, y: 1.1, w: 3.1, h: 0.32, fontSize: 10, bold: true, color: C.white, align: "center", valign: "middle", margin: 0, charSpacing: 2 });
 
   const subTables = [
-    { name: "device_profiles", pk: "device_id (UUID)", desc: "One row per SIM card" },
-    { name: "imsi2device", pk: "imsi (15 digits)", desc: "One row per IMSI" },
+    { name: "sim_profiles", pk: "sim_id (UUID)", desc: "One row per SIM card" },
+    { name: "imsi2sim", pk: "imsi (15 digits)", desc: "One row per IMSI" },
     { name: "imsi_apn_ips", pk: "id (BIGINT)", desc: "IMSI-level IP assignments" },
-    { name: "device_apn_ips", pk: "id (BIGINT)", desc: "Card-level IP assignments" },
+    { name: "sim_apn_ips", pk: "id (BIGINT)", desc: "Card-level IP assignments" },
   ];
   subTables.forEach((t, i) => {
     const y = 1.48 + i * 0.72;
@@ -513,7 +513,7 @@ function sectionLine(slide, y) {
     },
     {
       title: "First-Connection", color: C.green,
-      endpoints: ["POST /v1/first-connection", "→ Idempotent allocation", "→ Returns device_id + IP", "→ 503 if pool exhausted"],
+      endpoints: ["POST /v1/first-connection", "→ Idempotent allocation", "→ Returns sim_id + IP", "→ 503 if pool exhausted"],
     },
     {
       title: "Bulk & Jobs", color: C.amber,
@@ -776,8 +776,8 @@ function sectionLine(slide, y) {
   const rows = [
     ["S1", "Single-IMSI", "imsi",      "—",       "1",   "range-config + pool",                            "1 IP → imsi_apn_ips (apn=NULL)"],
     ["S2", "Single-IMSI", "imsi_apn",  "N APNs",  "N",   "range-config + apn-pools (×N)",                  "N IPs → imsi_apn_ips per APN"],
-    ["S3", "Single-IMSI", "iccid",     "—",       "1",   "range-config + pool",                            "1 IP → device_apn_ips (apn=NULL)"],
-    ["S4", "Single-IMSI", "iccid_apn", "N APNs",  "N",   "range-config + apn-pools (×N)",                  "N IPs → device_apn_ips per APN"],
+    ["S3", "Single-IMSI", "iccid",     "—",       "1",   "range-config + pool",                            "1 IP → sim_apn_ips (apn=NULL)"],
+    ["S4", "Single-IMSI", "iccid_apn", "N APNs",  "N",   "range-config + apn-pools (×N)",                  "N IPs → sim_apn_ips per APN"],
     ["M1", "Multi-IMSI (M)", "imsi",   "—",       "M",   "iccid-range + M slots (per-slot pools opt.)",    "M IPs — 1 per slot, all in 1 COMMIT"],
     ["M2", "Multi-IMSI (M)", "imsi_apn","N APNs", "M×N", "iccid-range + M slots + apn-pools on each slot", "M×N IPs — per-slot per-APN, 1 COMMIT"],
     ["M3", "Multi-IMSI (M)", "iccid",  "—",       "1",   "iccid-range + M slots",                          "1 IP shared — all slots, 1 COMMIT"],
