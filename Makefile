@@ -40,6 +40,7 @@ PCAP        ?= false     # set to true to attach a tcpdump sidecar: make test PC
         test test-secret radius-secret pcap-get \
         port-forward-lookup port-forward-api port-forward-db port-forward-ui \
         port-forward-grafana port-forward-prometheus port-forward-pgbouncer \
+        grafana-dashboard-reload grafana-open \
         logs logs-lookup logs-api logs-ui \
         status uninstall clean \
         build-load-tester load-test-seed \
@@ -295,6 +296,34 @@ port-forward-grafana:           ## Forward Grafana to localhost:3000 (bypass ing
 
 port-forward-prometheus:        ## Forward Prometheus to localhost:9090 (bypass ingress)
 	kubectl port-forward -n $(NAMESPACE) svc/$(RELEASE)-kube-prometheus-prometheus 9090:9090
+
+grafana-dashboard-reload:       ## Push updated dashboard JSON to the cluster ConfigMap (no full redeploy)
+	@echo "Syncing dashboard JSON to Helm files directory..."
+	cp grafana/aaa-platform-dashboard.json \
+	   $(CHART_DIR)/files/aaa-platform-dashboard.json
+	@echo "Applying updated ConfigMap to cluster..."
+	kubectl create configmap $(RELEASE)-grafana-aaa-dashboard \
+	  --from-file=aaa-platform-dashboard.json=$(CHART_DIR)/files/aaa-platform-dashboard.json \
+	  --namespace $(NAMESPACE) \
+	  --dry-run=client -o yaml | \
+	kubectl annotate --overwrite -f - \
+	  grafana_folder="AAA Platform" 2>/dev/null || \
+	kubectl create configmap $(RELEASE)-grafana-aaa-dashboard \
+	  --from-file=aaa-platform-dashboard.json=$(CHART_DIR)/files/aaa-platform-dashboard.json \
+	  --namespace $(NAMESPACE) \
+	  --dry-run=client -o yaml | kubectl apply -f -
+	kubectl label configmap $(RELEASE)-grafana-aaa-dashboard \
+	  grafana_dashboard=1 \
+	  -n $(NAMESPACE) --overwrite
+	@echo "Dashboard reloaded. Grafana sidecar will pick it up within ~30 s."
+
+grafana-open:                   ## Open Grafana in the browser via port-forward (background)
+	@echo "Starting port-forward on localhost:3000 — press Ctrl+C to stop"
+	@kubectl port-forward -n $(NAMESPACE) svc/$(RELEASE)-grafana 3000:80 &
+	@sleep 2 && open http://localhost:3000 || \
+	  xdg-open http://localhost:3000 2>/dev/null || \
+	  start http://localhost:3000 2>/dev/null || \
+	  echo "Open http://localhost:3000 in your browser (admin / dev-grafana)"
 
 port-forward-pgbouncer:         ## Forward PgBouncer RW to localhost:5432 (alias for port-forward-db)
 	kubectl port-forward -n $(NAMESPACE) svc/aaa-postgres-pooler-rw 5432:5432

@@ -1,0 +1,46 @@
+{{/*
+  grafana-dashboard-cm.yaml
+  ─────────────────────────────────────────────────────────────────────────────
+  Provisions the AAA Platform Grafana dashboard as a Kubernetes ConfigMap.
+
+  How it works:
+    • The Grafana sidecar (grafana-sc-dashboard) watches for ConfigMaps that
+      carry the label  grafana_dashboard: "1"  in the configured namespace(s).
+    • When found it writes the JSON content to the Grafana dashboards volume,
+      making the dashboard immediately available without a Grafana restart.
+
+  Enabling / disabling:
+    • The ConfigMap is only created when kube-prometheus-stack is enabled
+      (kube-prometheus-stack.enabled: true).
+    • Grafana must have the sidecar enabled:
+        kube-prometheus-stack.grafana.sidecar.dashboards.enabled: true
+    • Both are the default in values.yaml / values-dev.yaml.
+
+  Dashboard source:
+    • charts/aaa-platform/files/aaa-platform-dashboard.json (Helm canonical copy)
+    • grafana/aaa-platform-dashboard.json                    (manual-import copy)
+    • Keep both in sync: cp grafana/aaa-platform-dashboard.json \
+                              charts/aaa-platform/files/aaa-platform-dashboard.json
+*/}}
+{{- if (index .Values "kube-prometheus-stack" "enabled") }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-grafana-aaa-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    app.kubernetes.io/name: {{ include "aaa-platform.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    # ── Grafana sidecar discovery label ─────────────────────────────────────
+    # Must match kube-prometheus-stack.grafana.sidecar.dashboards.label
+    # and kube-prometheus-stack.grafana.sidecar.dashboards.labelValue
+    grafana_dashboard: "1"
+  annotations:
+    # Folder shown in the Grafana UI sidebar
+    grafana_folder: "AAA Platform"
+data:
+  aaa-platform-dashboard.json: |-
+{{ .Files.Get "files/aaa-platform-dashboard.json" | indent 4 }}
+{{- end }}

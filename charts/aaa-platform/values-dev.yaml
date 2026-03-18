@@ -197,9 +197,16 @@ kube-prometheus-stack:
     sidecar:
       dashboards:
         enabled: true
-        searchNamespace: aaa-platform
-    # kube-prometheus-stack auto-configures a default Prometheus datasource —
-    # do NOT add additionalDataSources with isDefault: true here (causes crash)
+        label: grafana_dashboard       # must match ConfigMap label in grafana-dashboard-cm.yaml
+        labelValue: "1"               # must match ConfigMap label value
+        searchNamespace: aaa-platform # only watch our namespace in dev
+        folderAnnotation: grafana_folder
+        provider:
+          foldersFromFilesStructure: true
+    # ── Datasource ────────────────────────────────────────────────────────
+    # kube-prometheus-stack auto-provisions a default Prometheus datasource
+    # pointing at  http://<release>-kube-prometheus-stack-prometheus:9090
+    # Do NOT add additionalDataSources with isDefault: true — it crashes Grafana.
   prometheus:
     ingress:
       enabled: true

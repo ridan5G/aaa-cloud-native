@@ -84,6 +84,61 @@ aaa-management-ui:
 kube-prometheus-stack:
   enabled: true
 
+  grafana:
+    enabled: true
+    # REQUIRED in production — set via CI secret or:
+    #   helm upgrade ... --set kube-prometheus-stack.grafana.adminPassword=<pw>
+    # For k8s-secret-based management use:
+    #   admin:
+    #     existingSecret: grafana-admin-secret
+    #     userKey: admin-user
+    #     passwordKey: admin-password
+    adminPassword: ""
+
+    # ── Dashboard sidecar ─────────────────────────────────────────────
+    # Watches for ConfigMaps labelled grafana_dashboard=1 and hot-loads them.
+    # The umbrella chart creates charts/aaa-platform/templates/grafana-dashboard-cm.yaml
+    # with exactly this label so the AAA Platform dashboard is auto-provisioned.
+    sidecar:
+      dashboards:
+        enabled: true
+        label: grafana_dashboard
+        labelValue: "1"
+        # ALL = watch every namespace; restrict to a single namespace in prod
+        # if RBAC is locked down (e.g. searchNamespace: aaa-platform)
+        searchNamespace: ALL
+        folderAnnotation: grafana_folder
+        provider:
+          foldersFromFilesStructure: true
+
+    persistence:
+      enabled: true
+      size: 5Gi
+
+  # ── Prometheus ───────────────────────────────────────────────────────
+  prometheus:
+    prometheusSpec:
+      retention: 30d
+      # Allow ServiceMonitors and PodMonitors created outside the Helm release
+      # to be scraped (required for our per-chart ServiceMonitor resources)
+      serviceMonitorSelectorNilUsesHelmValues: false
+      podMonitorSelectorNilUsesHelmValues: false
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            resources:
+              requests:
+                storage: 50Gi
+
+  alertmanager:
+    enabled: true
+
+  nodeExporter:
+    enabled: true
+
+  kubeStateMetrics:
+    enabled: true
+
 prometheus-pushgateway:
   enabled: true
 
