@@ -186,7 +186,7 @@ async def _upsert_profile(conn, profile: dict):
             """
             INSERT INTO sim_apn_ips (sim_id, apn, static_ip, pool_id, pool_name)
             VALUES ($1::uuid, $2, $3::inet, $4::uuid, $5)
-            ON CONFLICT ON CONSTRAINT uq_iccid_ips_device_apn DO UPDATE
+            ON CONFLICT ON CONSTRAINT uq_iccid_ips_sim_apn DO UPDATE
             SET static_ip=EXCLUDED.static_ip, pool_id=EXCLUDED.pool_id,
                 pool_name=EXCLUDED.pool_name, updated_at=now()
             """,

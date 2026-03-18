@@ -56,6 +56,8 @@ spec:
                   name: {{ .Values.radius.secretName }}
                   key: radius-secret
             {{- end }}
+            - name: DB_URL
+              value: {{ .Values.env.DB_URL | quote }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:

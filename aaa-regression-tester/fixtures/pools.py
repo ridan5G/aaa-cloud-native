@@ -18,7 +18,7 @@ def create_pool(
 ) -> dict:
     """POST /pools and return the full response body including pool_id."""
     body: dict = {
-        "pool_name":    pool_name,
+        "name":         pool_name,
         "account_name": account_name,
         "subnet":       subnet,
     }

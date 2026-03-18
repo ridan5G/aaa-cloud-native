@@ -54,12 +54,12 @@ class TestPools:
     def test_04_rename_pool(self, http: httpx.Client):
         """PATCH /pools/{pool_id} → rename; GET confirms new name."""
         assert TestPools.pool_id
-        resp = http.patch(f"/pools/{TestPools.pool_id}", json={"pool_name": "renamed-pool"})
+        resp = http.patch(f"/pools/{TestPools.pool_id}", json={"name": "renamed-pool"})
         assert resp.status_code == 200
 
         resp = http.get(f"/pools/{TestPools.pool_id}")
         assert resp.status_code == 200
-        assert resp.json()["pool_name"] == "renamed-pool"
+        assert resp.json()["name"] == "renamed-pool"
 
     # 1.5 ─────────────────────────────────────────────────────────────────────
     def test_05_list_pools_by_account(self, http: httpx.Client):
@@ -116,7 +116,7 @@ class TestPools:
     def test_08_create_pool_invalid_subnet(self, http: httpx.Client):
         """POST /pools with invalid CIDR → 400 validation_failed."""
         resp = http.post("/pools", json={
-            "pool_name":    "bad-pool",
+            "name":         "bad-pool",
             "account_name": "Melita",
             "subnet":       "not-a-cidr",
         })

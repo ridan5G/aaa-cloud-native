@@ -4,6 +4,7 @@ conftest.py — session-scoped HTTP clients and shared helpers.
 All test modules import from here.  No shared mutable state is kept between
 modules; each test module creates and tears down its own DB fixtures.
 """
+import asyncio
 import csv
 import os
 import time
@@ -18,10 +19,45 @@ PROVISION_BASE = os.getenv("PROVISION_URL", "http://localhost:8080/v1")
 LOOKUP_BASE    = os.getenv("LOOKUP_URL",    "http://localhost:8081/v1")
 JWT_TOKEN      = os.getenv("TEST_JWT",      "dev-skip-verify")
 
+# ── Database (auto-flush before each run) ─────────────────────────────────────
+# Set DB_URL to flush all profile/IMSI data before the test suite starts.
+# In-cluster default: postgres://aaa_app:devpassword@aaa-postgres-pooler-rw:5432/aaa
+# Local dev (after make port-forward-db): postgres://aaa_app:devpassword@localhost:5432/aaa
+DB_URL = os.getenv("DB_URL", "")
+
 # ── RADIUS server (test_12) ───────────────────────────────────────────────────
 RADIUS_HOST   = os.getenv("RADIUS_HOST",   "localhost")
 RADIUS_PORT   = int(os.getenv("RADIUS_PORT",   "1812"))
 RADIUS_SECRET = os.getenv("RADIUS_SECRET", "testing123")
+
+# ── Pre-run DB flush ──────────────────────────────────────────────────────────
+
+def pytest_sessionstart(session):
+    """Flush all profile/IMSI/IP data before the test run for a clean slate.
+
+    Equivalent to: make db-flush-stale
+    Requires DB_URL env var to be set; silently skips if not configured.
+    """
+    if not DB_URL:
+        return
+
+    import asyncpg
+
+    async def _flush():
+        conn = await asyncpg.connect(DB_URL)
+        try:
+            await conn.execute(
+                "TRUNCATE imsi_apn_ips, sim_apn_ips, imsi2sim, sim_profiles CASCADE"
+            )
+        finally:
+            await conn.close()
+
+    try:
+        asyncio.run(_flush())
+        print("\n[conftest] ✓ Profile data flushed — clean slate for test run.\n")
+    except Exception as exc:
+        print(f"\n[conftest] WARNING: DB flush failed ({exc}) — tests may see stale data.\n")
+
 
 # ── Common test data ──────────────────────────────────────────────────────────
 ACCOUNT_NAME   = "TestAccount"

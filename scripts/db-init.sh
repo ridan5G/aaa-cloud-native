@@ -66,43 +66,63 @@ if ! kubectl get configmap "${CONFIGMAP}" -n "${NAMESPACE}" &>/dev/null; then
   exit 1
 fi
 
-# ── Drop stale Plan-1 tables (old names superseded by Plan-2 schema) ──────────
-# Plan 1 used different table names. If they are still present they block the
-# Plan 2 CREATE TABLE statements (duplicate constraint/index names).
-# We drop them with CASCADE only when the new Plan-2 tables are absent, so this
-# step is a no-op on a clean install and only fires during a schema migration.
-echo "Checking for stale Plan-1 tables..."
+# ── Drop stale tables from superseded schema generations ──────────────────────
+# Each rename cycle is represented as a condition: drop the old name CASCADE
+# only when the new name does not yet exist.  CASCADE on the root table
+# (sim_profiles / device_profiles) automatically removes child tables, so
+# individual child conditions below are safety-nets for partial states.
+#
+# Generation map (old → current):
+#   Plan-1  subscriber_profiles → device_profiles → sim_profiles
+#           subscriber_imsis    → imsi2device      → imsi2sim
+#           subscriber_apn_ips  → imsi_apn_ips     (FK target changed; drop+recreate)
+#           subscriber_iccid_ips→ device_apn_ips   → sim_apn_ips
+echo "Checking for stale tables from previous schema generations..."
 kubectl exec -i "${PRIMARY_POD}" \
   -n "${NAMESPACE}" \
   -- psql -U postgres -d "${DB_NAME}" <<'SQL'
 DO $$
 BEGIN
-  -- subscriber_apn_ips  → replaced by imsi_apn_ips
-  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'subscriber_apn_ips'  AND relkind = 'r')
-  AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'imsi_apn_ips'   AND relkind = 'r') THEN
-    DROP TABLE subscriber_apn_ips CASCADE;
-    RAISE NOTICE 'Dropped stale Plan-1 table subscriber_apn_ips';
+  -- ── Plan-2a (device_*) → Plan-2b (sim_*) ──────────────────────────────────
+  -- Dropping device_profiles CASCADE removes imsi2device, imsi_apn_ips,
+  -- and device_apn_ips in one shot (FK cascade chain).
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'device_profiles' AND relkind = 'r')
+  AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'sim_profiles' AND relkind = 'r') THEN
+    DROP TABLE device_profiles CASCADE;
+    RAISE NOTICE 'Dropped stale Plan-2a table device_profiles (cascades to imsi2device, imsi_apn_ips, device_apn_ips)';
   END IF;
 
-  -- subscriber_iccid_ips → replaced by sim_apn_ips
-  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'subscriber_iccid_ips' AND relkind = 'r')
-  AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'sim_apn_ips'      AND relkind = 'r') THEN
-    DROP TABLE subscriber_iccid_ips CASCADE;
-    RAISE NOTICE 'Dropped stale Plan-1 table subscriber_iccid_ips';
+  -- imsi_apn_ips: FK target changed imsi2device→imsi2sim; drop so it is
+  -- recreated with the correct FK when the schema SQL runs.
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'imsi_apn_ips' AND relkind = 'r')
+  AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'imsi2sim' AND relkind = 'r') THEN
+    DROP TABLE imsi_apn_ips CASCADE;
+    RAISE NOTICE 'Dropped stale imsi_apn_ips (FK target changed to imsi2sim)';
   END IF;
 
-  -- subscriber_imsis  → replaced by imsi2sim  (keep if new table also absent)
+  -- ── Plan-1 (subscriber_*) → current (sim_*) ───────────────────────────────
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'subscriber_profiles' AND relkind = 'r')
+  AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'sim_profiles'    AND relkind = 'r') THEN
+    DROP TABLE subscriber_profiles CASCADE;
+    RAISE NOTICE 'Dropped stale Plan-1 table subscriber_profiles';
+  END IF;
+
   IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'subscriber_imsis' AND relkind = 'r')
   AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'imsi2sim'     AND relkind = 'r') THEN
     DROP TABLE subscriber_imsis CASCADE;
     RAISE NOTICE 'Dropped stale Plan-1 table subscriber_imsis';
   END IF;
 
-  -- subscriber_profiles → replaced by sim_profiles
-  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'subscriber_profiles' AND relkind = 'r')
-  AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'sim_profiles'    AND relkind = 'r') THEN
-    DROP TABLE subscriber_profiles CASCADE;
-    RAISE NOTICE 'Dropped stale Plan-1 table subscriber_profiles';
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'subscriber_apn_ips' AND relkind = 'r')
+  AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'imsi_apn_ips'  AND relkind = 'r') THEN
+    DROP TABLE subscriber_apn_ips CASCADE;
+    RAISE NOTICE 'Dropped stale Plan-1 table subscriber_apn_ips';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'subscriber_iccid_ips' AND relkind = 'r')
+  AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'sim_apn_ips'      AND relkind = 'r') THEN
+    DROP TABLE subscriber_iccid_ips CASCADE;
+    RAISE NOTICE 'Dropped stale Plan-1 table subscriber_iccid_ips';
   END IF;
 END;
 $$;

@@ -118,7 +118,7 @@ class TestRadiusServer:
             r = c.get("/pools")
             if r.status_code == 200:
                 for pool in r.json().get("items", []):
-                    if pool.get("pool_name") in _OUR_POOLS:
+                    if pool.get("name") in _OUR_POOLS:
                         c.delete(f"/pools/{pool['pool_id']}")
         except Exception:
             pass

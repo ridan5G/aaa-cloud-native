@@ -6,7 +6,7 @@
 -- IMSI range : 001010000001001 – 001010000011000  (MCC=001, MNC=01)
 -- ICCID range: 8900000000000001001 – 8900000000000011000
 -- IP range   : 100.64.0.1  – 100.64.39.94  (CGNAT 100.64.0.0/10)
--- APN        : internet  (exact match)
+-- APNs       : internet, mms, ims  (one row each per subscriber)
 --
 -- Idempotent — safe to run multiple times (ON CONFLICT DO NOTHING).
 -- ============================================================
@@ -31,9 +31,9 @@ SELECT
   'LoadTestAccount',
   'active',
   'imsi_apn',
-  ''
+  '{}'
 FROM _lt_seed
-ON CONFLICT (sim_id) DO NOTHING;
+ON CONFLICT DO NOTHING;
 
 -- ── imsi2sim ───────────────────────────────────────────────
 INSERT INTO imsi2sim (imsi, sim_id, status, priority)
@@ -45,27 +45,17 @@ SELECT
 FROM _lt_seed
 ON CONFLICT (imsi) DO NOTHING;
 
--- ── imsi_apn_ips — 'internet' APN (exact match) ─────────────
+-- ── imsi_apn_ips — one row per APN per subscriber ───────────
+-- Explicit rows for every APN the load test uses so all requests return 200.
 INSERT INTO imsi_apn_ips (imsi, apn, static_ip, pool_id, pool_name)
 SELECT
-  imsi,
-  'internet',
-  static_ip,
+  s.imsi,
+  a.apn,
+  s.static_ip,
   NULL,
   NULL
-FROM _lt_seed
-ON CONFLICT DO NOTHING;
-
--- ── imsi_apn_ips — wildcard APN (fallback for other APNs) ───
--- apn = '' is the catch-all wildcard (matches the existing data convention)
-INSERT INTO imsi_apn_ips (imsi, apn, static_ip, pool_id, pool_name)
-SELECT
-  imsi,
-  '',
-  (static_ip::TEXT::INET + 1000),   -- distinct IP for wildcard path
-  NULL,
-  NULL
-FROM _lt_seed
+FROM _lt_seed s
+CROSS JOIN (VALUES ('internet'), ('mms'), ('ims')) AS a(apn)
 ON CONFLICT DO NOTHING;
 
 COMMIT;
