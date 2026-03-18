@@ -204,9 +204,25 @@ kube-prometheus-stack:
         provider:
           foldersFromFilesStructure: true
     # ── Datasource ────────────────────────────────────────────────────────
-    # kube-prometheus-stack auto-provisions a default Prometheus datasource
-    # pointing at  http://<release>-kube-prometheus-stack-prometheus:9090
-    # Do NOT add additionalDataSources with isDefault: true — it crashes Grafana.
+    # Override the auto-provisioned datasource URL.
+    # kube-prometheus-stack's template generates a hostname that includes the
+    # full chart name (e.g. "…-kube-prometheus-stack-prometheus") which often
+    # differs from the ClusterIP service the Prometheus Operator actually creates.
+    # Using "prometheus-operated" is always correct: the operator creates that
+    # headless service regardless of Helm release/chart naming conventions.
+    datasources:
+      datasources.yaml:
+        apiVersion: 1
+        datasources:
+          - name: Prometheus
+            uid: prometheus
+            type: prometheus
+            url: http://prometheus-operated.aaa-platform.svc:9090
+            isDefault: true
+            access: proxy
+            jsonData:
+              timeInterval: 15s
+              httpMethod: POST
   prometheus:
     ingress:
       enabled: true

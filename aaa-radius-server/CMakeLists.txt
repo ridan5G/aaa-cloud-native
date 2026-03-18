@@ -19,6 +19,7 @@ find_package(CURL CONFIG REQUIRED)          # HTTP client for lookup + provision
 find_package(nlohmann_json CONFIG REQUIRED) # JSON parsing
 find_package(spdlog CONFIG REQUIRED)        # Structured logging
 find_package(OpenSSL REQUIRED)              # MD5 for RADIUS response authenticator
+find_package(prometheus-cpp CONFIG REQUIRED) # Prometheus metrics exposition
 
 # ── Sources ───────────────────────────────────────────────────────────────────
 set(SOURCES
@@ -26,6 +27,7 @@ set(SOURCES
   src/Radius.cpp
   src/HttpClient.cpp
   src/Handler.cpp
+  src/Metrics.cpp
 )
 
 add_executable(aaa_radius_server ${SOURCES})
@@ -40,6 +42,7 @@ target_link_libraries(aaa_radius_server PRIVATE
   spdlog::spdlog
   OpenSSL::SSL
   OpenSSL::Crypto
+  prometheus-cpp::pull
 )
 
 # ── Install ───────────────────────────────────────────────────────────────────

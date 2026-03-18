@@ -5,6 +5,7 @@
     "curl",
     "nlohmann-json",
     "spdlog",
-    "openssl"
+    "openssl",
+    "prometheus-cpp"
   ]
 }

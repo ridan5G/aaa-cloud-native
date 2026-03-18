@@ -32,6 +32,7 @@
 
 #include "Config.h"
 #include "Handler.h"
+#include "Metrics.h"
 #include "Radius.h"
 
 // ── Work item: one received UDP datagram ─────────────────────────────────────
@@ -95,9 +96,11 @@ static void workerLoop(WorkQueue& queue, int sockFd, const Config& cfg) {
         if (!req) {
             spdlog::debug("Dropped malformed/non-AccessRequest packet ({} bytes)",
                           item.data.size());
+            Metrics::instance().incPacketsDropped();
             continue;
         }
 
+        Metrics::instance().incAccessRequests();
         std::vector<uint8_t> response = handler.handle(*req);
 
         socklen_t addrLen = sizeof(item.src);
@@ -133,16 +136,25 @@ int main() {
     else if (cfg.logLevel == "error") spdlog::set_level(spdlog::level::err);
     else                              spdlog::set_level(spdlog::level::info);
 
-    spdlog::info("aaa-radius-server starting — port={} workers={} lookup={} provisioning={}",
-                 cfg.radiusPort, cfg.workerThreads, cfg.lookupUrl, cfg.provisioningUrl);
+    spdlog::info("aaa-radius-server starting — port={} workers={} lookup={} provisioning={} metrics={}",
+                 cfg.radiusPort, cfg.workerThreads, cfg.lookupUrl, cfg.provisioningUrl,
+                 cfg.metricsPort);
 
-    // ── 3. libcurl global init (call once, before any thread uses curl) ───────
+    // ── 3. Prometheus metrics ─────────────────────────────────────────────────
+    try {
+        Metrics::instance().init("0.0.0.0:" + std::to_string(cfg.metricsPort));
+    } catch (const std::exception& ex) {
+        spdlog::critical("Failed to start metrics server: {}", ex.what());
+        return 1;
+    }
+
+    // ── 5. libcurl global init (call once, before any thread uses curl) ───────
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != 0) {
         spdlog::critical("curl_global_init failed");
         return 1;
     }
 
-    // ── 4. UDP socket ─────────────────────────────────────────────────────────
+    // ── 6. UDP socket ─────────────────────────────────────────────────────────
     g_sockFd = socket(AF_INET, SOCK_DGRAM, 0);
     if (g_sockFd < 0) {
         spdlog::critical("socket(): {}", strerror(errno));

@@ -295,7 +295,7 @@ port-forward-grafana:           ## Forward Grafana to localhost:3000 (bypass ing
 	kubectl port-forward -n $(NAMESPACE) svc/$(RELEASE)-grafana 3000:80
 
 port-forward-prometheus:        ## Forward Prometheus to localhost:9090 (bypass ingress)
-	kubectl port-forward -n $(NAMESPACE) svc/$(RELEASE)-kube-prometheus-prometheus 9090:9090
+	kubectl port-forward -n $(NAMESPACE) svc/prometheus-operated 9090:9090
 
 grafana-dashboard-reload:       ## Push updated dashboard JSON to the cluster ConfigMap (no full redeploy)
 	@echo "Syncing dashboard JSON to Helm files directory..."

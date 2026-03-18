@@ -111,6 +111,28 @@ kube-prometheus-stack:
         provider:
           foldersFromFilesStructure: true
 
+    # ── Datasource ────────────────────────────────────────────────────────
+    # "prometheus-operated" is the headless service the Prometheus Operator
+    # always creates, regardless of Helm release/chart naming conventions.
+    # This avoids the common mismatch where the auto-generated hostname
+    # (e.g. <release>-kube-prometheus-stack-prometheus) differs from the
+    # actual service name the operator registers in the cluster.
+    datasources:
+      datasources.yaml:
+        apiVersion: 1
+        datasources:
+          - name: Prometheus
+            uid: prometheus
+            type: prometheus
+            # Short-form: Grafana and Prometheus are always co-located in the
+            # same namespace by this chart, so the namespace suffix is optional.
+            url: http://prometheus-operated:9090
+            isDefault: true
+            access: proxy
+            jsonData:
+              timeInterval: 15s
+              httpMethod: POST
+
     persistence:
       enabled: true
       size: 5Gi
