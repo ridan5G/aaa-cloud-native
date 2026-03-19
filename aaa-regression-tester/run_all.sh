@@ -44,6 +44,19 @@ EOF
 wait_healthy "${PROVISION_URL%/v1}" "subscriber-profile-api"
 wait_healthy "${LOOKUP_URL%/v1}"    "aaa-lookup-service"
 
+# ── Count deselected tests per marker (informational, runs fast) ──────────────
+collect_count() {
+  # --override-ini clears addopts so pytest.ini's "-m not slow..." doesn't cancel our filter
+  # Output format: "7/149 tests collected ..." — extract the first number before the slash
+  python -m pytest --collect-only -q --no-header --override-ini="addopts=" -m "$1" 2>/dev/null \
+    | awk '/tests collected/{split($1,a,"/"); print a[1]}' | head -1
+}
+N_SLOW=$(collect_count "slow")
+N_MIGRATION=$(collect_count "migration")
+N_NOAUTH=$(collect_count "noauth")
+echo " Deselected : ${N_SLOW:-0} performance (slow)  |  ${N_MIGRATION:-0} migration  |  ${N_NOAUTH:-0} keycloak-auth (noauth)"
+echo "══════════════════════════════════════════════════════"
+
 # ── Run the suite ─────────────────────────────────────────────────────────────
 EXIT_CODE=0
 python -m pytest \
