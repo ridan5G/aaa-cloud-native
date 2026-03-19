@@ -8,7 +8,7 @@ Test cases 4.1 – 4.9  (plan-01 §test_04_profiles_b)
 """
 import httpx
 
-from conftest import PROVISION_BASE, JWT_TOKEN
+from conftest import PROVISION_BASE, JWT_TOKEN, USE_CASE_ID
 from fixtures.pools import create_pool, delete_pool
 from fixtures.profiles import create_profile_imsi, delete_profile
 
@@ -63,7 +63,8 @@ class TestProfileB:
     def test_02_lookup_imsi1(self, lookup_http: httpx.Client):
         """GET /lookup?imsi=IMSI1&apn=internet → 200 with IP1."""
         r = lookup_http.get("/lookup",
-                            params={"imsi": IMSI1, "apn": "internet.operator.com"})
+                            params={"imsi": IMSI1, "apn": "internet.operator.com",
+                                    "use_case_id": USE_CASE_ID})
         assert r.status_code == 200
         assert r.json()["static_ip"] == IP1
 
@@ -71,7 +72,8 @@ class TestProfileB:
     def test_03_lookup_imsi1_different_apn(self, lookup_http: httpx.Client):
         """GET /lookup?imsi=IMSI1&apn=ims → 200 with IP1 (APN ignored in imsi mode)."""
         r = lookup_http.get("/lookup",
-                            params={"imsi": IMSI1, "apn": "ims.operator.com"})
+                            params={"imsi": IMSI1, "apn": "ims.operator.com",
+                                    "use_case_id": USE_CASE_ID})
         assert r.status_code == 200
         assert r.json()["static_ip"] == IP1
 
@@ -79,7 +81,8 @@ class TestProfileB:
     def test_04_lookup_imsi2(self, lookup_http: httpx.Client):
         """GET /lookup?imsi=IMSI2 → 200 with IP2 (distinct per-IMSI IP)."""
         r = lookup_http.get("/lookup",
-                            params={"imsi": IMSI2, "apn": "internet.operator.com"})
+                            params={"imsi": IMSI2, "apn": "internet.operator.com",
+                                    "use_case_id": USE_CASE_ID})
         assert r.status_code == 200
         assert r.json()["static_ip"] == IP2
 
@@ -102,7 +105,8 @@ class TestProfileB:
     def test_07_lookup_suspended_imsi(self, lookup_http: httpx.Client):
         """GET /lookup for suspended IMSI1 → 403 {error: suspended}."""
         r = lookup_http.get("/lookup",
-                            params={"imsi": IMSI1, "apn": "internet.operator.com"})
+                            params={"imsi": IMSI1, "apn": "internet.operator.com",
+                                    "use_case_id": USE_CASE_ID})
         assert r.status_code == 403
         assert r.json()["error"] == "suspended"
 
@@ -110,7 +114,8 @@ class TestProfileB:
     def test_08_lookup_imsi2_still_resolves(self, lookup_http: httpx.Client):
         """GET /lookup for IMSI2 → 200 while IMSI1 is suspended."""
         r = lookup_http.get("/lookup",
-                            params={"imsi": IMSI2, "apn": "internet.operator.com"})
+                            params={"imsi": IMSI2, "apn": "internet.operator.com",
+                                    "use_case_id": USE_CASE_ID})
         assert r.status_code == 200
         assert r.json()["static_ip"] == IP2
 
@@ -124,6 +129,7 @@ class TestProfileB:
         assert r.status_code == 200
 
         r = lookup_http.get("/lookup",
-                            params={"imsi": IMSI1, "apn": "internet.operator.com"})
+                            params={"imsi": IMSI1, "apn": "internet.operator.com",
+                                    "use_case_id": USE_CASE_ID})
         assert r.status_code == 200
         assert r.json()["static_ip"] == IP_NEW

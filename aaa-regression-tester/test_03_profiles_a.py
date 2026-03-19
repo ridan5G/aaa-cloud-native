@@ -8,7 +8,7 @@ Test cases 3.1 – 3.9  (plan-01 §test_03_profiles_a)
 """
 import httpx
 
-from conftest import PROVISION_BASE, JWT_TOKEN
+from conftest import PROVISION_BASE, JWT_TOKEN, USE_CASE_ID
 from fixtures.pools import create_pool, delete_pool
 from fixtures.profiles import create_profile_iccid, delete_profile
 
@@ -73,7 +73,8 @@ class TestProfileA:
     def test_03_lookup_imsi1(self, lookup_http: httpx.Client):
         """GET /lookup?imsi=IMSI1&apn=internet → 200 with STATIC_IP."""
         resp = lookup_http.get("/lookup",
-                               params={"imsi": IMSI1, "apn": "internet.operator.com"})
+                               params={"imsi": IMSI1, "apn": "internet.operator.com",
+                                       "use_case_id": USE_CASE_ID})
         assert resp.status_code == 200
         assert resp.json()["static_ip"] == STATIC_IP
 
@@ -81,7 +82,8 @@ class TestProfileA:
     def test_04_lookup_imsi2_different_apn(self, lookup_http: httpx.Client):
         """GET /lookup?imsi=IMSI2&apn=ims → 200 with same card IP (APN ignored)."""
         resp = lookup_http.get("/lookup",
-                               params={"imsi": IMSI2, "apn": "ims.operator.com"})
+                               params={"imsi": IMSI2, "apn": "ims.operator.com",
+                                       "use_case_id": USE_CASE_ID})
         assert resp.status_code == 200
         assert resp.json()["static_ip"] == STATIC_IP
 
@@ -89,7 +91,8 @@ class TestProfileA:
     def test_05_lookup_garbage_apn(self, lookup_http: httpx.Client):
         """GET /lookup with garbage APN → 200 (iccid mode ignores APN)."""
         resp = lookup_http.get("/lookup",
-                               params={"imsi": IMSI1, "apn": "any.garbage.apn"})
+                               params={"imsi": IMSI1, "apn": "any.garbage.apn",
+                                       "use_case_id": USE_CASE_ID})
         assert resp.status_code == 200
         assert resp.json()["static_ip"] == STATIC_IP
 
@@ -104,7 +107,8 @@ class TestProfileA:
     def test_07_lookup_suspended(self, lookup_http: httpx.Client):
         """GET /lookup for suspended SIM → 403 {error: suspended}."""
         resp = lookup_http.get("/lookup",
-                               params={"imsi": IMSI1, "apn": "internet.operator.com"})
+                               params={"imsi": IMSI1, "apn": "internet.operator.com",
+                                       "use_case_id": USE_CASE_ID})
         assert resp.status_code == 403
         assert resp.json()["error"] == "suspended"
 
@@ -115,7 +119,8 @@ class TestProfileA:
                           json={"status": "active"})
         assert resp.status_code == 200
         resp = lookup_http.get("/lookup",
-                               params={"imsi": IMSI1, "apn": "internet.operator.com"})
+                               params={"imsi": IMSI1, "apn": "internet.operator.com",
+                                       "use_case_id": USE_CASE_ID})
         assert resp.status_code == 200
         assert resp.json()["static_ip"] == STATIC_IP
 

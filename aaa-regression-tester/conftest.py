@@ -64,6 +64,13 @@ ACCOUNT_NAME   = "TestAccount"
 SUBNET_24      = "100.65.120.0/24"
 USABLE_IPS_24  = 253     # /24 minus network (.0) and broadcast (.255) minus .254? → plan says 253
 
+# ── Use-case identifier (mirrors aaa-radius-server Stage 1 & 2 behaviour) ─────
+# aaa-radius-server reads this from the 3GPP-Charging-Characteristics VSA
+# (vendor 10415, type 13) and appends it to every GET /lookup and
+# POST /first-connection call.  Tests use a fixed value to exercise the
+# same code paths without requiring a RADIUS packet.
+USE_CASE_ID    = "0800"
+
 # IMSI ranges — unique prefixes avoid collisions between test modules
 # Format: 27877<MM><NNNNNNNN>  MM=module (2 digits), NNNNNNNN=seq (8 digits) = 15 digits total
 def make_imsi(module: int, seq: int) -> str:

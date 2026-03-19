@@ -5,12 +5,12 @@ Verifies that the API returns the correct HTTP status codes and error bodies
 for every defined failure mode — invalid inputs, duplicate data, bad auth,
 missing parameters, and state transitions.
 
-Test cases 10.1 – 10.15  (plan-01 §test_10_errors)
+Test cases 10.1 – 10.17  (plan-01 §test_10_errors)
 """
 import httpx
 import pytest
 
-from conftest import make_imsi, make_iccid, PROVISION_BASE, JWT_TOKEN, LOOKUP_BASE
+from conftest import make_imsi, make_iccid, PROVISION_BASE, JWT_TOKEN, LOOKUP_BASE, USE_CASE_ID
 from fixtures.pools import create_pool, delete_pool
 from fixtures.profiles import (
     create_profile_iccid,
@@ -229,7 +229,8 @@ class TestErrors:
 
         r_lookup = lookup_http.get("/lookup",
                                    params={"imsi": IMSI_MAIN,
-                                           "apn": "internet.operator.com"})
+                                           "apn": "internet.operator.com",
+                                           "use_case_id": USE_CASE_ID})
         assert r_lookup.status_code == 403
         assert r_lookup.json().get("error") == "suspended"
 
@@ -273,7 +274,8 @@ class TestErrors:
         # Lookup now returns the iccid IP regardless of APN
         r_lookup = lookup_http.get("/lookup",
                                    params={"imsi": IMSI_MAIN,
-                                           "apn": "internet.operator.com"})
+                                           "apn": "internet.operator.com",
+                                           "use_case_id": USE_CASE_ID})
         assert r_lookup.status_code == 200
         assert r_lookup.json()["static_ip"] == IP_MAIN_ICCID
 
@@ -311,3 +313,94 @@ class TestErrors:
                                  "apn": "internet.operator.com"})
             assert r2.status_code == 401, \
                 f"Expected 401 on lookup service, got {r2.status_code}"
+
+    # 10.16 ───────────────────────────────────────────────────────────────────
+    def test_16_lookup_use_case_id_is_optional(self, lookup_http: httpx.Client):
+        """GET /lookup without use_case_id → 200 with correct IP.
+
+        use_case_id mirrors the 3GPP-Charging-Characteristics VSA sent by
+        aaa-radius-server.  It MUST be optional — lookups from any client
+        that omits the parameter (e.g. direct API callers, test harnesses,
+        or RADIUS packets with no charging-characteristics AVP) must still
+        resolve correctly.
+
+        Depends on test_12 having switched device_main to iccid mode with
+        IP_MAIN_ICCID still active.
+        """
+        r = lookup_http.get(
+            "/lookup",
+            params={"imsi": IMSI_MAIN, "apn": "internet.operator.com"},
+            # use_case_id deliberately omitted
+        )
+        assert r.status_code == 200, \
+            f"Expected 200 without use_case_id, got {r.status_code}: {r.text}"
+        assert r.json()["static_ip"] == IP_MAIN_ICCID, (
+            f"Expected {IP_MAIN_ICCID} without use_case_id, "
+            f"got {r.json().get('static_ip')}"
+        )
+
+    # 10.17 ───────────────────────────────────────────────────────────────────
+    def test_17_first_connection_use_case_id_is_optional(self, http: httpx.Client,
+                                                         lookup_http: httpx.Client):
+        """POST /first-connection without use_case_id → 200; GET /lookup without it → same IP.
+
+        Verifies that both Stage 2 (first-connection) and Stage 1 (lookup) honour
+        the optional nature of use_case_id.  This test calls each endpoint twice:
+        once without the parameter and once with it, confirming the responses are
+        identical regardless of its presence.
+
+        IMSI_MAIN is already provisioned (iccid mode, IP_MAIN_ICCID), so
+        first-connection returns 200 via the idempotent path.
+        """
+        # ── Stage 2 without use_case_id ───────────────────────────────────────
+        r_fc_no_ucid = http.post(
+            "/profiles/first-connection",
+            json={"imsi": IMSI_MAIN, "apn": "internet.operator.com"},
+            # use_case_id deliberately omitted
+        )
+        assert r_fc_no_ucid.status_code in (200, 201), (
+            f"first-connection without use_case_id failed: "
+            f"{r_fc_no_ucid.status_code} {r_fc_no_ucid.text}"
+        )
+        ip_no_ucid = r_fc_no_ucid.json()["static_ip"]
+
+        # ── Stage 2 with use_case_id ──────────────────────────────────────────
+        r_fc_ucid = http.post(
+            "/profiles/first-connection",
+            json={"imsi": IMSI_MAIN, "apn": "internet.operator.com",
+                  "use_case_id": USE_CASE_ID},
+        )
+        assert r_fc_ucid.status_code in (200, 201), (
+            f"first-connection with use_case_id failed: "
+            f"{r_fc_ucid.status_code} {r_fc_ucid.text}"
+        )
+        ip_with_ucid = r_fc_ucid.json()["static_ip"]
+
+        assert ip_no_ucid == ip_with_ucid == IP_MAIN_ICCID, (
+            f"IP mismatch: without={ip_no_ucid}, with={ip_with_ucid}, "
+            f"expected={IP_MAIN_ICCID}"
+        )
+
+        # ── Stage 1 without use_case_id ───────────────────────────────────────
+        r_lkp_no_ucid = lookup_http.get(
+            "/lookup",
+            params={"imsi": IMSI_MAIN, "apn": "internet.operator.com"},
+            # use_case_id deliberately omitted
+        )
+        assert r_lkp_no_ucid.status_code == 200, (
+            f"lookup without use_case_id failed: "
+            f"{r_lkp_no_ucid.status_code} {r_lkp_no_ucid.text}"
+        )
+
+        # ── Stage 1 with use_case_id ──────────────────────────────────────────
+        r_lkp_ucid = lookup_http.get(
+            "/lookup",
+            params={"imsi": IMSI_MAIN, "apn": "internet.operator.com",
+                    "use_case_id": USE_CASE_ID},
+        )
+        assert r_lkp_ucid.status_code == 200
+
+        assert r_lkp_no_ucid.json()["static_ip"] == r_lkp_ucid.json()["static_ip"] \
+            == IP_MAIN_ICCID, (
+            "IP must be identical with and without use_case_id"
+        )

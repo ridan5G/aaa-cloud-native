@@ -27,6 +27,7 @@ from conftest import (
     PROVISION_BASE,
     JWT_TOKEN,
     LOOKUP_BASE,
+    USE_CASE_ID,
 )
 from fixtures.pools import create_pool, delete_pool
 
@@ -185,7 +186,8 @@ class TestPerformance:
             t0 = time.perf_counter()
             r = lookup_http.get("/lookup",
                                 params={"imsi": imsi,
-                                        "apn": "internet.operator.com"})
+                                        "apn": "internet.operator.com",
+                                        "use_case_id": USE_CASE_ID})
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
             assert r.status_code == 200, \
                 f"Lookup failed for {imsi}: {r.status_code}"

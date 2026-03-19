@@ -15,7 +15,7 @@ import time
 
 import httpx
 
-from conftest import make_imsi, make_iccid, make_ip, poll_until, PROVISION_BASE, JWT_TOKEN
+from conftest import make_imsi, make_iccid, make_ip, poll_until, PROVISION_BASE, JWT_TOKEN, USE_CASE_ID
 from fixtures.pools import create_pool, delete_pool
 
 MODULE = 8
@@ -215,7 +215,8 @@ class TestBulk:
             imsi     = sample["imsis"][0]["imsi"]
             expected = sample["imsis"][0]["apn_ips"][0]["static_ip"]
             apn      = sample["imsis"][0]["apn_ips"][0]["apn"]
-            r = lookup_http.get("/lookup", params={"imsi": imsi, "apn": apn})
+            r = lookup_http.get("/lookup", params={"imsi": imsi, "apn": apn,
+                                                    "use_case_id": USE_CASE_ID})
             assert r.status_code == 200, \
                 f"Lookup for {imsi}@{apn} returned {r.status_code}"
             assert r.json()["static_ip"] == expected

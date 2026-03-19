@@ -16,7 +16,7 @@ import pytest
 
 import httpx
 
-from conftest import make_imsi, make_iccid, PROVISION_BASE, JWT_TOKEN
+from conftest import make_imsi, make_iccid, PROVISION_BASE, JWT_TOKEN, USE_CASE_ID
 
 pytestmark = pytest.mark.migration
 
@@ -249,13 +249,15 @@ class TestMigration:
         # Lookups resolve to correct IPs per APN
         r_pgw1 = lookup_http.get("/lookup",
                                   params={"imsi": IMSI_DUAL_APN,
-                                          "apn": "pgw1.operator.com"})
+                                          "apn": "pgw1.operator.com",
+                                          "use_case_id": USE_CASE_ID})
         assert r_pgw1.status_code == 200
         assert r_pgw1.json()["static_ip"] == DUAL_IP_PGW1
 
         r_pgw2 = lookup_http.get("/lookup",
                                   params={"imsi": IMSI_DUAL_APN,
-                                          "apn": "pgw2.operator.com"})
+                                          "apn": "pgw2.operator.com",
+                                          "use_case_id": USE_CASE_ID})
         assert r_pgw2.status_code == 200
         assert r_pgw2.json()["static_ip"] == DUAL_IP_PGW2
 
@@ -274,7 +276,8 @@ class TestMigration:
         # GET /lookup → SAME_IP regardless of APN
         r_lookup = lookup_http.get("/lookup",
                                    params={"imsi": IMSI_SAME_IP,
-                                           "apn": "any.operator.com"})
+                                           "apn": "any.operator.com",
+                                           "use_case_id": USE_CASE_ID})
         assert r_lookup.status_code == 200
         assert r_lookup.json()["static_ip"] == SAME_IP
 

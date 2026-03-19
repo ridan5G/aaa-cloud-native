@@ -5,7 +5,7 @@ Test cases 6.1 – 6.8  (plan-01 §test_06_imsi_ops)
 """
 import httpx
 
-from conftest import PROVISION_BASE, JWT_TOKEN
+from conftest import PROVISION_BASE, JWT_TOKEN, USE_CASE_ID
 from fixtures.pools import create_pool, delete_pool
 from fixtures.profiles import create_profile_imsi, delete_profile
 
@@ -103,7 +103,8 @@ class TestImsiOps:
     def test_03_lookup_new_imsi_resolves(self, lookup_http: httpx.Client):
         """GET /lookup?imsi=NEW_IMSI&apn=... → 200 with NEW_IP."""
         r = lookup_http.get("/lookup",
-                            params={"imsi": NEW_IMSI, "apn": "internet.operator.com"})
+                            params={"imsi": NEW_IMSI, "apn": "internet.operator.com",
+                                    "use_case_id": USE_CASE_ID})
         assert r.status_code == 200
         assert r.json()["static_ip"] == NEW_IP
 
@@ -128,7 +129,8 @@ class TestImsiOps:
     def test_06_lookup_deleted_imsi_returns_404(self, lookup_http: httpx.Client):
         """GET /lookup for a deleted IMSI → 404."""
         r = lookup_http.get("/lookup",
-                            params={"imsi": NEW_IMSI, "apn": "internet.operator.com"})
+                            params={"imsi": NEW_IMSI, "apn": "internet.operator.com",
+                                    "use_case_id": USE_CASE_ID})
         assert r.status_code == 404
 
     # 6.7 ─────────────────────────────────────────────────────────────────────

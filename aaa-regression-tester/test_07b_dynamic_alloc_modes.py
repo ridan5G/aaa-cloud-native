@@ -18,7 +18,7 @@ Test module = 13 → IMSI prefix 27877 13 (no overlap with other modules).
 import httpx
 import pytest
 
-from conftest import PROVISION_BASE, JWT_TOKEN, make_imsi, make_iccid
+from conftest import PROVISION_BASE, JWT_TOKEN, make_imsi, make_iccid, USE_CASE_ID
 from fixtures.pools import create_pool, delete_pool
 from fixtures.range_configs import (
     create_range_config,
@@ -36,7 +36,8 @@ APN_IMS      = "ims.operator.com"
 
 def _fc(http: httpx.Client, imsi: str, apn: str = APN_INTERNET) -> httpx.Response:
     """POST /profiles/first-connection — simulates aaa-radius-server Stage 2."""
-    return http.post("/profiles/first-connection", json={"imsi": imsi, "apn": apn})
+    return http.post("/profiles/first-connection",
+                     json={"imsi": imsi, "apn": apn, "use_case_id": USE_CASE_ID})
 
 
 def _new_client() -> httpx.Client:

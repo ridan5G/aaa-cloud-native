@@ -13,7 +13,7 @@ bulk operations, export/search, and failure scenarios.
 - Local: Docker Compose (`docker-compose.test.yml`) against the same containers
 **Output:** JUnit XML (`/app/results/results.xml`) · console pass/fail summary · Prometheus Pushgateway metrics
 
-**Current suite result: 134 passed · 0 failed · 0 skipped · ~72 s**
+**Current suite result: 136 passed · 0 failed · 0 skipped · ~72 s**
 
 ---
 
@@ -42,7 +42,7 @@ aaa-regression-tester/
 ├── test_07_dynamic_alloc.py          # First-connection single-IMSI baseline      [ 9 tests]
 ├── test_07b_dynamic_alloc_modes.py   # First-connection all 7 allocation modes   [25 tests]
 ├── test_08_bulk.py                   # Bulk upsert via POST /profiles/bulk        [ 8 tests]
-├── test_10_errors.py                 # Validation, 404, 409, 503, auth errors    [14 tests]
+├── test_10_errors.py                 # Validation, 404, 409, 503, auth errors    [16 tests]
 ├── test_12_radius.py                 # End-to-end RADIUS authentication          [14 tests]
 └── test_13_export_and_ip_search.py   # Export CSV + IP filter + terminated SIMs  [13 tests]
 ```
@@ -68,7 +68,22 @@ RADIUS_SECRET  = os.getenv("RADIUS_SECRET", "")
 
 # DB flush (conftest setup_session — clears tables before every run)
 DB_URL         = os.getenv("DB_URL", "postgres://aaa_app:devpassword@localhost:5432/aaa")
+
+# ── use_case_id convention ────────────────────────────────────────────────────
+# aaa-radius-server reads the 3GPP-Charging-Characteristics VSA (vendor 10415,
+# type 13) from every RADIUS Access-Request and forwards its value as
+# use_case_id to GET /lookup and POST /first-connection.
+# Tests use the fixed constant below so the same server code paths are exercised
+# without requiring a real RADIUS packet.
+USE_CASE_ID    = "0800"
 ```
+
+**use_case_id in lookup and first-connection calls:**
+All `GET /lookup` and `POST /first-connection` calls in test_03 through test_13
+(and in the `_first_connection()` / `_fc()` helpers used by test_07 and test_07b)
+pass `use_case_id=USE_CASE_ID`. Two intentional exceptions:
+- **test_10 tests 10.13 / 10.14** — boundary tests for missing required params; adding `use_case_id` would not change the expected 400 but would obscure the intent.
+- **test_12 pre-condition 404 checks** — raw lookups for IMSIs that do not yet exist; the explicit "with vs without" coverage is already provided by tests 10.16 / 10.17.
 
 **Run order is sequential** (test_01 → test_13). Each module is self-contained: it creates
 its own fixtures in `setup_class`, runs its cases, then tears down in `teardown_class`.
@@ -356,8 +371,11 @@ detail is returned. Also covers ip_resolution change constraints (e.g., switchin
 | 10.10 | `GET /lookup` — suspended SIM | 403 `{"error":"suspended"}` |
 | 10.11 | `PATCH` ip_resolution imsi→imsi_apn without providing apn fields | 400 validation_failed |
 | 10.12 | `PATCH` ip_resolution imsi→iccid; supply valid iccid_ips; verify old apn_ips cleared | 200; GET /lookup returns iccid_static_ip |
-| 10.13 | `GET /lookup` — missing apn param | 400 |
-| 10.14 | `GET /lookup` — missing imsi param | 400 |
+| 10.13 | `GET /lookup` — missing apn param *(no `use_case_id` — intentional boundary test)* | 400 |
+| 10.14 | `GET /lookup` — missing imsi param *(no `use_case_id` — intentional boundary test)* | 400 |
+| 10.15 | Any endpoint with invalid / missing JWT (`@pytest.mark.noauth`) | 401 on both provision API and lookup service |
+| 10.16 | `GET /lookup` without `use_case_id` | 200, correct IP — `use_case_id` is optional |
+| 10.17 | `POST /first-connection` without `use_case_id` then with it; `GET /lookup` same pair | Both calls return identical IP — parameter is optional end-to-end |
 
 ---
 
@@ -455,7 +473,7 @@ Covers three new behaviours introduced together:
 4. run_all.sh pushes JUnit totals to Prometheus Pushgateway (non-fatal if push fails)
 
 Result (full suite, RADIUS enabled):
-  134 passed · 0 failed · 0 skipped · ~72 s
+  136 passed · 0 failed · 0 skipped · ~72 s
 ```
 
 ---

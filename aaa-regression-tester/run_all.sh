@@ -54,8 +54,6 @@ collect_count() {
 N_SLOW=$(collect_count "slow")
 N_MIGRATION=$(collect_count "migration")
 N_NOAUTH=$(collect_count "noauth")
-echo " Deselected : ${N_SLOW:-0} performance (slow)  |  ${N_MIGRATION:-0} migration  |  ${N_NOAUTH:-0} keycloak-auth (noauth)"
-echo "══════════════════════════════════════════════════════"
 
 # ── Run the suite ─────────────────────────────────────────────────────────────
 EXIT_CODE=0
@@ -64,6 +62,8 @@ python -m pytest \
   -v \
   "$@" \
   || EXIT_CODE=$?
+
+echo " Deselected : ${N_SLOW:-0} performance (slow)  |  ${N_MIGRATION:-0} migration  |  ${N_NOAUTH:-0} keycloak-auth (noauth)"
 
 # ── Push metrics to Prometheus Pushgateway ────────────────────────────────────
 if [ -n "${PUSHGATEWAY_URL:-}" ]; then

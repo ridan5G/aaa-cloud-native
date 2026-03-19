@@ -14,7 +14,7 @@ import threading
 
 import httpx
 
-from conftest import PROVISION_BASE, JWT_TOKEN
+from conftest import PROVISION_BASE, JWT_TOKEN, USE_CASE_ID
 from fixtures.pools import create_pool, delete_pool
 from fixtures.range_configs import create_range_config, delete_range_config
 
@@ -85,7 +85,7 @@ class TestDynamicAlloc:
         """Simulate aaa-radius-server Stage 2: POST /profiles/first-connection."""
         return http.post(
             "/profiles/first-connection",
-            json={"imsi": imsi, "apn": apn},
+            json={"imsi": imsi, "apn": apn, "use_case_id": USE_CASE_ID},
         )
 
     # 7.1 ─────────────────────────────────────────────────────────────────────
@@ -109,7 +109,8 @@ class TestDynamicAlloc:
         # Stage 1 — lookup service has no profile → 404
         r_s1 = lookup_http.get("/lookup",
                                 params={"imsi": IMSI_FC1,
-                                        "apn": "internet.operator.com"})
+                                        "apn": "internet.operator.com",
+                                        "use_case_id": USE_CASE_ID})
         assert r_s1.status_code == 404, \
             f"Expected 404 before provisioning, got {r_s1.status_code}"
 
@@ -125,7 +126,8 @@ class TestDynamicAlloc:
         # Stage 1 again — now the profile exists → 200
         r_s1b = lookup_http.get("/lookup",
                                  params={"imsi": IMSI_FC1,
-                                         "apn": "internet.operator.com"})
+                                         "apn": "internet.operator.com",
+                                         "use_case_id": USE_CASE_ID})
         assert r_s1b.status_code == 200
         assert r_s1b.json()["static_ip"] == body["static_ip"]
 
@@ -136,7 +138,8 @@ class TestDynamicAlloc:
         # Remember current IP from lookup
         r1 = lookup_http.get("/lookup",
                              params={"imsi": IMSI_FC1,
-                                     "apn": "internet.operator.com"})
+                                     "apn": "internet.operator.com",
+                                     "use_case_id": USE_CASE_ID})
         assert r1.status_code == 200
         existing_ip = r1.json()["static_ip"]
 
@@ -176,7 +179,8 @@ class TestDynamicAlloc:
         """GET /lookup for IMSI not covered by any range config → 404 not_found."""
         r = lookup_http.get("/lookup",
                             params={"imsi": IMSI_OOB,
-                                    "apn": "internet.operator.com"})
+                                    "apn": "internet.operator.com",
+                                    "use_case_id": USE_CASE_ID})
         assert r.status_code == 404
         error = r.json().get("error", "")
         assert error in ("not_found", "no_range_config", "apn_not_found"), \
@@ -204,7 +208,8 @@ class TestDynamicAlloc:
         # Stage 1 — still 404 because no profile was created
         r_lookup = lookup_http.get("/lookup",
                                    params={"imsi": IMSI_SUSP,
-                                           "apn": "internet.operator.com"})
+                                           "apn": "internet.operator.com",
+                                           "use_case_id": USE_CASE_ID})
         assert r_lookup.status_code == 404
 
         # Re-activate for subsequent tests
@@ -281,7 +286,8 @@ class TestDynamicAlloc:
             try:
                 r = http.post(
                     "/profiles/first-connection",
-                    json={"imsi": imsi, "apn": "internet.operator.com"},
+                    json={"imsi": imsi, "apn": "internet.operator.com",
+                          "use_case_id": USE_CASE_ID},
                 )
                 if r.status_code == 201:
                     with lock:

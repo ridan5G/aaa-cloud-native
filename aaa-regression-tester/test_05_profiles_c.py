@@ -10,7 +10,7 @@ import threading
 
 import httpx
 
-from conftest import PROVISION_BASE, JWT_TOKEN
+from conftest import PROVISION_BASE, JWT_TOKEN, USE_CASE_ID
 from fixtures.pools import create_pool, delete_pool
 from fixtures.profiles import create_profile_imsi_apn, delete_profile
 
@@ -86,7 +86,8 @@ class TestProfileC:
     def test_02_lookup_imsi1_smf1(self, lookup_http: httpx.Client):
         """GET /lookup?imsi=IMSI1&apn=smf1 → 200 with IP_A."""
         r = lookup_http.get("/lookup",
-                            params={"imsi": IMSI1, "apn": APN_SMF1})
+                            params={"imsi": IMSI1, "apn": APN_SMF1,
+                                    "use_case_id": USE_CASE_ID})
         assert r.status_code == 200
         assert r.json()["static_ip"] == IP_A
 
@@ -94,7 +95,8 @@ class TestProfileC:
     def test_03_lookup_imsi1_smf2(self, lookup_http: httpx.Client):
         """GET /lookup?imsi=IMSI1&apn=smf2 → 200 with IP_B."""
         r = lookup_http.get("/lookup",
-                            params={"imsi": IMSI1, "apn": APN_SMF2})
+                            params={"imsi": IMSI1, "apn": APN_SMF2,
+                                    "use_case_id": USE_CASE_ID})
         assert r.status_code == 200
         assert r.json()["static_ip"] == IP_B
 
@@ -102,7 +104,8 @@ class TestProfileC:
     def test_04_lookup_imsi2_smf3(self, lookup_http: httpx.Client):
         """GET /lookup?imsi=IMSI2&apn=smf3 → 200 with IP_C."""
         r = lookup_http.get("/lookup",
-                            params={"imsi": IMSI2, "apn": APN_SMF3})
+                            params={"imsi": IMSI2, "apn": APN_SMF3,
+                                    "use_case_id": USE_CASE_ID})
         assert r.status_code == 200
         assert r.json()["static_ip"] == IP_C
 
@@ -110,7 +113,8 @@ class TestProfileC:
     def test_05_lookup_unknown_apn_no_wildcard(self, lookup_http: httpx.Client):
         """GET /lookup?imsi=IMSI1&apn=smf9.unknown (no match, no wildcard) → 404 apn_not_found."""
         r = lookup_http.get("/lookup",
-                            params={"imsi": IMSI1, "apn": APN_UNKNOWN})
+                            params={"imsi": IMSI1, "apn": APN_UNKNOWN,
+                                    "use_case_id": USE_CASE_ID})
         assert r.status_code == 404
         assert r.json()["error"] == "apn_not_found"
 
@@ -136,7 +140,8 @@ class TestProfileC:
     def test_07_unknown_apn_now_hits_wildcard(self, lookup_http: httpx.Client):
         """GET /lookup?imsi=IMSI1&apn=smf9.unknown → 200 IP_D (wildcard fires)."""
         r = lookup_http.get("/lookup",
-                            params={"imsi": IMSI1, "apn": APN_UNKNOWN})
+                            params={"imsi": IMSI1, "apn": APN_UNKNOWN,
+                                    "use_case_id": USE_CASE_ID})
         assert r.status_code == 200
         assert r.json()["static_ip"] == IP_D
 
@@ -144,7 +149,8 @@ class TestProfileC:
     def test_08_exact_apn_wins_over_wildcard(self, lookup_http: httpx.Client):
         """GET /lookup?imsi=IMSI1&apn=smf1 after wildcard added → 200 IP_A (exact wins)."""
         r = lookup_http.get("/lookup",
-                            params={"imsi": IMSI1, "apn": APN_SMF1})
+                            params={"imsi": IMSI1, "apn": APN_SMF1,
+                                    "use_case_id": USE_CASE_ID})
         assert r.status_code == 200
         assert r.json()["static_ip"] == IP_A
 
@@ -155,7 +161,8 @@ class TestProfileC:
 
         def fetch(apn: str) -> None:
             r = lookup_http.get("/lookup",
-                                params={"imsi": IMSI1, "apn": apn})
+                                params={"imsi": IMSI1, "apn": apn,
+                                        "use_case_id": USE_CASE_ID})
             results[apn] = (r.status_code, r.json().get("static_ip"))
 
         t1 = threading.Thread(target=fetch, args=(APN_SMF1,))
