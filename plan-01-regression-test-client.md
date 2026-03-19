@@ -3,14 +3,17 @@
 ## Overview
 
 A standalone test suite (`aaa-regression-tester`) that exercises every REST API endpoint
-across both services and verifies correct behaviour for all three production profiles,
-dynamic first-connection allocation, bulk operations, and failure scenarios.
+across both services and verifies correct behaviour for all IP resolution modes,
+dynamic first-connection allocation, multi-IMSI SIM cards, RADIUS authentication,
+bulk operations, export/search, and failure scenarios.
 
-**Technology:** Python 3.11+ with `pytest` + `httpx` (async-capable, no requests)
+**Technology:** Python 3.11 · `pytest` · `httpx` (sync client, class-scoped fixtures)
 **Target environments:**
-- Local: Docker Compose (PostgreSQL 15 + both app containers)
-- CI: GitHub Actions / GitLab CI — runs against staging before every merge
-**Output:** JUnit XML report + console pass/fail summary + timing CSV for p99 assertions
+- In-cluster: Kubernetes Job via `make test` (primary)
+- Local: Docker Compose (`docker-compose.test.yml`) against the same containers
+**Output:** JUnit XML (`/app/results/results.xml`) · console pass/fail summary · Prometheus Pushgateway metrics
+
+**Current suite result: 134 passed · 0 failed · 0 skipped · ~72 s**
 
 ---
 
@@ -18,254 +21,519 @@ dynamic first-connection allocation, bulk operations, and failure scenarios.
 
 ```
 aaa-regression-tester/
-├── conftest.py               # base URLs, JWT token fixture, shared helpers
+├── conftest.py                       # base URLs, JWT/RADIUS env, shared fixtures & helpers
+├── pytest.ini                        # markers, timeout=60, test path config
+├── requirements.txt                  # pytest, httpx, pytest-asyncio, pytest-timeout
+├── run_all.sh                        # executes full suite, pushes metrics to Pushgateway
+├── docker-compose.test.yml           # local stack: PostgreSQL 15 + both services
+│
 ├── fixtures/
-│   ├── pools.py              # create/teardown ip_pools
-│   ├── range_configs.py      # create/teardown imsi_range_configs
-│   └── profiles.py           # create/teardown sim_profiles
-├── test_01_pools.py          # IP pool CRUD + stats
-├── test_02_range_configs.py  # IMSI range config CRUD
-├── test_03_profiles_a.py     # Profile A (ip_resolution=iccid) CRUD + lookup
-├── test_04_profiles_b.py     # Profile B (ip_resolution=imsi) CRUD + lookup
-├── test_05_profiles_c.py     # Profile C (ip_resolution=imsi_apn) CRUD + lookup
-├── test_06_imsi_ops.py       # Add / remove IMSI, per-IMSI suspend
-├── test_07_dynamic_alloc.py  # First-connection inline allocation via GET /lookup
-├── test_08_bulk.py           # Bulk upsert via POST /profiles/bulk + job polling
-├── test_09_migration.py      # Validate migration script output via API
-├── test_10_errors.py         # Validation, 404, 409, 503, auth errors
-├── test_11_performance.py    # Latency assertions under concurrent load
-├── docker-compose.test.yml   # PostgreSQL 15 + subscriber-profile-api + aaa-lookup-service
-├── run_all.sh                # execute full suite, emit JUnit XML
-└── requirements.txt          # pytest, httpx, pytest-asyncio, pytest-xdist
+│   ├── pools.py                      # create_pool / delete_pool / get_pool_stats helpers
+│   ├── range_configs.py              # create_range_config / delete_range_config helpers
+│   ├── profiles.py                   # create_profile_imsi / _imsi_apn / _iccid / delete_profile
+│   └── radius.py                     # RadiusClient, build_access_request, parse_response
+│
+├── test_01_pools.py                  # IP pool CRUD + stats                      [ 8 tests]
+├── test_02_range_configs.py          # IMSI range config CRUD                    [ 8 tests]
+├── test_03_profiles_a.py             # Profile A: ip_resolution=iccid            [ 9 tests]
+├── test_04_profiles_b.py             # Profile B: ip_resolution=imsi             [ 9 tests]
+├── test_05_profiles_c.py             # Profile C: ip_resolution=imsi_apn         [ 9 tests]
+├── test_06_imsi_ops.py               # Add / remove IMSI, per-IMSI suspend       [ 8 tests]
+├── test_07_dynamic_alloc.py          # First-connection single-IMSI baseline      [ 9 tests]
+├── test_07b_dynamic_alloc_modes.py   # First-connection all 7 allocation modes   [25 tests]
+├── test_08_bulk.py                   # Bulk upsert via POST /profiles/bulk        [ 8 tests]
+├── test_10_errors.py                 # Validation, 404, 409, 503, auth errors    [14 tests]
+├── test_12_radius.py                 # End-to-end RADIUS authentication          [14 tests]
+└── test_13_export_and_ip_search.py   # Export CSV + IP filter + terminated SIMs  [13 tests]
 ```
+
+> **Not implemented:** `test_09_migration.py` (migration script tests — deferred) ·
+> `test_11_performance.py` (latency assertions under load — deferred).
 
 ---
 
 ## Environment & Configuration
 
 ```python
-# conftest.py — key fixtures
+# conftest.py — key env vars
 
 PROVISION_BASE = os.getenv("PROVISION_URL", "http://localhost:8080/v1")
 LOOKUP_BASE    = os.getenv("LOOKUP_URL",    "http://localhost:8081/v1")
-JWT_TOKEN      = os.getenv("TEST_JWT",      "<test-token>")
+JWT_TOKEN      = os.getenv("TEST_JWT",      "dev-skip-verify")
 
-@pytest.fixture(scope="session")
-def http():
-    return httpx.Client(base_url=PROVISION_BASE,
-                        headers={"Authorization": f"Bearer {JWT_TOKEN}"},
-                        timeout=5.0)
+# RADIUS (test_12 only — suite auto-skips if RADIUS_HOST is empty)
+RADIUS_HOST    = os.getenv("RADIUS_HOST", "")
+RADIUS_PORT    = int(os.getenv("RADIUS_PORT", "1812"))
+RADIUS_SECRET  = os.getenv("RADIUS_SECRET", "")
 
-@pytest.fixture(scope="session")
-def lookup_http():
-    return httpx.Client(base_url=LOOKUP_BASE,
-                        headers={"Authorization": f"Bearer {JWT_TOKEN}"},
-                        timeout=5.0)
+# DB flush (conftest setup_session — clears tables before every run)
+DB_URL         = os.getenv("DB_URL", "postgres://aaa_app:devpassword@localhost:5432/aaa")
 ```
 
-**Run order is sequential** (test_01 → test_11). Each module is self-contained: it creates
-its own fixtures, runs its cases, then tears down. No shared mutable state between modules.
+**Run order is sequential** (test_01 → test_13). Each module is self-contained: it creates
+its own fixtures in `setup_class`, runs its cases, then tears down in `teardown_class`.
+No shared mutable state between modules.
 
 ---
 
 ## Test Cases by Module
 
+---
+
 ### test_01_pools.py — IP Pool CRUD + Stats
+
+**APIs validated:** `POST /pools` · `GET /pools/{id}` · `GET /pools/{id}/stats` ·
+`PATCH /pools/{id}` · `GET /pools` · `DELETE /pools/{id}`
+
+Verifies the full lifecycle of an IP address pool: creation with CIDR validation,
+stat counters immediately after creation, rename, list filtering by account, and
+deletion blocked when allocations are active.
 
 | # | Test | Expected |
 |---|---|---|
-| 1.1 | POST /pools with valid subnet (100.65.120.0/24) | 201, `pool_id` UUID returned |
-| 1.2 | GET /pools/{pool_id} | 200, subnet / start_ip / end_ip correct |
-| 1.3 | GET /pools/{pool_id}/stats immediately after creation | `available = 253` (usable /24), `allocated = 0` |
-| 1.4 | PATCH /pools/{pool_id} — rename pool | 200, GET confirms new name |
-| 1.5 | GET /pools?account_name=Melita | 200, list includes created pool |
-| 1.6 | DELETE /pools/{pool_id} with 0 allocations | 204 |
-| 1.7 | DELETE /pools/{pool_id} with active allocations | 409 (pool in use) |
-| 1.8 | POST /pools with invalid subnet (bad CIDR) | 400 validation_failed |
+| 1.1 | `POST /pools` with valid subnet (100.65.120.0/24) | 201, `pool_id` UUID returned |
+| 1.2 | `GET /pools/{pool_id}` | 200, subnet / start_ip / end_ip correct |
+| 1.3 | `GET /pools/{pool_id}/stats` immediately after creation | `available=253`, `allocated=0` |
+| 1.4 | `PATCH /pools/{pool_id}` — rename pool | 200; GET confirms new name |
+| 1.5 | `GET /pools?account_name=Melita` | 200, list includes created pool |
+| 1.6 | `DELETE /pools/{pool_id}` with 0 allocations | 204 |
+| 1.7 | `DELETE /pools/{pool_id}` with active allocations | 409 (pool in use) |
+| 1.8 | `POST /pools` with invalid CIDR | 400 validation_failed |
 
 ---
 
 ### test_02_range_configs.py — IMSI Range Config CRUD
 
+**APIs validated:** `POST /range-configs` · `GET /range-configs/{id}` · `GET /range-configs` ·
+`PATCH /range-configs/{id}` · `DELETE /range-configs/{id}`
+
+Verifies IMSI range configuration management: ranges link a consecutive block of IMSIs
+to a specific IP pool and allocation mode, and drive dynamic first-connection allocation.
+Covers IMSI boundary validation and suspension flow.
+
 | # | Test | Expected |
 |---|---|---|
-| 2.1 | POST /range-configs with valid f_imsi / t_imsi / pool_id | 201, `id` returned |
-| 2.2 | GET /range-configs/{id} | 200, fields correct |
-| 2.3 | GET /range-configs?account_name=Melita | 200, list includes created config |
-| 2.4 | PATCH /range-configs/{id} — change pool_id and ip_resolution | 200, GET confirms update |
-| 2.5 | PATCH /range-configs/{id} — set status=suspended | 200 |
-| 2.6 | DELETE /range-configs/{id} | 204 |
-| 2.7 | POST /range-configs with f_imsi > t_imsi (inverted range) | 400 validation_failed |
-| 2.8 | POST /range-configs with non-15-digit IMSI boundary | 400 validation_failed |
+| 2.1 | `POST /range-configs` with valid f_imsi / t_imsi / pool_id | 201, `id` returned |
+| 2.2 | `GET /range-configs/{id}` | 200, all fields correct |
+| 2.3 | `GET /range-configs?account_name=Melita` | 200, list includes created config |
+| 2.4 | `PATCH /range-configs/{id}` — change pool_id and ip_resolution | 200; GET confirms update |
+| 2.5 | `PATCH /range-configs/{id}` — set status=suspended | 200 |
+| 2.6 | `DELETE /range-configs/{id}` | 204 |
+| 2.7 | `POST /range-configs` with f_imsi > t_imsi (inverted range) | 400 validation_failed |
+| 2.8 | `POST /range-configs` with non-15-digit IMSI boundary | 400 validation_failed |
 
 ---
 
 ### test_03_profiles_a.py — Profile A: `ip_resolution = "iccid"`
 
-All GET /lookup calls use **IMSI + APN as input** and expect `{"static_ip": "..."}`.
+**APIs validated:** `POST /profiles` · `GET /profiles/{sim_id}` · `GET /lookup` ·
+`PATCH /profiles/{sim_id}` · `DELETE /profiles/{sim_id}`
+
+In `iccid` mode the APN is ignored — all IMSIs on the SIM card share a single card-level
+static IP. Tests the full profile lifecycle: create with 2 IMSIs, lookup (APN irrelevant),
+suspend/reactivate, and soft-delete. After deletion the profile row is retained with
+`status=terminated` and remains readable via GET (not 404).
 
 | # | Test | Expected |
 |---|---|---|
-| 3.1 | POST /profiles — iccid mode, 2 IMSIs, 1 iccid_ip (no apn field) | 201, `sim_id` returned |
-| 3.2 | GET /profiles/{sim_id} | 200, `iccid_ips[0].static_ip` = 100.65.120.5 |
-| 3.3 | GET /lookup?imsi={imsi1}&apn=internet.operator.com | 200, `{"static_ip":"100.65.120.5"}` |
-| 3.4 | GET /lookup?imsi={imsi2}&apn=ims.operator.com | 200, same IP (different IMSI, APN ignored) |
-| 3.5 | GET /lookup?imsi={imsi1}&apn=any.garbage.apn | 200, same IP (APN irrelevant in iccid mode) |
-| 3.6 | PATCH /profiles/{sim_id} — change status to suspended | 200 |
-| 3.7 | GET /lookup after SIM suspended | 403 `{"error":"suspended"}` |
-| 3.8 | PATCH status back to active; GET /lookup | 200, IP resolves again |
-| 3.9 | DELETE /profiles/{sim_id} | 204, subsequent GET returns 404 |
+| 3.1 | `POST /profiles` — iccid mode, 2 IMSIs, 1 iccid_ip | 201, `sim_id` returned |
+| 3.2 | `GET /profiles/{sim_id}` | 200, `iccid_ips[0].static_ip` = 100.65.140.5 |
+| 3.3 | `GET /lookup?imsi=IMSI1&apn=internet.operator.com` | 200, `{"static_ip":"100.65.140.5"}` |
+| 3.4 | `GET /lookup?imsi=IMSI2&apn=ims.operator.com` | 200, same IP (different IMSI, APN ignored) |
+| 3.5 | `GET /lookup?imsi=IMSI1&apn=any.garbage.apn` | 200, same IP (APN irrelevant in iccid mode) |
+| 3.6 | `PATCH /profiles/{sim_id}` — status=suspended | 200 |
+| 3.7 | `GET /lookup` after SIM suspended | 403 `{"error":"suspended"}` |
+| 3.8 | `PATCH` status=active; `GET /lookup` | 200, IP resolves again |
+| 3.9 | `DELETE /profiles/{sim_id}` → 204; subsequent `GET` | **200** with `status=terminated` *(was 404 before fix)* |
 
 ---
 
 ### test_04_profiles_b.py — Profile B: `ip_resolution = "imsi"`
 
+**APIs validated:** `POST /profiles` · `GET /lookup` · `PATCH /profiles/{sim_id}` ·
+`PATCH /profiles/{sim_id}/imsis/{imsi}`
+
+In `imsi` mode each IMSI has its own static IP and APN is ignored. Tests per-IMSI
+suspension (one IMSI blocked while siblings continue resolving), ICCID enrichment
+on an initially iccid-null profile, and per-IMSI IP updates.
+
 | # | Test | Expected |
 |---|---|---|
-| 4.1 | POST /profiles — imsi mode, iccid=null, 2 IMSIs with distinct static_ips | 201 |
-| 4.2 | GET /lookup?imsi={imsi1}&apn=internet.operator.com | 200, `{"static_ip":"100.65.120.5"}` |
-| 4.3 | GET /lookup?imsi={imsi1}&apn=ims.operator.com | 200, same IP (APN ignored in imsi mode) |
-| 4.4 | GET /lookup?imsi={imsi2}&apn=internet.operator.com | 200, `{"static_ip":"101.65.120.5"}` |
-| 4.5 | PATCH /profiles/{sim_id} — set real iccid | 200; GET shows iccid populated |
-| 4.6 | PATCH /profiles/{sim_id}/imsis/{imsi1} — suspend IMSI #1 | 200 |
-| 4.7 | GET /lookup?imsi={imsi1}&apn=internet.operator.com | 403 `{"error":"suspended"}` |
-| 4.8 | GET /lookup?imsi={imsi2}&apn=internet.operator.com | 200, IMSI #2 still resolves |
-| 4.9 | PATCH /profiles/{sim_id}/imsis/{imsi1} — update static_ip | 200; GET /lookup returns new IP |
+| 4.1 | `POST /profiles` — imsi mode, iccid=null, 2 IMSIs with distinct IPs | 201 |
+| 4.2 | `GET /lookup?imsi=IMSI1&apn=internet.operator.com` | 200, `{"static_ip":"100.65.120.5"}` |
+| 4.3 | `GET /lookup?imsi=IMSI1&apn=ims.operator.com` | 200, same IP (APN ignored) |
+| 4.4 | `GET /lookup?imsi=IMSI2&apn=internet.operator.com` | 200, `{"static_ip":"101.65.120.5"}` |
+| 4.5 | `PATCH /profiles/{sim_id}` — set real iccid | 200; GET shows iccid populated |
+| 4.6 | `PATCH /profiles/{sim_id}/imsis/{imsi1}` — suspend IMSI #1 | 200 |
+| 4.7 | `GET /lookup?imsi=IMSI1` | 403 `{"error":"suspended"}` |
+| 4.8 | `GET /lookup?imsi=IMSI2` | 200, IMSI #2 still resolves |
+| 4.9 | `PATCH /profiles/{sim_id}/imsis/{imsi1}` — update static_ip | 200; GET /lookup returns new IP |
 
 ---
 
 ### test_05_profiles_c.py — Profile C: `ip_resolution = "imsi_apn"`
 
+**APIs validated:** `POST /profiles` · `GET /lookup` · `POST /profiles/{sim_id}/imsis/{imsi}`
+
+In `imsi_apn` mode each IMSI×APN pair has its own static IP. Tests APN-exact matching,
+wildcard APN fallback (`apn=null`), and that exact matches take priority over the wildcard.
+Also validates concurrent lookups for different APNs on the same IMSI.
+
 | # | Test | Expected |
 |---|---|---|
-| 5.1 | POST /profiles — imsi_apn mode; IMSI #1 → [smf1→IP_A, smf2→IP_B]; IMSI #2 → [smf3→IP_C] | 201 |
-| 5.2 | GET /lookup?imsi={imsi1}&apn=smf1.operator.com | 200, `{"static_ip":"IP_A"}` |
-| 5.3 | GET /lookup?imsi={imsi1}&apn=smf2.operator.com | 200, `{"static_ip":"IP_B"}` |
-| 5.4 | GET /lookup?imsi={imsi2}&apn=smf3.operator.com | 200, `{"static_ip":"IP_C"}` |
-| 5.5 | GET /lookup?imsi={imsi1}&apn=smf9.unknown.com (no match, no wildcard) | 404 `{"error":"apn_not_found"}` |
-| 5.6 | POST /profiles/{sim_id}/imsis/{imsi1} — add apn_ip {apn:null, ip:IP_D} (wildcard) | 200 |
-| 5.7 | GET /lookup?imsi={imsi1}&apn=smf9.unknown.com | 200, `{"static_ip":"IP_D"}` (wildcard fires) |
-| 5.8 | GET /lookup?imsi={imsi1}&apn=smf1.operator.com after wildcard added | 200, `{"static_ip":"IP_A"}` (exact wins) |
-| 5.9 | Two concurrent GET /lookup for smf1 + smf2 same IMSI | both return their respective IPs |
+| 5.1 | `POST /profiles` — imsi_apn mode; IMSI1→[smf1→IP_A, smf2→IP_B]; IMSI2→[smf3→IP_C] | 201 |
+| 5.2 | `GET /lookup?imsi=IMSI1&apn=smf1.operator.com` | 200, `{"static_ip":"IP_A"}` |
+| 5.3 | `GET /lookup?imsi=IMSI1&apn=smf2.operator.com` | 200, `{"static_ip":"IP_B"}` |
+| 5.4 | `GET /lookup?imsi=IMSI2&apn=smf3.operator.com` | 200, `{"static_ip":"IP_C"}` |
+| 5.5 | `GET /lookup?imsi=IMSI1&apn=smf9.unknown.com` (no match, no wildcard) | 404 `{"error":"apn_not_found"}` |
+| 5.6 | `POST /profiles/{sim_id}/imsis/{imsi1}` — add apn_ip `{apn:null, ip:IP_D}` (wildcard) | 200 |
+| 5.7 | `GET /lookup?imsi=IMSI1&apn=smf9.unknown.com` | 200, `{"static_ip":"IP_D"}` (wildcard fires) |
+| 5.8 | `GET /lookup?imsi=IMSI1&apn=smf1.operator.com` after wildcard added | 200, `{"static_ip":"IP_A"}` (exact wins) |
+| 5.9 | Two concurrent `GET /lookup` for smf1 + smf2 same IMSI | both return their respective IPs |
 
 ---
 
 ### test_06_imsi_ops.py — IMSI Add / Remove
 
+**APIs validated:** `GET /profiles/{sim_id}/imsis` · `POST /profiles/{sim_id}/imsis` ·
+`GET /profiles/{sim_id}/imsis/{imsi}` · `DELETE /profiles/{sim_id}/imsis/{imsi}` · `GET /lookup`
+
+Verifies that IMSIs can be added and removed from an existing profile independently,
+and that the lookup service reflects changes immediately. Also covers conflict detection
+(IMSI already assigned to another profile) and the last-IMSI deletion rule.
+
 | # | Test | Expected |
 |---|---|---|
-| 6.1 | GET /profiles/{sim_id}/imsis | 200, list contains current IMSIs |
-| 6.2 | POST /profiles/{sim_id}/imsis — add new IMSI with apn_ips | 201 |
-| 6.3 | GET /lookup?imsi={new_imsi}&apn=internet.operator.com | 200, `{"static_ip":"..."}` |
-| 6.4 | GET /profiles/{sim_id}/imsis/{new_imsi} | 200, apn_ips correct |
-| 6.5 | DELETE /profiles/{sim_id}/imsis/{new_imsi} | 204 |
-| 6.6 | GET /lookup after IMSI deleted | 404 |
-| 6.7 | POST /profiles/{sim_id}/imsis — IMSI already assigned to another SIM | 409 `imsi_conflict` |
-| 6.8 | DELETE last IMSI on a profile | 400 (profile must have at least 1 IMSI) or allowed (business decision to record) |
+| 6.1 | `GET /profiles/{sim_id}/imsis` | 200, list contains current IMSIs |
+| 6.2 | `POST /profiles/{sim_id}/imsis` — add new IMSI with apn_ips | 201 |
+| 6.3 | `GET /lookup?imsi={new_imsi}&apn=internet.operator.com` | 200, resolves |
+| 6.4 | `GET /profiles/{sim_id}/imsis/{new_imsi}` | 200, apn_ips correct |
+| 6.5 | `DELETE /profiles/{sim_id}/imsis/{new_imsi}` | 204 |
+| 6.6 | `GET /lookup` after IMSI deleted | 404 |
+| 6.7 | `POST /profiles/{sim_id}/imsis` — IMSI already on another SIM | 409 `imsi_conflict` |
+| 6.8 | `DELETE` last IMSI on a profile | 400 (must keep at least 1 IMSI) |
 
 ---
 
-### test_07_dynamic_alloc.py — First-Connection Inline Allocation
+### test_07_dynamic_alloc.py — First-Connection Allocation (Single-IMSI Baseline)
 
-Allocation is transparent: caller always uses `GET /lookup`, same endpoint as normal lookups.
+**APIs validated:** `GET /lookup` (triggers inline allocation) · `GET /pools/{id}/stats` ·
+`GET /profiles` (verify auto-created profile) · `POST /range-configs`
+
+Allocation is transparent: the caller always uses `GET /lookup`. When no profile exists
+for the IMSI, the lookup service calls the provisioning API to allocate an IP from the
+range config's pool and creates the profile atomically. Tests idempotency, pool exhaustion,
+concurrent allocation for 10 simultaneous first-connection IMSIs, and suspended ranges.
 
 | # | Test | Expected |
 |---|---|---|
 | 7.1 | Setup: pool + active range config covering IMSI range | — |
-| 7.2 | IMSI in range, not yet in sim_profiles → GET /lookup?imsi={imsi}&apn=internet.operator.com | 200, `{"static_ip":"..."}` — profile created |
-| 7.3 | Same IMSI again → GET /lookup | 200, same IP (existing profile, no re-allocation) |
-| 7.4 | GET /pools/{pool_id}/stats after allocation | `allocated` +1, `available` -1 |
-| 7.5 | GET /profiles?imsi={imsi} — verify auto-created profile | 200, ip_resolution=imsi, iccid=null |
-| 7.6 | IMSI not in any range config → GET /lookup?imsi={unknown}&apn=internet.operator.com | 404 `{"error":"not_found"}` |
-| 7.7 | IMSI in a suspended range config → GET /lookup | 404 (suspended range ignored) |
-| 7.8 | Exhaust all IPs in pool → GET /lookup for next new IMSI | 503 `{"error":"pool_exhausted"}` |
-| 7.9 | 10 concurrent GET /lookup for 10 distinct first-connection IMSIs in same pool | all 200, 10 distinct IPs, no duplicates |
+| 7.2 | IMSI in range, no profile → `GET /lookup?imsi={imsi}&apn=internet.operator.com` | 200, IP allocated; profile created |
+| 7.3 | Same IMSI again → `GET /lookup` | 200, same IP (no re-allocation) |
+| 7.4 | `GET /pools/{pool_id}/stats` after allocation | `allocated` +1, `available` -1 |
+| 7.5 | `GET /profiles?imsi={imsi}` — verify auto-created profile | 200, ip_resolution=imsi, iccid=null |
+| 7.6 | IMSI not in any range config → `GET /lookup` | 404 `{"error":"not_found"}` |
+| 7.7 | IMSI in a suspended range config → `GET /lookup` | 404 (suspended range ignored) |
+| 7.8 | Pool exhausted → `GET /lookup` for next new IMSI | 503 `{"error":"pool_exhausted"}` |
+| 7.9 | 10 concurrent `GET /lookup` for 10 distinct first-connection IMSIs in same pool | all 200, 10 distinct IPs, 0 duplicates |
+
+---
+
+### test_07b_dynamic_alloc_modes.py — First-Connection All Allocation Modes
+
+**APIs validated:** `GET /lookup` (all ip_resolution modes) · `GET /profiles/{sim_id}` ·
+`GET /pools/{id}/stats` · `POST /range-configs` (with ip_resolution and pool_id variants)
+
+Tests all seven allocation mode combinations that a range config can produce at
+first-connection time. Single-SIM modes (S2–S4) cover one IMSI per SIM. Multi-IMSI modes
+(M1–M4) exercise SIM cards with multiple IMSI slots where sibling slots are
+pre-provisioned when the first slot connects.
+
+#### TestS2SingleImsiApn — ip_resolution=imsi_apn (single IMSI)
+
+| # | Test | Expected |
+|---|---|---|
+| 7b.S2.1 | First connection for IMSI, APN=internet → allocates APN-specific IP | 200, IP from pool |
+| 7b.S2.2 | GET profile — both APNs (internet + ims) are provisioned | 2 apn_ips entries |
+| 7b.S2.3 | Same IMSI + same APN again | same IP (idempotent) |
+| 7b.S2.4 | Second APN first-connection | same IP (idempotent) |
+
+#### TestS3SingleIccid — ip_resolution=iccid (single IMSI)
+
+| # | Test | Expected |
+|---|---|---|
+| 7b.S3.1 | First connection → allocates card-level IP (stored in sim_apn_ips) | 200 |
+| 7b.S3.2 | GET profile — ip_resolution=iccid | card-level iccid_ips populated |
+| 7b.S3.3 | Different APN, same IMSI → same card IP returned | 200, same IP |
+
+#### TestS4SingleIccidApn — ip_resolution=iccid_apn (single IMSI)
+
+| # | Test | Expected |
+|---|---|---|
+| 7b.S4.1 | First connection for IMSI + APN → APN-specific IP at card level | 200 |
+| 7b.S4.2 | Both APNs provisioned at card level | 2 entries in iccid_ips |
+| 7b.S4.3 | ims APN second connection | same IP (idempotent) |
+
+#### TestM1MultiImsi — ip_resolution=imsi (multi-IMSI SIM card)
+
+| # | Test | Expected |
+|---|---|---|
+| 7b.M1.1 | First slot connects → 201; sibling slot 2 is pre-provisioned in same call | 200 |
+| 7b.M1.2 | Slot 2 already has a profile and a distinct IP | profile exists, IP ≠ slot 1 IP |
+| 7b.M1.3 | Slot 2 connects → idempotent, same IP | 200, same IP as pre-provisioned |
+| 7b.M1.4 | Each slot has a distinct IP | slot 1 IP ≠ slot 2 IP |
+
+#### TestM2MultiImsiApn — ip_resolution=imsi_apn (multi-IMSI SIM card)
+
+| # | Test | Expected |
+|---|---|---|
+| 7b.M2.1 | Slot 1 first connection → 201; both APNs provisioned for slot 1 | 2 apn_ips |
+| 7b.M2.2 | Slot 1 has both APNs provisioned | internet + ims entries |
+| 7b.M2.3 | Slot 2 pre-provisioned with both APNs | 2 apn_ips, distinct IPs from slot 1 |
+| 7b.M2.4 | Total IPs allocated = 4 (2 slots × 2 APNs) | pool stats: allocated=4 |
+
+#### TestM3MultiIccid — ip_resolution=iccid (multi-IMSI SIM card)
+
+| # | Test | Expected |
+|---|---|---|
+| 7b.M3.1 | Slot 1 first connection → creates card-level profile with shared IP | 200 |
+| 7b.M3.2 | Slot 2 shares the same SIM card profile and IP | same sim_id, same IP |
+| 7b.M3.3 | Pool allocates exactly 1 IP for all slots on the same card | allocated=1 |
+
+#### TestM4MultiIccidApn — ip_resolution=iccid_apn (multi-IMSI SIM card)
+
+| # | Test | Expected |
+|---|---|---|
+| 7b.M4.1 | Slot 1 first connection for internet APN → card-level IP | 200 |
+| 7b.M4.2 | Both APNs at card level | iccid_ips has internet + ims |
+| 7b.M4.3 | Slot 2 shares same card IPs | same sim_id, same IP as slot 1 |
+| 7b.M4.4 | ims APN also shared across slots | same ims IP for both slots |
 
 ---
 
 ### test_08_bulk.py — Bulk Upsert
 
-| # | Test | Expected |
-|---|---|---|
-| 8.1 | POST /profiles/bulk with 500 Profile-A + 500 Profile-B + 500 Profile-C | 202, `job_id` returned |
-| 8.2 | Poll GET /jobs/{job_id} until status=completed (max 10 min timeout) | `processed=1500`, `failed=0` |
-| 8.3 | Spot-check 10 random sim_ids → GET /profiles/{sim_id} | 200, profile fields correct |
-| 8.4 | GET /lookup for 10 random IMSIs from the batch | 200, all return correct static_ip |
-| 8.5 | POST /profiles/bulk with 1 valid + 1 invalid IMSI (14 digits) | 202; job completed; `failed=1`, `processed=1` |
-| 8.6 | GET /jobs/{job_id} errors array contains field=imsi details | 200, error row present |
-| 8.7 | Bulk upsert same sim_id twice (idempotency) | second upsert updates, total profile count unchanged |
-| 8.8 | POST /profiles/bulk with CSV file upload (multipart/form-data) | 202, same job flow |
+**APIs validated:** `POST /profiles/bulk` · `GET /jobs/{job_id}` · `GET /profiles/{sim_id}` ·
+`GET /lookup` · `POST /profiles/bulk` (multipart CSV upload)
 
----
-
-### test_09_migration.py — Migration Script Validation
-
-Runs the migration script against a controlled sample MariaDB dump (fixture data, not production).
+Verifies the async bulk import pipeline: job submission, polling until completion,
+spot-checking results via both provisioning and lookup APIs. Also tests partial failure
+handling (one invalid record), idempotency on repeated submission, and CSV file upload.
 
 | # | Test | Expected |
 |---|---|---|
-| 9.1 | Run migration script on Athens-only sample dump | sim_profiles count = distinct ICCID-groups + unmatched IMSIs |
-| 9.2 | IMSI in imsi_iccid_map.csv → GET /profiles?imsi={imsi} | `iccid` = real ICCID from map |
-| 9.3 | IMSI not in map → GET /profiles?imsi={imsi} | `iccid` = null |
-| 9.4 | IMSI in 2 dumps, different IPs, same client → GET /profiles?imsi={imsi} | ip_resolution=imsi_apn, 2 apn_ips with apn=pgw1 and apn=pgw2 |
-| 9.5 | IMSI in 2 dumps, same IP → GET /profiles?imsi={imsi} | ip_resolution=imsi, 1 apn_ips with apn=null |
-| 9.6 | Range config rows → GET /range-configs?account_name={name} | count = tbl_imsi_range_config rows for that client |
-| 9.7 | Pool stats post-migration | available = total IPs − allocated IMSIs |
+| 8.1 | `POST /profiles/bulk` with 500 Profile-A + 500 Profile-B + 500 Profile-C | 202, `job_id` returned |
+| 8.2 | Poll `GET /jobs/{job_id}` until status=completed | `processed=1500`, `failed=0` |
+| 8.3 | Spot-check 10 random sim_ids → `GET /profiles/{sim_id}` | 200, profile fields correct |
+| 8.4 | `GET /lookup` for 10 random IMSIs from the batch | 200, all return correct static_ip |
+| 8.5 | `POST /profiles/bulk` with 1 valid + 1 invalid IMSI (14 digits) | 202; completed with `failed=1`, `processed=1` |
+| 8.6 | `GET /jobs/{job_id}` errors array | error row present with field=imsi details |
+| 8.7 | Bulk upsert same sim_id twice (idempotency) | second upsert updates; profile count unchanged |
+| 8.8 | `POST /profiles/bulk` with CSV file upload (multipart/form-data) | 202, same job flow |
 
 ---
 
 ### test_10_errors.py — Validation & Error Handling
 
+**APIs validated:** `POST /profiles` · `GET /profiles/{sim_id}` · `DELETE /profiles/{sim_id}` ·
+`PATCH /profiles/{sim_id}` · `GET /lookup`
+
+Exhaustively covers all 400/404/409 error paths and validates that field-level error
+detail is returned. Also covers ip_resolution change constraints (e.g., switching from
+`imsi` to `imsi_apn` requires APN fields to be present).
+
 | # | Test | Expected |
 |---|---|---|
-| 10.1 | POST /profiles — IMSI 14 digits | 400, field=imsi |
-| 10.2 | POST /profiles — ICCID 10 digits | 400, field=iccid |
-| 10.3 | POST /profiles — missing ip_resolution | 400 |
-| 10.4 | POST /profiles — ip_resolution=bogus_value | 400 |
-| 10.5 | POST /profiles — duplicate ICCID | 409 `iccid_conflict` |
-| 10.6 | POST /profiles — duplicate IMSI | 409 `imsi_conflict` |
-| 10.7 | GET /profiles/{unknown_uuid} | 404 |
-| 10.8 | DELETE terminated profile | 404 |
-| 10.9 | PATCH /profiles/{sim_id} — ICCID already used by another profile | 409 |
-| 10.10 | GET /lookup — suspended SIM | 403 `{"error":"suspended"}` |
-| 10.11 | PATCH ip_resolution from imsi → imsi_apn without adding apn fields | 400 validation_failed |
-| 10.12 | PATCH ip_resolution from imsi → iccid; supply valid iccid_ips; verify old apn_ips cleared | 200; GET /lookup returns iccid_static_ip |
-| 10.13 | GET /lookup — missing apn param | 400 |
-| 10.14 | GET /lookup — missing imsi param | 400 |
-| 10.15 | Any endpoint with invalid JWT | 401 |
+| 10.1 | `POST /profiles` — IMSI 14 digits | 400, field=imsi |
+| 10.2 | `POST /profiles` — ICCID 10 digits | 400, field=iccid |
+| 10.3 | `POST /profiles` — missing ip_resolution | 400 |
+| 10.4 | `POST /profiles` — ip_resolution=bogus_value | 400 |
+| 10.5 | `POST /profiles` — duplicate ICCID | 409 `iccid_conflict` |
+| 10.6 | `POST /profiles` — duplicate IMSI | 409 `imsi_conflict` |
+| 10.7 | `GET /profiles/{unknown_uuid}` | 404 |
+| 10.8 | `DELETE` then `GET` same profile | 204 then 200 with status=terminated |
+| 10.9 | `PATCH /profiles/{sim_id}` — ICCID already used by another profile | 409 |
+| 10.10 | `GET /lookup` — suspended SIM | 403 `{"error":"suspended"}` |
+| 10.11 | `PATCH` ip_resolution imsi→imsi_apn without providing apn fields | 400 validation_failed |
+| 10.12 | `PATCH` ip_resolution imsi→iccid; supply valid iccid_ips; verify old apn_ips cleared | 200; GET /lookup returns iccid_static_ip |
+| 10.13 | `GET /lookup` — missing apn param | 400 |
+| 10.14 | `GET /lookup` — missing imsi param | 400 |
 
 ---
 
-### test_11_performance.py — Latency Assertions
+### test_12_radius.py — End-to-End RADIUS Authentication
 
-Tests run against a pre-seeded 300K-profile dataset (loaded by a one-time fixture).
-All timings measured end-to-end from test client to API response.
+**APIs validated (indirectly via RADIUS):** `GET /lookup` (Stage 1) · `POST /first-connection` (Stage 2)
+**Direct APIs:** `POST /profiles` · `PATCH /profiles/{sim_id}` · `POST /range-configs`
 
-| # | Test | Pass Criteria |
+Sends real **UDP RADIUS Access-Request packets** to `aaa-radius-server` and validates the
+two-stage AAA flow end-to-end:
+
+- **Stage 1:** aaa-radius-server calls `GET /lookup?imsi=&apn=[&use_case_id=]` on aaa-lookup-service.
+  - 200 → Access-Accept + Framed-IP-Address
+  - 403 → Access-Reject (subscriber suspended)
+  - 404 → falls through to Stage 2
+- **Stage 2:** aaa-radius-server calls `POST /v1/first-connection {imsi, apn, imei[, use_case_id]}`.
+  - 200 → Access-Accept + allocated Framed-IP-Address
+  - 404/503 → Access-Reject
+
+> **Requires** `RADIUS_HOST`, `RADIUS_PORT`, `RADIUS_SECRET` env vars.
+> Suite auto-skips the entire class if `RADIUS_HOST` is empty or unreachable.
+> In `values-dev.yaml` RADIUS is pre-configured: `host: "aaa-platform-aaa-radius-server"`.
+
+| # | Test | Expected |
 |---|---|---|
-| 11.1 | 100 sequential GET /lookup (warm DB, all existing profiles) | p99 ≤ 15ms |
-| 11.2 | 50 concurrent GET /lookup | p99 ≤ 15ms; 0 errors |
-| 11.3 | 200 concurrent GET /lookup (stress) | p99 ≤ 30ms; 0 errors |
-| 11.4 | 10 concurrent POST /profiles/bulk (100 profiles each) | all complete; 0 errors |
-| 11.5 | 10 concurrent first-connection GET /lookup (distinct IMSIs, same pool) | 10 distinct IPs; 0 duplicates |
-| 11.6 | GET /pools/{pool_id}/stats with 300K allocated rows | response ≤ 200ms |
-| 11.7 | GET /profiles/{sim_id} full profile (many IMSIs) | response ≤ 50ms |
+| 12.1 | Pre-conditions: profile exists; `GET /lookup` resolves; lookup also accepts optional `use_case_id` | 200 both calls |
+| 12.2 | RADIUS Access-Request for known IMSI → Stage 1 hit | Access-Accept (code=2) |
+| 12.3 | Framed-IP-Address in Accept = provisioned static_ip | IP matches profile |
+| 12.4 | `PATCH` status=suspended → RADIUS request | Access-Reject (code=3) |
+| 12.5 | `PATCH` status=active → RADIUS request | Access-Accept; same Framed-IP as before |
+| 12.6 | First-connection IMSI (no profile) → Stage 1 miss → Stage 2 allocates | Access-Accept + new IP; profile created |
+| 12.7 | Same IMSI again → Stage 1 hits existing profile | Access-Accept; same IP (idempotent) |
+| 12.8 | IMSI outside all range configs → Stage 1 404 + Stage 2 404 | Access-Reject |
+| 12.9 | Response Authenticator (RFC 2865 §3) is valid | MD5 digest verifies against shared secret |
+| 12.10 | Access-Reject must NOT contain Framed-IP-Address (attr 8) | No IP in Reject response |
+| 12.11 | Full 3GPP AVP packet (all standard + VSA attributes from a real PGW) | Access-Accept; correct Framed-IP |
+| 12.12 | `User-Name` (attr 1) carries garbage IMSI; `3GPP-IMSI` VSA carries real IMSI | Server uses VSA → Accept; if User-Name used → would Reject |
+| 12.13 | `3GPP-Charging-Characteristics` forwarded as `use_case_id` in Stage 1 call | Accept; lookup with use_case_id also returns correct IP |
+| 12.14 | `3GPP-Charging-Characteristics` forwarded as `use_case_id` in Stage 2 body | First-connection Accept; lookup verifies post-allocation |
+
+---
+
+### test_13_export_and_ip_search.py — Export CSV + IP Filter + Terminated SIM Visibility
+
+**APIs validated:** `GET /profiles/export` · `GET /profiles?ip=` · `GET /profiles/{sim_id}` ·
+`GET /profiles` (no default status filter)
+
+Covers three new behaviours introduced together:
+
+1. **Export endpoint** — `GET /profiles/export` returns one row per IMSI (imsi mode) or one row
+   per IMSI×APN pair (imsi_apn mode), in the same 9-column format used by the CSV bulk import
+   (`sim_id, iccid, account_name, status, ip_resolution, imsi, apn, static_ip, pool_id`).
+
+2. **IP address search** — `GET /profiles?ip=<addr>` and `GET /profiles/export?ip=<addr>` perform
+   an exact `::inet` match across both `imsi_apn_ips` (per-IMSI/APN) and `sim_apn_ips`
+   (card-level). Multiple SIMs may share an IP; all matches are returned.
+
+3. **Terminated SIM visibility** — `DELETE /profiles/{sim_id}` soft-deletes (status=terminated).
+   `GET /profiles/{sim_id}` now returns **200** with `status=terminated` (not 404).
+   `GET /profiles` with no status filter includes terminated SIMs in the default list.
+
+**Fixture layout:**
+
+| Fixture | Mode | IMSIs | IPs |
+|---|---|---|---|
+| sim_a | imsi | IMSI1 → IP_UNIQUE, IMSI2 → IP_SHARED | 2 per-IMSI IPs |
+| sim_b | imsi_apn | IMSI3 → APN1: IP_APN, APN2: IP_SHARED | 2 per-IMSI×APN IPs |
+| sim_card | iccid | IMSI4 → IP_CARD (card-level) | 1 card-level IP |
+| sim_term | imsi | IMSI5 → IP_TERM | terminated during test 13.11 |
+
+| # | Test | Expected |
+|---|---|---|
+| 13.1 | `GET /profiles/export?account_name=X` — every row has exactly the 9 import-format keys | `set(row.keys()) == {"sim_id","iccid","account_name","status","ip_resolution","imsi","apn","static_ip","pool_id"}` |
+| 13.2 | Export for sim_a (imsi mode, 2 IMSIs) | 2 rows; one per IMSI |
+| 13.3 | Export for sim_b (imsi_apn mode, 1 IMSI × 2 APNs) | 2 rows; one per IMSI×APN pair |
+| 13.4 | `GET /profiles/export?account_name=X` — only rows for that account | all rows have correct account_name; all 4 test SIMs present |
+| 13.5 | `GET /profiles/export?ip=IP_UNIQUE` — unique IP held by sim_a only | rows belong only to sim_a |
+| 13.6 | `GET /profiles/export?ip=IP_SHARED` — shared IP held by sim_a and sim_b | rows from both sim_a and sim_b |
+| 13.7 | `GET /profiles?ip=IP_UNIQUE` | total=1; item is sim_a |
+| 13.8 | `GET /profiles?ip=IP_SHARED` | total≥2; both sim_a and sim_b in results |
+| 13.9 | `GET /profiles?ip=IP_CARD` — card-level IP (sim_apn_ips table) | sim_card in results |
+| 13.10 | `GET /profiles?ip=1.2.3.4` (nonexistent) | total=0 |
+| 13.11 | `DELETE /profiles/{sim_term_id}` → 204; `GET /profiles/{sim_term_id}` | **200**, `status=terminated`, `imsis=[]` |
+| 13.12 | `GET /profiles?account_name=X` (no status filter) | sim_term_id appears in list |
+| 13.13 | `GET /profiles?status=terminated&account_name=X` | all items have status=terminated; sim_term_id present |
 
 ---
 
 ## Run Order & Teardown
 
 ```
-1. docker-compose -f docker-compose.test.yml up -d  (PostgreSQL + both services)
-2. Wait for /health on both services
-3. Run test_01 → test_11 sequentially (pytest -v --junitxml=results.xml)
-4. Each module tears down its own fixtures in a finally block
-5. docker-compose down --volumes
-6. Output: results.xml + timing.csv + console summary
+1. conftest.py setup_session: DB flush (delete from sim_profiles, ip_pools, etc.)
+2. Run test_01 → test_13 sequentially (pytest -v --junitxml=/app/results/results.xml)
+3. Each module:  setup_class → tests → teardown_class
+4. run_all.sh pushes JUnit totals to Prometheus Pushgateway (non-fatal if push fails)
 
-PASSED: 65 / FAILED: 0 / SKIPPED: 0
-Total time: ~5 min (excluding 300K seed load ~3 min)
+Result (full suite, RADIUS enabled):
+  134 passed · 0 failed · 0 skipped · ~72 s
 ```
+
+---
+
+## Environment Variables
+
+| Variable | Default | Required by |
+|---|---|---|
+| `PROVISION_URL` | `http://localhost:8080/v1` | All modules |
+| `LOOKUP_URL` | `http://localhost:8081/v1` | test_03–07b, test_12 |
+| `TEST_JWT` | `dev-skip-verify` | All modules |
+| `DB_URL` | `postgres://aaa_app:devpassword@localhost:5432/aaa` | conftest DB flush |
+| `PUSHGATEWAY_URL` | `http://localhost:9091` | run_all.sh metrics push |
+| `RADIUS_HOST` | `""` (skips test_12) | test_12 only |
+| `RADIUS_PORT` | `1812` | test_12 only |
+| `RADIUS_SECRET` | `""` | test_12 only |
+
+In `values-dev.yaml` the RADIUS variables are pre-configured for in-cluster use:
+
+```yaml
+aaa-regression-tester:
+  radius:
+    host:       "aaa-platform-aaa-radius-server"
+    port:       1812
+    secretName: "aaa-radius-secret"   # created by: make radius-secret
+```
+
+---
+
+## Kubernetes Deployment
+
+The tester runs as a **Kubernetes Job** (not a Deployment) — it executes the full suite,
+pushes metrics, then exits. Managed via the `aaa-regression-tester` sub-chart in the
+`aaa-platform` umbrella chart.
+
+### Run via make (preferred)
+
+```bash
+make test          # full suite including RADIUS
+make test PCAP=true  # same + tcpdump sidecar captures all traffic to test.pcap
+```
+
+### Run via kubectl (fallback when make/helm unavailable)
+
+```bash
+kubectl delete job aaa-regression-tester -n aaa-platform --ignore-not-found
+kubectl apply -f aaa-regression-tester-job.yaml
+kubectl wait --for=condition=complete job/aaa-regression-tester -n aaa-platform --timeout=900s
+kubectl logs -n aaa-platform -l app.kubernetes.io/name=aaa-regression-tester -c regression-tester
+```
+
+The `aaa-regression-tester-job.yaml` at the repo root is the raw Job manifest (no helm templating)
+with `RADIUS_HOST`, `RADIUS_PORT`, and `RADIUS_SECRET` pre-configured for the dev cluster.
+
+### PCAP sidecar
+
+When `make test PCAP=true` is used, a `tcpdump` sidecar is added to the pod. It captures all
+pod traffic to `/captures/test.pcap` for the lifetime of the test run. Retrieve with:
+
+```bash
+make pcap-get   # kubectl cp from a helper pod
+```
+
+---
+
+## Prometheus Metrics (via Pushgateway)
+
+After the test run, `run_all.sh` pushes the following metrics:
+
+| Metric | Type | Description |
+|---|---|---|
+| `regression_test_passed_total` | Gauge | Tests passed (labelled by module) |
+| `regression_test_failed_total` | Gauge | Tests failed (labelled by module) |
+| `regression_test_skipped_total` | Gauge | Tests skipped (labelled by module) |
+| `regression_test_duration_seconds` | Gauge | Wall-clock duration per module |
+| `regression_suite_duration_seconds` | Gauge | Total suite duration |
+| `regression_last_run_timestamp` | Gauge | Unix timestamp of last run |
+| `regression_suite_exit_code` | Gauge | 0=all passed · 1=failures |
 
 ---
 
@@ -279,213 +547,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Start services
-        run: docker compose -f docker-compose.test.yml up -d
+        run: docker compose -f aaa-regression-tester/docker-compose.test.yml up -d
       - name: Run tests
         run: |
-          pip install -r requirements.txt
-          pytest --junitxml=results.xml -n 1
+          pip install -r aaa-regression-tester/requirements.txt
+          cd aaa-regression-tester && pytest --junitxml=results.xml
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
           name: junit-results
-          path: results.xml
-```
-
----
-
-## Kubernetes & Helm Deployment
-
-> **Dev environment:** Deployed via the `aaa-platform` umbrella chart (Plan 7) with
-> `values-dev.yaml` on **k3d / WSL2**. Run with `make test` — the Job is off by default
-> (`aaa-regression-tester.enabled: false`) and enabled on demand.
-> Production target: generic k8s or OCI/OKE.
-
-### Overview
-
-The regression test client runs as a **Kubernetes Job** (not a long-running Deployment) — it executes the full test suite, publishes metrics to Prometheus Pushgateway, then terminates. It is triggered on demand (CI pipeline or manual `helm upgrade --install`) and cleaned up automatically after completion.
-
----
-
-### Helm Chart Structure
-
-```
-charts/aaa-regression-tester/
-├── Chart.yaml
-├── values.yaml
-├── templates/
-│   ├── job.yaml            # Kubernetes Job running the test suite
-│   ├── configmap.yaml      # pytest.ini + run_all.sh
-│   ├── secret.yaml         # TEST_JWT, PROVISION_URL, LOOKUP_URL
-│   └── serviceaccount.yaml
-```
-
-**Chart.yaml**
-```yaml
-apiVersion: v2
-name: aaa-regression-tester
-description: Regression test suite for the AAA cloud-native platform
-type: application
-version: 1.0.0
-appVersion: "1.0.0"
-```
-
-**values.yaml**
-```yaml
-image:
-  repository: registry.example.com/aaa-regression-tester
-  tag: "latest"
-  pullPolicy: IfNotPresent
-
-env:
-  PROVISION_URL: "http://subscriber-profile-api:8080/v1"
-  LOOKUP_URL: "http://aaa-lookup-service:8081/v1"
-  PUSHGATEWAY_URL: "http://prometheus-pushgateway:9091"
-
-# JWT token injected from an external Secret
-jwtSecretName: "aaa-test-jwt"
-
-job:
-  backoffLimit: 0          # fail immediately on error; no retries
-  ttlSecondsAfterFinished: 3600
-
-resources:
-  requests:
-    cpu: "500m"
-    memory: "256Mi"
-  limits:
-    cpu: "1"
-    memory: "512Mi"
-
-nodeSelector: {}
-tolerations: []
-```
-
----
-
-### Pod Specification (Job template)
-
-```yaml
-# templates/job.yaml
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: {{ include "aaa-regression-tester.fullname" . }}
-  labels:
-    app.kubernetes.io/name: aaa-regression-tester
-    app.kubernetes.io/component: test-runner
-spec:
-  backoffLimit: {{ .Values.job.backoffLimit }}
-  ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: aaa-regression-tester
-      annotations:
-        # No Prometheus scrape annotation — metrics pushed via Pushgateway
-        prometheus.io/scrape: "false"
-    spec:
-      restartPolicy: Never
-      serviceAccountName: {{ include "aaa-regression-tester.serviceAccountName" . }}
-      containers:
-        - name: regression-tester
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              pytest --junitxml=/results/results.xml -v && \
-              python /app/push_metrics.py --pushgateway $PUSHGATEWAY_URL
-          env:
-            - name: PROVISION_URL
-              value: {{ .Values.env.PROVISION_URL | quote }}
-            - name: LOOKUP_URL
-              value: {{ .Values.env.LOOKUP_URL | quote }}
-            - name: PUSHGATEWAY_URL
-              value: {{ .Values.env.PUSHGATEWAY_URL | quote }}
-            - name: TEST_JWT
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.jwtSecretName }}
-                  key: token
-          resources:
-            {{- toYaml .Values.resources | nindent 12 }}
-          volumeMounts:
-            - name: results
-              mountPath: /results
-      volumes:
-        - name: results
-          emptyDir: {}
-```
-
----
-
-### Prometheus Metrics (via Pushgateway)
-
-After the test run completes, `push_metrics.py` pushes the following metrics to the Prometheus Pushgateway:
-
-| Metric | Type | Labels | Description |
-|---|---|---|---|
-| `regression_test_passed_total` | Gauge | `suite`, `module` | Number of tests that passed per module |
-| `regression_test_failed_total` | Gauge | `suite`, `module` | Number of tests that failed per module |
-| `regression_test_skipped_total` | Gauge | `suite`, `module` | Number of tests skipped |
-| `regression_test_duration_seconds` | Gauge | `suite`, `module` | Wall-clock duration of each test module |
-| `regression_suite_duration_seconds` | Gauge | `suite` | Total suite duration |
-| `regression_lookup_latency_p99_ms` | Gauge | `test` | Measured p99 latency from test_11 |
-| `regression_last_run_timestamp` | Gauge | `suite` | Unix timestamp of last run |
-| `regression_suite_exit_code` | Gauge | `suite` | 0 = all passed, 1 = failures |
-
-**Pushgateway scrape configuration (prometheus.yml):**
-```yaml
-scrape_configs:
-  - job_name: pushgateway
-    honor_labels: true
-    static_configs:
-      - targets: ['prometheus-pushgateway:9091']
-```
-
----
-
-### Grafana Dashboard — Regression Test Results
-
-**Dashboard UID:** `aaa-regression-tests`
-
-| Panel | Type | Query | Description |
-|---|---|---|---|
-| Suite Status | Stat | `regression_suite_exit_code{suite="aaa"}` | Green=0 (pass) / Red=1 (fail) |
-| Pass / Fail / Skip | Pie chart | `regression_test_passed_total`, `regression_test_failed_total`, `regression_test_skipped_total` | Overall pass rate |
-| Tests Passed by Module | Bar chart | `regression_test_passed_total by (module)` | Per-module breakdown |
-| Suite Duration | Gauge | `regression_suite_duration_seconds{suite="aaa"}` | Total run time; threshold at 600s |
-| Module Duration | Horizontal bar | `regression_test_duration_seconds by (module)` | Slowest modules highlighted |
-| p99 Lookup Latency (test_11) | Gauge | `regression_lookup_latency_p99_ms{test="test_11"}` | Alert threshold at 15ms |
-| Last Run Time | Stat | `regression_last_run_timestamp` | Time since last successful execution |
-| History (pass/fail over time) | Time series | `regression_suite_exit_code` over 30 days | Trend line |
-
-**Alerts:**
-```yaml
-groups:
-  - name: regression
-    rules:
-      - alert: RegressionTestFailed
-        expr: regression_suite_exit_code{suite="aaa"} == 1
-        for: 0m
-        labels:
-          severity: critical
-        annotations:
-          summary: "AAA regression suite has failed"
-
-      - alert: RegressionP99LatencyTooHigh
-        expr: regression_lookup_latency_p99_ms{test="test_11"} > 15
-        for: 0m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Lookup p99 latency {{ $value }}ms exceeds 15ms SLA in regression"
-
-      - alert: RegressionTestStale
-        expr: time() - regression_last_run_timestamp{suite="aaa"} > 86400
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "AAA regression suite has not run in over 24 hours"
+          path: aaa-regression-tester/results.xml
 ```

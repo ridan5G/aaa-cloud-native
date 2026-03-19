@@ -203,13 +203,10 @@ kube-prometheus-stack:
         folderAnnotation: grafana_folder
         provider:
           foldersFromFilesStructure: true
-    # ── Datasource ────────────────────────────────────────────────────────
-    # Override the auto-provisioned datasource URL.
-    # kube-prometheus-stack's template generates a hostname that includes the
-    # full chart name (e.g. "…-kube-prometheus-stack-prometheus") which often
-    # differs from the ClusterIP service the Prometheus Operator actually creates.
-    # Using "prometheus-operated" is always correct: the operator creates that
-    # headless service regardless of Helm release/chart naming conventions.
+      datasources:
+        # Suppress kube-prometheus-stack's built-in Prometheus datasource ConfigMap
+        # — its URL uses the Helm release name and resolves to a non-existent host.
+        defaultDatasourceEnabled: false
     datasources:
       datasources.yaml:
         apiVersion: 1
@@ -223,6 +220,7 @@ kube-prometheus-stack:
             jsonData:
               timeInterval: 15s
               httpMethod: POST
+          # Alertmanager datasource omitted in dev (alertmanager.enabled: false)
   prometheus:
     ingress:
       enabled: true

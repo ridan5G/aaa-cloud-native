@@ -5,12 +5,18 @@
 import http from 'k6/http';
 import { check } from 'k6';
 import { Rate } from 'k6/metrics';
-import { BASE_URL, randomIMSI, randomAPN, lookupHeaders, SLA_THRESHOLDS } from './common.js';
+import { BASE_URL, randomIMSI, randomAPN, lookupHeaders } from './common.js';
 
+// Smoke only asserts functional correctness — no latency threshold.
+// Latency via kubectl port-forward adds 15-60 ms of jitter that would
+// always fail the SLA gate.  Run load.js / soak.js in-cluster for that.
 export const options = {
   vus: 1,
   duration: '1m',
-  thresholds: SLA_THRESHOLDS,
+  thresholds: {
+    http_req_failed: ['rate<0.01'],
+    server_errors:   ['rate<0.01'],
+  },
   summaryTrendStats: ['min', 'med', 'avg', 'p(90)', 'p(95)', 'p(99)', 'max'],
 };
 
@@ -26,8 +32,7 @@ export default function () {
   serverErrors.add(res.status >= 500);
 
   check(res, {
-    'status is 200':        (r) => r.status === 200,
-    'has static_ip field':  (r) => r.json('static_ip') !== undefined,
-    'response within 15ms': (r) => r.timings.duration < 15,
+    'status is 200':       (r) => r.status === 200,
+    'has static_ip field': (r) => r.json('static_ip') !== undefined,
   });
 }

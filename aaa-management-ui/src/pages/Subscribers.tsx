@@ -3,6 +3,7 @@ import { Routes, Route, Link, useNavigate, useParams } from 'react-router-dom'
 import { apiClient } from '../apiClient'
 import StatusBadge from '../components/StatusBadge'
 import { useToasts } from '../stores/toast'
+import { ProfileDiagram } from '../components/SimProfileDiagram'
 import type { Profile, Imsi, IccidIp, Pool, IpResolution } from '../types'
 
 const IP_RESOLUTIONS: IpResolution[] = ['imsi', 'imsi_apn', 'iccid', 'iccid_apn']
@@ -15,23 +16,40 @@ function fmtDate(s: string) {
 // ─── List ─────────────────────────────────────────────────────────────────────
 function DeviceList() {
   const navigate  = useNavigate()
+  const { show }  = useToasts()
   const [items,   setItems]   = useState<Profile[]>([])
   const [total,   setTotal]   = useState(0)
   const [page,    setPage]    = useState(1)
-  const [search,  setSearch]  = useState('')
-  const [status,  setStatus]  = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error,   setError]   = useState<string | null>(null)
+  const [status,       setStatus]       = useState('')
+  const [accountFilter, setAccountFilter] = useState('')
+  const [imsiPrefix,    setImsiPrefix]    = useState('')
+  const [iccidPrefix,   setIccidPrefix]   = useState('')
+  const [ipResFilter,   setIpResFilter]   = useState('')
+  const [ipFilter,      setIpFilter]      = useState('')
+  const [accounts,  setAccounts]  = useState<string[]>([])
+  const [loading,   setLoading]   = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [error,     setError]     = useState<string | null>(null)
 
-  async function load(q = search, st = status, pg = page) {
+  useEffect(() => {
+    apiClient.get('/profiles/accounts').then(r => setAccounts(r.data ?? [])).catch(() => {})
+  }, [])
+
+  async function load(
+    st       = status,       pg       = page,
+    acc      = accountFilter, ipRes   = ipResFilter,
+    imsiPfx  = imsiPrefix,   iccidPfx = iccidPrefix,
+    ipAddr   = ipFilter,
+  ) {
     setLoading(true); setError(null)
     try {
       const params: Record<string, string | number> = { page: pg, limit: PER_PAGE }
-      if (st) params.status = st
-      const t = q.trim()
-      if (/^\d{15}$/.test(t))    params.imsi         = t
-      else if (/^\d{19,20}$/.test(t)) params.iccid   = t
-      else if (t)                 params.account_name = t
+      if (st)              params.status        = st
+      if (acc)             params.account_name  = acc
+      if (ipRes)           params.ip_resolution = ipRes
+      if (imsiPfx.trim())  params.imsi_prefix   = imsiPfx.trim()
+      if (iccidPfx.trim()) params.iccid_prefix  = iccidPfx.trim()
+      if (ipAddr.trim())   params.ip            = ipAddr.trim()
       const res = await apiClient.get('/profiles', { params })
       setItems(res.data.items ?? res.data.profiles ?? [])
       setTotal(res.data.total ?? 0)
@@ -40,10 +58,55 @@ function DeviceList() {
 
   useEffect(() => { load() }, []) // eslint-disable-line
 
-  function handleSearch(e: React.FormEvent) { e.preventDefault(); setPage(1); load(search, status, 1) }
-  function handleStatus(v: string) { setStatus(v); setPage(1); load(search, v, 1) }
-  function goPage(p: number) { setPage(p); load(search, status, p) }
+  function handleSearch(e: React.FormEvent) {
+    e.preventDefault(); setPage(1)
+    load(status, 1, accountFilter, ipResFilter, imsiPrefix, iccidPrefix, ipFilter)
+  }
+  function handleSelectFilter(field: 'status' | 'account' | 'ipRes', v: string) {
+    if (field === 'status')  { setStatus(v);        setPage(1); load(v,       1, accountFilter, ipResFilter, imsiPrefix, iccidPrefix, ipFilter) }
+    if (field === 'account') { setAccountFilter(v); setPage(1); load(status,  1, v,             ipResFilter, imsiPrefix, iccidPrefix, ipFilter) }
+    if (field === 'ipRes')   { setIpResFilter(v);   setPage(1); load(status,  1, accountFilter, v,           imsiPrefix, iccidPrefix, ipFilter) }
+  }
+  function handleReset() {
+    setStatus(''); setAccountFilter(''); setImsiPrefix(''); setIccidPrefix(''); setIpResFilter(''); setIpFilter('')
+    setPage(1); load('', 1, '', '', '', '', '')
+  }
+  function goPage(p: number) { setPage(p); load(status, p, accountFilter, ipResFilter, imsiPrefix, iccidPrefix, ipFilter) }
   const totalPages = Math.ceil(total / PER_PAGE)
+
+  async function handleExport() {
+    setExporting(true)
+    try {
+      const params: Record<string, string> = {}
+      if (status)             params.status        = status
+      if (accountFilter)      params.account_name  = accountFilter
+      if (ipResFilter)        params.ip_resolution = ipResFilter
+      if (imsiPrefix.trim())  params.imsi_prefix   = imsiPrefix.trim()
+      if (iccidPrefix.trim()) params.iccid_prefix  = iccidPrefix.trim()
+      if (ipFilter.trim())    params.ip            = ipFilter.trim()
+
+      const res = await apiClient.get('/profiles/export', { params })
+      const rows: Record<string, string | null>[] = res.data
+
+      const headers = ['sim_id', 'iccid', 'account_name', 'status', 'ip_resolution', 'imsi', 'apn', 'static_ip', 'pool_id']
+      const cell = (v: string | null | undefined) => {
+        const s = v ?? ''
+        return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s
+      }
+      const lines = [
+        headers.join(','),
+        ...rows.map(r => [
+          r.sim_id, r.iccid, r.account_name, r.status, r.ip_resolution,
+          r.imsi, r.apn, r.static_ip, r.pool_id,
+        ].map(cell).join(',')),
+      ]
+      const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }))
+      const fname = `sims-export-${new Date().toISOString().slice(0, 10)}.csv`
+      Object.assign(document.createElement('a'), { href: url, download: fname }).click()
+      URL.revokeObjectURL(url)
+      show('success', `Exported ${rows.length} rows`)
+    } catch (e) { show('error', String(e)) } finally { setExporting(false) }
+  }
 
   return (
     <div className="space-y-4">
@@ -53,21 +116,77 @@ function DeviceList() {
           <h1 className="page-title">SIMs</h1>
         </div>
         <div className="flex gap-2">
+          <button onClick={handleExport} disabled={exporting} className="btn-outline">
+            {exporting ? 'Exporting…' : '↓ Export CSV'}
+          </button>
           <Link to="bulk" className="btn-outline">↑ Bulk Import</Link>
           <Link to="new"  className="btn-primary">+ New Profile</Link>
         </div>
       </div>
 
-      <form onSubmit={handleSearch} className="flex gap-3 flex-wrap">
-        <input className="input max-w-xs" placeholder="Search IMSI, ICCID, or account…"
-          value={search} onChange={e => setSearch(e.target.value)} />
-        <select className="select w-40" value={status} onChange={e => handleStatus(e.target.value)}>
-          <option value="">All statuses</option>
-          <option value="active">Active</option>
-          <option value="suspended">Suspended</option>
-          <option value="terminated">Terminated</option>
-        </select>
+      {/* Quick-action: pick a profile type before creating */}
+      <Link
+        to="/sim-profile-types"
+        className="flex items-center gap-3 px-4 py-3 bg-primary/5 border border-primary/20 rounded-lg hover:bg-primary/10 transition-colors group"
+      >
+        <div className="w-7 h-7 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" className="w-3.5 h-3.5">
+            <path d="M8 3v10M3 8h10" strokeLinecap="round" />
+          </svg>
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-gray-800">Create a new SIM</p>
+          <p className="text-xs text-gray-500 mt-0.5">Choose a profile type — IMSI, IMSI+APN, ICCID, or ICCID+APN</p>
+        </div>
+        <span className="text-primary text-sm font-medium shrink-0 group-hover:translate-x-0.5 transition-transform">
+          Pick type →
+        </span>
+      </Link>
+
+      <form onSubmit={handleSearch} className="flex gap-3 flex-wrap items-end">
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-gray-500 font-medium">Account</label>
+          <select className="select w-44" value={accountFilter}
+            onChange={e => handleSelectFilter('account', e.target.value)}>
+            <option value="">All accounts</option>
+            {accounts.map(a => <option key={a} value={a}>{a}</option>)}
+          </select>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-gray-500 font-medium">Profile Type</label>
+          <select className="select w-40" value={ipResFilter}
+            onChange={e => handleSelectFilter('ipRes', e.target.value)}>
+            <option value="">All types</option>
+            {IP_RESOLUTIONS.map(r => <option key={r} value={r}>{r}</option>)}
+          </select>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-gray-500 font-medium">Status</label>
+          <select className="select w-36" value={status}
+            onChange={e => handleSelectFilter('status', e.target.value)}>
+            <option value="">All statuses</option>
+            <option value="active">Active</option>
+            <option value="suspended">Suspended</option>
+            <option value="terminated">Terminated</option>
+          </select>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-gray-500 font-medium">IMSI Prefix</label>
+          <input className="input w-36 font-mono text-xs" placeholder="2787730…"
+            value={imsiPrefix} onChange={e => setImsiPrefix(e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-gray-500 font-medium">ICCID Prefix</label>
+          <input className="input w-40 font-mono text-xs" placeholder="89445010…"
+            value={iccidPrefix} onChange={e => setIccidPrefix(e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-gray-400 font-medium">IP Address</label>
+          <input className="input w-36 font-mono text-xs" placeholder="100.65.0.1"
+            value={ipFilter} onChange={e => setIpFilter(e.target.value)} />
+        </div>
         <button type="submit" className="btn-primary">Search</button>
+        <button type="button" onClick={handleReset} className="btn-ghost">Reset</button>
       </form>
 
       {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-lg">{error}</div>}
@@ -87,7 +206,11 @@ function DeviceList() {
               <tbody>
                 {items.map(p => (
                   <tr key={p.sim_id}
-                    className="border-b border-border hover:bg-page transition-colors cursor-pointer"
+                    className={`border-b transition-colors cursor-pointer ${
+                      p.status === 'terminated'
+                        ? 'bg-red-50 border-l-2 border-l-red-400 hover:bg-red-100'
+                        : 'border-border hover:bg-page'
+                    }`}
                     onClick={() => navigate(p.sim_id)}>
                     <td className="px-4 py-3 font-mono text-xs text-gray-500">{p.sim_id.slice(0, 8)}…</td>
                     <td className="px-4 py-3 text-sm font-mono text-xs">
@@ -243,6 +366,18 @@ function ProfileDetail() {
         <span className="font-mono text-xs text-gray-600">{profile.sim_id.slice(0, 16)}…</span>
       </div>
 
+      {profile.status === 'terminated' && (
+        <div className="flex items-center gap-3 px-4 py-3 bg-red-50 border border-red-300 rounded-lg text-red-700">
+          <svg viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5 shrink-0">
+            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" clipRule="evenodd" />
+          </svg>
+          <div>
+            <p className="text-sm font-semibold">This SIM has been terminated</p>
+            <p className="text-xs mt-0.5 opacity-80">Profile is read-only. No further actions can be taken.</p>
+          </div>
+        </div>
+      )}
+
       {/* Profile card */}
       <div className="card p-6 space-y-4">
         <div className="flex items-start justify-between">
@@ -269,16 +404,22 @@ function ProfileDetail() {
           </div>
         </div>
 
-        {/* IP Resolution type badge */}
-        <div className={`flex items-start gap-3 border rounded-lg px-4 py-3 ${resMeta.color}`}>
+        {/* IP Resolution type badge + diagram */}
+        <div className={`flex items-start gap-4 border rounded-lg px-4 py-3 ${resMeta.color}`}>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <span className="text-xs font-bold uppercase tracking-wide">IP Resolution:</span>
               <code className="text-xs font-mono font-semibold">{profile.ip_resolution}</code>
             </div>
             <p className="text-xs mt-0.5 opacity-80">{resMeta.desc}</p>
+            <Link to="/sim-profile-types" className="text-xs underline opacity-60 hover:opacity-100 mt-2 inline-block">Learn more</Link>
           </div>
-          <Link to="/sim-profile-types" className="text-xs underline opacity-70 hover:opacity-100 shrink-0">Learn more</Link>
+          <div className="shrink-0 bg-white/70 rounded-lg px-3 py-2">
+            <ProfileDiagram
+              resolution={profile.ip_resolution}
+              data={{ iccid: profile.iccid, imsis, iccidIps }}
+            />
+          </div>
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
@@ -343,9 +484,11 @@ function ProfileDetail() {
             IMSIs ({imsis.length})
             {isIccidMode && <span className="ml-1.5 text-xs font-normal text-gray-400">— IPs are at card level above</span>}
           </h2>
-          <button onClick={() => setShowForm(v => !v)} className="btn-outline text-xs py-1.5 px-3">
-            {showForm ? 'Cancel' : '+ Add IMSI'}
-          </button>
+          {profile.status !== 'terminated' && (
+            <button onClick={() => setShowForm(v => !v)} className="btn-outline text-xs py-1.5 px-3">
+              {showForm ? 'Cancel' : '+ Add IMSI'}
+            </button>
+          )}
         </div>
 
         {showForm && (

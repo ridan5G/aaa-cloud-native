@@ -4,7 +4,7 @@ import { apiClient } from '../apiClient'
 import StatusBadge from '../components/StatusBadge'
 import type { BulkJob } from '../types'
 
-interface PoolStat { pool_id: string; name: string; total: number; allocated: number }
+interface PoolStat { pool_id: string; name: string; total: number; allocated: number; available: number }
 
 function poolBarColor(pct: number) {
   if (pct > 90) return '#E53E3E'
@@ -104,7 +104,7 @@ export default function Dashboard() {
                     <div className="flex justify-between text-xs mb-1.5">
                       <span className="font-medium text-gray-700 truncate max-w-[160px]">{p.name}</span>
                       <span className="text-gray-500 shrink-0 ml-2 tabular-nums">
-                        {p.allocated.toLocaleString()} / {p.total.toLocaleString()} ({pct}%)
+                        {(p.allocated ?? 0).toLocaleString()} / {(p.total ?? 0).toLocaleString()} ({pct}%)
                       </span>
                     </div>
                     <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">

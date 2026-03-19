@@ -17,7 +17,7 @@ radiusSecret:
   secretName: ""          # if set, overrides value; secret must have key: radius-secret
 
 # aaa-lookup-service base URL (in-cluster)
-lookupUrl: "http://aaa-lookup-service:8081"
+lookupUrl: "http://aaa-lookup-service:8081/v1"
 
 # subscriber-profile-api base URL (in-cluster)
 provisioningUrl: "http://subscriber-profile-api:8080"

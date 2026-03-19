@@ -25,7 +25,7 @@ struct Config {
 
     uint16_t    radiusPort      = 1812;
     std::string radiusSecret;   // required — no default; set via RADIUS_SECRET env var
-    std::string lookupUrl       = "http://aaa-lookup-service:8081";
+    std::string lookupUrl       = "http://aaa-lookup-service:8081/v1";
     std::string provisioningUrl = "http://subscriber-profile-api:8080";
     int         workerThreads   = 8;
     std::string logLevel        = "info";

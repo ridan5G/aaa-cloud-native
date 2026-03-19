@@ -47,7 +47,11 @@ function IccidRangeConfigList() {
 
   async function createConfig(form: NewIccidConfigForm) {
     try {
-      await apiClient.post('/iccid-range-configs', form)
+      await apiClient.post('/iccid-range-configs', {
+        ...form,
+        imsi_count: Number(form.imsi_count),
+        pool_id: form.pool_id || null,
+      })
       show('success', 'ICCID range config created')
       setShowNew(false); load()
     } catch (e) { show('error', String(e)) }
@@ -401,7 +405,7 @@ function IccidRangeConfigDetail() {
                     <div className="flex items-center justify-end gap-2">
                       <button
                         onClick={addSlot}
-                        disabled={!slotForm.imsi_slot || !slotForm.f_imsi || !slotForm.t_imsi || !cardinality.ok}
+                        disabled={!slotForm.imsi_slot || !slotForm.f_imsi || !slotForm.t_imsi}
                         className="btn-primary text-xs py-1 px-3">
                         Add
                       </button>
@@ -441,11 +445,28 @@ function NewIccidConfigModal({
 }: { onClose: () => void; onSave: (f: NewIccidConfigForm) => void }) {
   const [form, setForm] = useState<NewIccidConfigForm>({
     account_name: '', f_iccid: '', t_iccid: '', pool_id: '',
-    ip_resolution: 'iccid', imsi_count: '1', description: '',
+    ip_resolution: 'iccid', imsi_count: '', description: '',
   })
   const [pools, setPools] = useState<Pool[]>([])
   const setF = <K extends keyof NewIccidConfigForm>(k: K, v: NewIccidConfigForm[K]) =>
     setForm(f => ({ ...f, [k]: v }))
+
+  // Auto-compute imsi_count from ICCID range
+  function computeIccidCount(fIccid: string, tIccid: string): string {
+    try {
+      if (!fIccid || !tIccid) return ''
+      const count = BigInt(tIccid) - BigInt(fIccid) + BigInt(1)
+      return count > 0 ? count.toString() : ''
+    } catch { return '' }
+  }
+
+  function setIccidField(key: 'f_iccid' | 't_iccid', val: string) {
+    setForm(f => {
+      const next = { ...f, [key]: val }
+      next.imsi_count = computeIccidCount(next.f_iccid, next.t_iccid)
+      return next
+    })
+  }
 
   useEffect(() => {
     apiClient.get('/pools').then(r => setPools(r.data.pools ?? r.data.items ?? [])).catch(() => {})
@@ -465,12 +486,12 @@ function NewIccidConfigModal({
               <div className="field">
                 <label className="label">From ICCID *</label>
                 <input className="input font-mono text-sm" placeholder="8901260000000000000"
-                  value={form.f_iccid} onChange={e => setF('f_iccid', e.target.value)} />
+                  value={form.f_iccid} onChange={e => setIccidField('f_iccid', e.target.value)} />
               </div>
               <div className="field">
                 <label className="label">To ICCID *</label>
                 <input className="input font-mono text-sm" placeholder="8901260000000099999"
-                  value={form.t_iccid} onChange={e => setF('t_iccid', e.target.value)} />
+                  value={form.t_iccid} onChange={e => setIccidField('t_iccid', e.target.value)} />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
@@ -480,9 +501,9 @@ function NewIccidConfigModal({
                   value={form.account_name} onChange={e => setF('account_name', e.target.value)} />
               </div>
               <div className="field">
-                <label className="label">IMSI Count per ICCID *</label>
-                <input className="input text-sm" type="number" min="1" max="8" placeholder="1"
-                  value={form.imsi_count} onChange={e => setF('imsi_count', e.target.value)} />
+                <label className="label">ICCID Count</label>
+                <input className="input text-sm bg-gray-50 text-gray-500 cursor-default" readOnly
+                  value={form.imsi_count || '—'} tabIndex={-1} />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
@@ -513,7 +534,7 @@ function NewIccidConfigModal({
               <button onClick={onClose} className="btn-ghost">Cancel</button>
               <button
                 onClick={() => onSave(form)}
-                disabled={!form.f_iccid || !form.t_iccid || !form.imsi_count}
+                disabled={!form.f_iccid || !form.t_iccid || !form.imsi_count || form.imsi_count === '—'}
                 className="btn-primary ml-auto">
                 Create Config
               </button>

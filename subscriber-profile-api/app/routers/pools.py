@@ -117,26 +117,36 @@ async def list_pools(
     idx = 1
 
     if account_name:
-        filters.append(f"account_name = ${idx}")
+        filters.append(f"p.account_name = ${idx}")
         params.append(account_name)
         idx += 1
     if status:
         if status not in ("active", "suspended"):
             _validation_error("status", "must be active or suspended")
-        filters.append(f"status = ${idx}")
+        filters.append(f"p.status = ${idx}")
         params.append(status)
         idx += 1
 
     where = f"WHERE {' AND '.join(filters)}" if filters else ""
     offset = (page - 1) * limit
 
-    total = await conn.fetchval(f"SELECT COUNT(*) FROM ip_pools {where}", *params)
+    total = await conn.fetchval(f"SELECT COUNT(*) FROM ip_pools p {where}", *params)
     rows = await conn.fetch(
         f"""
-        SELECT pool_id::text, account_name, pool_name AS name,
-               subnet::text, start_ip::text, end_ip::text, status
-        FROM ip_pools {where}
-        ORDER BY created_at DESC
+        SELECT p.pool_id::text, p.account_name, p.pool_name AS name,
+               p.subnet::text, p.start_ip::text, p.end_ip::text, p.status,
+               COALESCE(avail.cnt, 0)::int AS available,
+               COALESCE(alloc.cnt, 0)::int AS allocated,
+               (COALESCE(avail.cnt, 0) + COALESCE(alloc.cnt, 0))::int AS total
+        FROM ip_pools p
+        LEFT JOIN (
+            SELECT pool_id, COUNT(*) AS cnt FROM ip_pool_available GROUP BY pool_id
+        ) avail ON p.pool_id = avail.pool_id
+        LEFT JOIN (
+            SELECT pool_id, COUNT(*) AS cnt FROM sim_apn_ips GROUP BY pool_id
+        ) alloc ON p.pool_id = alloc.pool_id
+        {where}
+        ORDER BY p.created_at DESC
         LIMIT ${idx} OFFSET ${idx + 1}
         """,
         *params,

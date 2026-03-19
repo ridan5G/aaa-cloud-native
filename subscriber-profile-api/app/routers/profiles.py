@@ -241,11 +241,88 @@ async def create_profile(body: ProfileCreate, conn=Depends(get_conn)):
     return {"sim_id": sim_id, "created_at": created_at}
 
 
+@router.get("/profiles/accounts", dependencies=[Depends(require_auth)])
+async def list_profile_accounts(conn=Depends(get_conn)):
+    """Return distinct non-null account names, sorted alphabetically."""
+    rows = await conn.fetch(
+        "SELECT DISTINCT account_name FROM sim_profiles "
+        "WHERE account_name IS NOT NULL ORDER BY account_name"
+    )
+    return [r["account_name"] for r in rows]
+
+
+@router.get("/profiles/export", dependencies=[Depends(require_auth)])
+async def export_profiles(
+    account_name: Optional[str] = None,
+    status: Optional[str] = None,
+    ip_resolution: Optional[str] = None,
+    imsi_prefix: Optional[str] = None,
+    iccid_prefix: Optional[str] = None,
+    ip: Optional[str] = None,
+    conn=Depends(get_conn),
+):
+    """Return all profiles with per-IMSI/APN rows in the bulk-import format."""
+    filters: list[str] = []
+    params: list = []
+    idx = 1
+
+    if account_name:
+        filters.append(f"sp.account_name = ${idx}")
+        params.append(account_name); idx += 1
+    if status:
+        filters.append(f"sp.status = ${idx}")
+        params.append(status); idx += 1
+    if ip_resolution:
+        filters.append(f"sp.ip_resolution = ${idx}")
+        params.append(ip_resolution); idx += 1
+    if imsi_prefix:
+        filters.append(f"sp.sim_id IN (SELECT sim_id FROM imsi2sim WHERE imsi LIKE ${idx})")
+        params.append(imsi_prefix + "%"); idx += 1
+    if iccid_prefix:
+        filters.append(f"sp.iccid LIKE ${idx}")
+        params.append(iccid_prefix + "%"); idx += 1
+    if ip:
+        filters.append(
+            f"sp.sim_id IN ("
+            f"SELECT si.sim_id FROM imsi2sim si "
+            f"JOIN imsi_apn_ips ia ON ia.imsi = si.imsi "
+            f"WHERE ia.static_ip = ${idx}::inet "
+            f"UNION "
+            f"SELECT sim_id FROM sim_apn_ips "
+            f"WHERE static_ip = ${idx}::inet"
+            f")"
+        )
+        params.append(ip); idx += 1
+
+    where = f"WHERE {' AND '.join(filters)}" if filters else ""
+
+    rows = await conn.fetch(
+        f"""
+        SELECT
+            sp.sim_id::text,
+            sp.iccid,
+            sp.account_name,
+            sp.status,
+            sp.ip_resolution,
+            si.imsi,
+            ia.apn,
+            host(ia.static_ip) AS static_ip,
+            ia.pool_id::text    AS pool_id
+        FROM sim_profiles sp
+        LEFT JOIN imsi2sim       si ON si.sim_id = sp.sim_id
+        LEFT JOIN imsi_apn_ips   ia ON ia.imsi   = si.imsi
+        {where}
+        ORDER BY sp.created_at DESC, si.priority, ia.id
+        """,
+        *params,
+    )
+    return [dict(r) for r in rows]
+
+
 @router.get("/profiles/{sim_id}", dependencies=[Depends(require_auth)])
 async def get_profile(sim_id: str, conn=Depends(get_conn)):
     result = await _build_profile_response(sim_id, conn)
-    # Treat terminated profiles the same as missing — they are no longer addressable.
-    if result is None or result.get("status") == "terminated":
+    if result is None:
         raise HTTPException(
             status_code=404,
             detail={"error": "not_found", "resource": "subscriber_profile", "sim_id": sim_id},
@@ -261,6 +338,9 @@ async def list_profiles(
     status: Optional[str] = None,
     ip_resolution: Optional[str] = None,
     pool_id: Optional[str] = None,
+    imsi_prefix: Optional[str] = None,
+    iccid_prefix: Optional[str] = None,
+    ip: Optional[str] = None,
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=100, ge=1, le=1000),
     conn=Depends(get_conn),
@@ -319,6 +399,29 @@ async def list_profiles(
     if ip_resolution:
         filters.append(f"ip_resolution = ${idx}")
         params.append(ip_resolution)
+        idx += 1
+    if imsi_prefix:
+        filters.append(
+            f"sim_id IN (SELECT sim_id FROM imsi2sim WHERE imsi LIKE ${idx})"
+        )
+        params.append(imsi_prefix + "%")
+        idx += 1
+    if iccid_prefix:
+        filters.append(f"iccid LIKE ${idx}")
+        params.append(iccid_prefix + "%")
+        idx += 1
+    if ip:
+        filters.append(
+            f"sim_id IN ("
+            f"SELECT si.sim_id FROM imsi2sim si "
+            f"JOIN imsi_apn_ips ia ON ia.imsi = si.imsi "
+            f"WHERE ia.static_ip = ${idx}::inet "
+            f"UNION "
+            f"SELECT sim_id FROM sim_apn_ips "
+            f"WHERE static_ip = ${idx}::inet"
+            f")"
+        )
+        params.append(ip)
         idx += 1
 
     where = f"WHERE {' AND '.join(filters)}" if filters else ""

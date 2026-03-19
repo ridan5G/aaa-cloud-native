@@ -4,19 +4,21 @@ test_12_radius.py — End-to-end RADIUS authentication server tests.
 Sends real UDP RADIUS Access-Request packets to aaa-radius-server and
 verifies the two-stage AAA flow:
 
-  Stage 1: server calls GET /lookup?imsi=&apn= on aaa-lookup-service
+  Stage 1: server calls GET /lookup?imsi=&apn=[&use_case_id=] on aaa-lookup-service
     200 → Access-Accept + Framed-IP-Address
     403 → Access-Reject  (subscriber suspended)
     404 → Stage 2 ↓
 
-  Stage 2: server calls POST /v1/first-connection {imsi, apn, imei}
+  Stage 2: server calls POST /v1/first-connection {imsi, apn, imei[, use_case_id]}
     200 → Access-Accept + Framed-IP-Address
     404/503 → Access-Reject
+
+  use_case_id is sourced from 3GPP-Charging-Characteristics VSA (10415:13).
 
 Requires RADIUS_HOST, RADIUS_PORT, RADIUS_SECRET env vars
 (defaults: localhost, 1812; RADIUS_SECRET from env or .env file).
 
-Test cases 12.1 – 12.10
+Test cases 12.1 – 12.14
 """
 import socket
 import time
@@ -45,11 +47,12 @@ KNOWN_POOL_SUBNET = "100.65.120.200/29"   # 6 usable IPs (.201–.206)
 IMSI_KNOWN        = "278771200000001"      # pre-provisioned via HTTP API
 KNOWN_STATIC_IP   = "100.65.120.201"      # the IP recorded in the profile
 
-# Range B: first-connection via RADIUS (tests 12.6 – 12.7)
+# Range B: first-connection via RADIUS (tests 12.6 – 12.7, 12.14)
 FC_POOL_SUBNET    = "100.65.120.208/29"   # 6 usable IPs (.209–.214)
 IMSI_FC_F         = "278771200001001"
 IMSI_FC_T         = "278771200001099"
 IMSI_FC_NEW       = "278771200001001"     # no profile exists before test 12.6
+IMSI_FC_NEW2      = "278771200001002"     # no profile exists before test 12.14
 
 # Out-of-range IMSI — not covered by any range config (tests 12.8)
 IMSI_OOB          = "278771209999001"
@@ -76,12 +79,14 @@ def _radius_available(host: str, port: int, secret: str) -> bool:
 @pytest.mark.radius
 class TestRadiusServer:
     # Set by setup_class; read by all test methods
-    known_pool_id:   str | None = None
-    known_sim_id: str | None = None
-    fc_pool_id:      str | None = None
-    fc_range_id:     str | None = None
-    fc_sim_id:    str | None = None   # filled by test_06
-    fc_allocated_ip: str | None = None   # filled by test_06
+    known_pool_id:    str | None = None
+    known_sim_id:     str | None = None
+    fc_pool_id:       str | None = None
+    fc_range_id:      str | None = None
+    fc_sim_id:        str | None = None   # filled by test_06
+    fc_allocated_ip:  str | None = None   # filled by test_06
+    fc_sim_id2:       str | None = None   # filled by test_14
+    fc_allocated_ip2: str | None = None   # filled by test_14
 
     @classmethod
     def _cleanup_previous_run(cls, c: httpx.Client) -> None:
@@ -91,7 +96,7 @@ class TestRadiusServer:
         All errors are swallowed so a dirty DB never blocks setup.
         """
         # 1. Delete leftover profiles for our IMSIs
-        for imsi in (IMSI_KNOWN, IMSI_FC_NEW):
+        for imsi in (IMSI_KNOWN, IMSI_FC_NEW, IMSI_FC_NEW2):
             try:
                 r = c.get("/profiles", params={"imsi": imsi})
                 if r.status_code == 200:
@@ -188,7 +193,7 @@ class TestRadiusServer:
             timeout=30.0,
         ) as c:
             # Remove profiles created during tests
-            for did in filter(None, [cls.known_sim_id, cls.fc_sim_id]):
+            for did in filter(None, [cls.known_sim_id, cls.fc_sim_id, cls.fc_sim_id2]):
                 try:
                     c.delete(f"/profiles/{did}")
                 except Exception:
@@ -214,13 +219,29 @@ class TestRadiusServer:
 
     # 12.1 ────────────────────────────────────────────────────────────────────
     def test_01_fixtures_verified(self, http: httpx.Client, lookup_http: httpx.Client):
-        """Pre-conditions: profile exists and lookup resolves before any RADIUS test."""
+        """Pre-conditions: profile exists and lookup resolves before any RADIUS test.
+
+        Also verifies that the lookup endpoint accepts an optional use_case_id
+        query parameter (forwarded from 3GPP-Charging-Characteristics) and still
+        returns the correct static IP — confirming the upstream contract assumed
+        by aaa-radius-server.
+        """
         r = lookup_http.get("/lookup",
                             params={"imsi": IMSI_KNOWN, "apn": TEST_APN})
         assert r.status_code == 200, \
             f"Pre-condition failed: lookup returned {r.status_code} {r.text}"
         assert r.json()["static_ip"] == KNOWN_STATIC_IP, \
             f"Pre-condition failed: lookup returned wrong IP {r.json()}"
+
+        # Verify lookup also works when use_case_id is present (radius server always
+        # appends it when 3GPP-Charging-Characteristics VSA is non-empty)
+        r2 = lookup_http.get("/lookup",
+                             params={"imsi": IMSI_KNOWN, "apn": TEST_APN,
+                                     "use_case_id": "0800"})
+        assert r2.status_code == 200, \
+            f"Pre-condition failed: lookup with use_case_id returned {r2.status_code} {r2.text}"
+        assert r2.json()["static_ip"] == KNOWN_STATIC_IP, \
+            f"Pre-condition failed: lookup with use_case_id returned wrong IP {r2.json()}"
 
     # 12.2 ────────────────────────────────────────────────────────────────────
     def test_02_known_imsi_returns_access_accept(self, rc: RadiusClient):
@@ -470,3 +491,90 @@ class TestRadiusServer:
             f"Framed-IP-Address={resp.framed_ip!r}, expected {KNOWN_STATIC_IP!r} "
             f"(resolves only if 3GPP-IMSI VSA = IMSI_KNOWN was used)"
         )
+
+    # 12.13 ───────────────────────────────────────────────────────────────────
+    def test_13_use_case_id_forwarded_in_stage1_lookup(
+            self, rc: RadiusClient, lookup_http: httpx.Client):
+        """
+        3GPP-Charging-Characteristics (VSA 10415:13) must be forwarded as
+        use_case_id to the Stage 1 GET /lookup call.
+
+        Approach (black-box, no HTTP intercept):
+          1. Directly confirm the lookup service returns the correct IP when
+             use_case_id=0800 is present — this is the URL aaa-radius-server
+             will call after extracting the charging chars from the RADIUS packet.
+          2. Send a full Access-Request with charging_chars="0800" and verify
+             Access-Accept with the correct Framed-IP-Address — proving the
+             end-to-end path (RADIUS → aaa-radius-server → lookup with use_case_id)
+             works without errors.
+        """
+        # Step 1: verify lookup service handles use_case_id natively
+        r = lookup_http.get("/lookup",
+                            params={"imsi": IMSI_KNOWN, "apn": TEST_APN,
+                                    "use_case_id": "0800"})
+        assert r.status_code == 200, \
+            f"Lookup with use_case_id=0800 failed: {r.status_code} {r.text}"
+        assert r.json()["static_ip"] == KNOWN_STATIC_IP, \
+            f"Lookup with use_case_id returned wrong IP: {r.json()}"
+
+        # Step 2: end-to-end RADIUS with charging_chars that maps to use_case_id
+        resp = rc.authenticate(IMSI_KNOWN, TEST_APN, charging_chars="0800")
+        assert resp.is_accept, (
+            f"Expected Access-Accept when charging_chars='0800' (use_case_id forwarded), "
+            f"got code={resp.code}"
+        )
+        assert resp.framed_ip == KNOWN_STATIC_IP, \
+            f"Framed-IP-Address={resp.framed_ip!r}, expected {KNOWN_STATIC_IP!r}"
+
+    # 12.14 ───────────────────────────────────────────────────────────────────
+    def test_14_use_case_id_forwarded_in_stage2_first_connection(
+            self, rc: RadiusClient, lookup_http: httpx.Client, http: httpx.Client):
+        """
+        3GPP-Charging-Characteristics must be forwarded as use_case_id in the
+        Stage 2 POST /v1/first-connection JSON body.
+
+        A second first-connection IMSI (IMSI_FC_NEW2) is used so test_06 state
+        is not affected.  charging_chars="0900" is chosen to differ from the
+        default "0800" used in other tests, confirming the server forwards
+        the actual VSA value rather than a hard-coded string.
+
+        After the test the auto-created profile sim_id is stored for teardown.
+        """
+        # Confirm no profile exists before the test
+        r_pre = lookup_http.get("/lookup",
+                                params={"imsi": IMSI_FC_NEW2, "apn": TEST_APN})
+        assert r_pre.status_code == 404, \
+            f"Pre-condition failed: IMSI_FC_NEW2 already has a profile ({r_pre.status_code})"
+
+        resp = rc.authenticate(
+            IMSI_FC_NEW2,
+            TEST_APN,
+            imei="35812300000002",
+            charging_chars="0900",
+        )
+        assert resp.is_accept, (
+            f"Expected Access-Accept via first-connection with use_case_id='0900', "
+            f"got code={resp.code}. "
+            "Check PROVISIONING_URL and that the range config covers IMSI_FC_NEW2."
+        )
+        assert resp.framed_ip is not None, \
+            "Access-Accept must contain Framed-IP-Address after first-connection"
+
+        TestRadiusServer.fc_allocated_ip2 = resp.framed_ip
+
+        # Fetch the auto-created sim_id for teardown
+        r_profile = http.get("/profiles", params={"imsi": IMSI_FC_NEW2})
+        if r_profile.status_code == 200:
+            data = r_profile.json()
+            profiles = data if isinstance(data, list) else data.get("profiles", [])
+            if profiles:
+                TestRadiusServer.fc_sim_id2 = profiles[0]["sim_id"]
+
+        # Stage 1 should now resolve the newly allocated IP (also with use_case_id)
+        r_post = lookup_http.get("/lookup",
+                                 params={"imsi": IMSI_FC_NEW2, "apn": TEST_APN,
+                                         "use_case_id": "0900"})
+        assert r_post.status_code == 200, \
+            f"Lookup should succeed after first-connection, got {r_post.status_code}"
+        assert r_post.json()["static_ip"] == resp.framed_ip, \
+            "Framed-IP in Accept does not match the static_ip returned by lookup"

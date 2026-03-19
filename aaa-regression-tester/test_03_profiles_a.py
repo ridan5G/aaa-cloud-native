@@ -121,10 +121,12 @@ class TestProfileA:
 
     # 3.9 ─────────────────────────────────────────────────────────────────────
     def test_09_delete_profile(self, http: httpx.Client):
-        """DELETE /profiles/{sim_id} → 204; subsequent GET returns 404."""
+        """DELETE /profiles/{sim_id} → 204; subsequent GET returns 200 with status=terminated."""
         resp = http.delete(f"/profiles/{TestProfileA.sim_id}")
         assert resp.status_code == 204
 
+        # Terminated profiles are still readable — status reflects the deletion
         resp = http.get(f"/profiles/{TestProfileA.sim_id}")
-        assert resp.status_code == 404
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "terminated"
         TestProfileA.sim_id = None

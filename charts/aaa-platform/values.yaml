@@ -95,10 +95,15 @@ kube-prometheus-stack:
     #     passwordKey: admin-password
     adminPassword: ""
 
-    # ── Dashboard sidecar ─────────────────────────────────────────────
-    # Watches for ConfigMaps labelled grafana_dashboard=1 and hot-loads them.
-    # The umbrella chart creates charts/aaa-platform/templates/grafana-dashboard-cm.yaml
-    # with exactly this label so the AAA Platform dashboard is auto-provisioned.
+    # ── Sidecar ──────────────────────────────────────────────────────────
+    # Dashboard sidecar: watches ConfigMaps labelled grafana_dashboard=1 and
+    # hot-loads them.  The umbrella chart creates grafana-dashboard-cm.yaml
+    # with exactly this label so the AAA Platform dashboard auto-provisions.
+    #
+    # Datasource sidecar: defaultDatasourceEnabled=false suppresses the
+    # kube-prometheus-stack built-in "Prometheus" ConfigMap whose URL is derived
+    # from the Helm release name and is therefore always wrong for our setup.
+    # We provision all datasources ourselves via grafana.datasources below.
     sidecar:
       dashboards:
         enabled: true
@@ -110,13 +115,16 @@ kube-prometheus-stack:
         folderAnnotation: grafana_folder
         provider:
           foldersFromFilesStructure: true
+      datasources:
+        # Prevent kube-prometheus-stack from creating its own Prometheus
+        # datasource ConfigMap (it points to the wrong service hostname).
+        # Our grafana.datasources block below is the single source of truth.
+        defaultDatasourceEnabled: false
 
-    # ── Datasource ────────────────────────────────────────────────────────
+    # ── Datasources ───────────────────────────────────────────────────────
+    # Full ownership of datasource provisioning.
     # "prometheus-operated" is the headless service the Prometheus Operator
     # always creates, regardless of Helm release/chart naming conventions.
-    # This avoids the common mismatch where the auto-generated hostname
-    # (e.g. <release>-kube-prometheus-stack-prometheus) differs from the
-    # actual service name the operator registers in the cluster.
     datasources:
       datasources.yaml:
         apiVersion: 1
@@ -132,6 +140,16 @@ kube-prometheus-stack:
             jsonData:
               timeInterval: 15s
               httpMethod: POST
+          - name: Alertmanager
+            uid: alertmanager
+            type: alertmanager
+            # alertmanager-operated is created by the Prometheus Operator (analogous
+            # to prometheus-operated) whenever Alertmanager replicas > 0.
+            url: http://alertmanager-operated:9093
+            access: proxy
+            jsonData:
+              handleGrafanaManagedAlerts: false
+              implementation: prometheus
 
     persistence:
       enabled: true

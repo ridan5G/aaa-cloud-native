@@ -66,7 +66,7 @@ services:
     environment:
       RADIUS_PORT:       "${RADIUS_PORT:-1812}"
       RADIUS_SECRET:     "${RADIUS_SECRET:?RADIUS_SECRET must be set in .env}"
-      LOOKUP_URL:        "http://aaa-lookup-service:${LOOKUP_HTTP_PORT:-8081}"
+      LOOKUP_URL:        "http://aaa-lookup-service:${LOOKUP_HTTP_PORT:-8081}/v1"
       PROVISIONING_URL:  "http://subscriber-profile-api:${PROVISION_HTTP_PORT:-8080}"
       WORKER_THREADS:    "${RADIUS_WORKER_THREADS:-8}"
     ports:

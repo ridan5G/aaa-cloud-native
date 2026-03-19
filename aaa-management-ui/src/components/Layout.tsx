@@ -48,6 +48,14 @@ function LayersIcon({ c = 'w-4 h-4' }: { c?: string }) {
     </svg>
   )
 }
+function DocIcon({ c = 'w-4 h-4' }: { c?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" className={c}>
+      <rect x="3" y="1" width="10" height="14" rx="1.5" />
+      <path d="M6 5h4M6 8h4M6 11h2" strokeLinecap="round" />
+    </svg>
+  )
+}
 function JobsIcon({ c = 'w-4 h-4' }: { c?: string }) {
   return (
     <svg viewBox="0 0 16 16" fill="currentColor" className={c}>
@@ -142,8 +150,9 @@ const RANGE_CHILDREN = [
   { to: '/iccid-range-configs', label: 'ICCID Range Configs' },
 ]
 const BOTTOM_NAV = [
-  { to: '/bulk-jobs',         label: 'Bulk Jobs',     Icon: JobsIcon },
-  { to: '/sim-profile-types', label: 'Documentation', Icon: LayersIcon },
+  { to: '/bulk-jobs',         label: 'Bulk Jobs',    Icon: JobsIcon },
+  { to: '/sim-profile-types', label: 'New SIM',             Icon: LayersIcon },
+  { to: '/documentation',     label: 'Documentation',Icon: DocIcon },
 ]
 
 // ─── Layout ───────────────────────────────────────────────────────────────────

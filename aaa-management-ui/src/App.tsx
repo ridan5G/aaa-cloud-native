@@ -7,6 +7,7 @@ import RangeConfigs from './pages/RangeConfigs'
 import IccidRangeConfigs from './pages/IccidRangeConfigs'
 import BulkJobs from './pages/BulkJobs'
 import SimProfileTypes from './pages/SimProfileTypes'
+import SimProfileTypesDoc from './pages/SimProfileTypesDoc'
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="iccid-range-configs/*" element={<IccidRangeConfigs />} />
         <Route path="bulk-jobs/*"           element={<BulkJobs />} />
         <Route path="sim-profile-types"     element={<SimProfileTypes />} />
+        <Route path="documentation"         element={<SimProfileTypesDoc />} />
       </Route>
     </Routes>
   )
