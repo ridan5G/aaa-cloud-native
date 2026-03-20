@@ -508,7 +508,28 @@ comes **entirely from the range config**, not from the request body. aaa-radius-
 ```
 1. Validate imsi (15 digits) and apn (present)
 
-2. Look up imsi_range_configs:
+2. Idempotency: check if IMSI is already provisioned
+   SELECT i.sim_id::text, sp.ip_resolution
+   FROM imsi2sim i
+   JOIN sim_profiles sp ON sp.sim_id = i.sim_id
+   WHERE i.imsi = $imsi
+
+   → Found: query the table that matches the profile's current ip_resolution
+     (join ensures stale rows in the wrong table are ignored after a mode switch)
+
+     IF ip_resolution IN ('imsi', 'imsi_apn'):
+       SELECT host(static_ip) FROM imsi_apn_ips
+       WHERE imsi = $imsi AND (apn = $apn OR apn IS NULL)
+       ORDER BY apn NULLS LAST LIMIT 1
+
+     ELSE -- iccid, iccid_apn:
+       SELECT host(static_ip) FROM sim_apn_ips
+       WHERE sim_id = $sim_id AND (apn = $apn OR apn IS NULL)
+       ORDER BY apn NULLS LAST LIMIT 1
+
+     → Return 200 {sim_id, static_ip}
+
+3. Look up imsi_range_configs:
    - Standalone path (iccid_range_id IS NULL):
        SELECT irc.pool_id, irc.ip_resolution, irc.account_name, irc.iccid_range_id
        FROM imsi_range_configs irc
@@ -527,7 +548,7 @@ comes **entirely from the range config**, not from the request body. aaa-radius-
 
    → Not found: return 404
 
-3. Branch on iccid_range_id:
+4. Branch on iccid_range_id:
 
    ── NULL (single-IMSI SIM) ──────────────────────────────────────────────────
    BEGIN

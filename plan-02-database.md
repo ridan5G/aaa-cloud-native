@@ -404,6 +404,40 @@ Triggered by `subscriber-profile-api` via `POST /first-connection` when
 through to the provisioning service.  All writes go to `PRIMARY_URL`.
 `aaa-lookup-service` is read-only and never touches this transaction.
 
+### Idempotency Pre-Check (before any allocation)
+
+Before touching the range config or allocating an IP, the service checks whether
+the IMSI is already provisioned.  This is the fast path for retries and for
+subscribers whose profile was created by a sibling IMSI.
+
+```sql
+-- Single indexed read; no transaction needed.
+SELECT i.sim_id::text, sp.ip_resolution
+FROM   imsi2sim      i
+JOIN   sim_profiles  sp ON sp.sim_id = i.sim_id
+WHERE  i.imsi = $imsi;
+```
+
+If a row is returned, the correct IP table is chosen based on the profile's
+**current** `ip_resolution` — not the one it was originally created with.
+This is critical after a PATCH that switches a profile from `imsi` to `iccid`
+mode: the old `imsi_apn_ips` row is left intact (to preserve audit history),
+so naively querying `imsi_apn_ips` first would return a stale IP.
+
+```sql
+-- ip_resolution IN ('imsi', 'imsi_apn')
+SELECT host(static_ip) FROM imsi_apn_ips
+WHERE  imsi = $imsi AND (apn = $apn OR apn IS NULL)
+ORDER BY apn NULLS LAST LIMIT 1;
+
+-- ip_resolution IN ('iccid', 'iccid_apn')
+SELECT host(static_ip) FROM sim_apn_ips
+WHERE  sim_id = $sim_id AND (apn = $apn OR apn IS NULL)
+ORDER BY apn NULLS LAST LIMIT 1;
+```
+
+→ Return 200 `{sim_id, static_ip}` — no write, no allocation.
+
 ### Single-IMSI SIM (standalone `imsi_range_configs` row, `iccid_range_id IS NULL`)
 
 ```sql

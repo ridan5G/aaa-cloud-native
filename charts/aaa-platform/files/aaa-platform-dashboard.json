@@ -2779,7 +2779,7 @@
     {
       "id": 60,
       "type": "row",
-      "title": "PostgreSQL / PgBouncer  (CloudNativePG + postgres-exporter + pgbouncer-exporter)",
+      "title": "PostgreSQL  (CloudNativePG — built-in metrics exporter on port 9187)",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -2819,7 +2819,7 @@
       "id": 61,
       "type": "stat",
       "title": "DB Primary Up",
-      "description": "pg_up = 1 when postgres_exporter can connect to the primary. 0 = primary unreachable.",
+      "description": "`cnpg_collector_up` = 1 when the CNPG metrics exporter is connected to the primary. 0 = primary unreachable.",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -2942,7 +2942,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(cnpg_pg_stat_activity_count{state=\"active\",namespace=~\"$namespace\"})",
+          "expr": "sum(cnpg_backends_total{state=\"active\",namespace=~\"$namespace\"})",
           "instant": true,
           "legendFormat": "__auto",
           "refId": "A"
@@ -3080,7 +3080,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "cnpg_pg_database_size{datname=\"aaa\",namespace=~\"$namespace\"}",
+          "expr": "cnpg_pg_database_size_bytes{datname=\"aaa\",namespace=~\"$namespace\"}",
           "instant": true,
           "legendFormat": "__auto",
           "refId": "A"
@@ -3091,7 +3091,7 @@
       "id": 65,
       "type": "timeseries",
       "title": "DB Connection States (by pg_stat_activity)",
-      "description": "Active and idle connection counts per state from `pg_stat_activity` via the CloudNativePG built-in exporter. `idle in transaction` sessions hold locks; a growing count indicates long-running transactions that need investigation.",
+      "description": "Backend connection counts per state from `cnpg_backends_total` (CloudNativePG built-in exporter). `idle in transaction` sessions hold locks; a growing count indicates long-running transactions that need investigation.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -3128,7 +3128,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "cnpg_pg_stat_activity_count{state=\"active\",namespace=~\"$namespace\"}",
+          "expr": "cnpg_backends_total{state=\"active\",namespace=~\"$namespace\"}",
           "legendFormat": "active",
           "refId": "A"
         },
@@ -3137,7 +3137,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "cnpg_pg_stat_activity_count{state=\"idle\",namespace=~\"$namespace\"}",
+          "expr": "cnpg_backends_total{state=\"idle\",namespace=~\"$namespace\"}",
           "legendFormat": "idle",
           "refId": "B"
         },
@@ -3146,7 +3146,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "cnpg_pg_stat_activity_count{state=\"idle in transaction\",namespace=~\"$namespace\"}",
+          "expr": "cnpg_backends_total{state=\"idle in transaction\",namespace=~\"$namespace\"}",
           "legendFormat": "idle in transaction",
           "refId": "C"
         },
@@ -3155,7 +3155,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "cnpg_pg_stat_activity_count{state=\"idle in transaction (aborted)\",namespace=~\"$namespace\"}",
+          "expr": "cnpg_backends_total{state=\"idle in transaction (aborted)\",namespace=~\"$namespace\"}",
           "legendFormat": "idle in transaction (aborted)",
           "refId": "D"
         }
@@ -3234,7 +3234,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "bytes",
+          "unit": "s",
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 10
