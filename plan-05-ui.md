@@ -293,6 +293,15 @@ Login
               └── SIM Profile Types reference
 ```
 
+> **Implementation note:** The codebase contains two routes beyond the planned screen map:
+> - `/sim-profile-types` → `SimProfileTypes.tsx`
+> - `/documentation` → `SimProfileTypesDoc.tsx`
+>
+> These pages document SIM profile type variants. Per the project decision that **no additional
+> SIM profile types are needed**, these pages are informational only and are not part of the
+> operator workflow. They are kept in the codebase as reference material but are not linked
+> from the main navigation.
+
 ---
 
 ## Screen Specifications
@@ -933,14 +942,25 @@ server {
 | `nginx_connections_waiting` | Gauge | — | Keep-alive connections idle |
 
 In addition, application-level metrics are captured via the browser using a lightweight
-**Real User Monitoring (RUM)** beacon sent to the provisioning API on page load and navigation:
+**Real User Monitoring (RUM)** beacon flushed periodically to a Prometheus Pushgateway.
 
-| Metric (pushed via POST /v1/metrics — internal) | Description |
-|---|---|
-| `ui_page_load_duration_ms` | Time to interactive for each UI route |
-| `ui_api_call_duration_ms` | Frontend-observed API call latency by endpoint |
-| `ui_bulk_upload_duration_ms` | End-to-end bulk import time from user perspective |
-| `ui_error_total` | Client-side JS errors by type |
+**Implementation** (`src/apiClient.ts`):
+- Every axios request is stamped with `performance.now()` via a request interceptor.
+- On response (success or error), duration is recorded into an in-memory bucket keyed by
+  a path template (dynamic segments like UUIDs are collapsed to `:id`).
+- Every 30 s (and on `beforeunload`) the buckets are flushed via `POST` to
+  `APP_CONFIG.pushgatewayUrl/metrics/job/aaa-management-ui` in Prometheus text format.
+- If `APP_CONFIG.pushgatewayUrl` is not set, flushing is skipped (safe for dev/staging).
+
+| Metric (Prometheus text format, pushed to Pushgateway) | Type | Description |
+|---|---|---|
+| `ui_api_call_requests_total{endpoint}` | Counter | Total API calls by endpoint template |
+| `ui_api_call_duration_ms_total{endpoint}` | Counter | Total milliseconds spent per endpoint |
+| `ui_api_call_errors_total{endpoint}` | Counter | API call errors (non-2xx or network) per endpoint |
+
+> **Note:** `ui_page_load_duration_ms`, `ui_bulk_upload_duration_ms`, and `ui_error_total` are
+> not yet implemented. Only API call timing is tracked in `apiClient.ts`. Page-level metrics
+> can be added per-page using `performance.now()` measurements posted to the same Pushgateway.
 
 **ServiceMonitor:**
 ```yaml

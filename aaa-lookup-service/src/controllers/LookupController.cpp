@@ -10,7 +10,6 @@
 #include <spdlog/spdlog.h>
 
 #include "../Config.h"
-#include "../HashUtils.h"
 #include "../Metrics.h"
 #include "../Resolver.h"
 
@@ -219,9 +218,8 @@ void LookupController::lookup(
                 break;
             }
 
-            // Structured log line (IMSI hashed, never in plain text).
-            spdlog::info(R"({{"imsi_hash":"{}","apn":"{}","result":"{}","ip_resolution":"{}","latency_ms":{:.2f}}})",
-                HashUtils::imsiPartialHash(imsi),
+            spdlog::info(R"({{"imsi":"{}","apn":"{}","result":"{}","ip_resolution":"{}","latency_ms":{:.2f}}})",
+                imsi,
                 apn,
                 resultLabel,
                 rows.empty() ? "n/a" : rows.front().ip_resolution,
@@ -243,8 +241,8 @@ void LookupController::lookup(
             const double latency = std::chrono::duration<double>(
                 std::chrono::steady_clock::now() - t0).count();
 
-            spdlog::error(R"({{"imsi_hash":"{}","result":"db_error","error":"{}","latency_ms":{:.2f}}})",
-                HashUtils::imsiPartialHash(imsi),
+            spdlog::error(R"({{"imsi":"{}","result":"db_error","error":"{}","latency_ms":{:.2f}}})",
+                imsi,
                 ex.base().what(),
                 latency * 1000.0);
 

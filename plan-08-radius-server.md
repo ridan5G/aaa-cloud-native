@@ -344,14 +344,14 @@ externally managed Secret (Vault, SOPS, etc.).
 Every request logs at `info` level:
 
 ```
-[aaa-radius] imsi_hash=a3f7b2c1 apn=internet.operator.com result=accept framed_ip=100.65.120.5 stage=1 latency_ms=3.2
-[aaa-radius] imsi_hash=d9e4a110 apn=internet.operator.com result=reject reason=suspended stage=1 latency_ms=2.8
-[aaa-radius] imsi_hash=cc21f043 apn=internet.operator.com result=accept framed_ip=100.65.120.9 stage=2 latency_ms=52.1
-[aaa-radius] imsi_hash=ee99b327 apn=internet.operator.com result=reject reason=no_range_config stage=2 latency_ms=48.3
+[aaa-radius] IMSI=123456789012345 APN=internet.operator.com result=accept framed_ip=100.65.120.5 stage=1 latency_ms=3.2
+[aaa-radius] IMSI=234567890123456 APN=internet.operator.com result=reject reason=suspended stage=1 latency_ms=2.8
+[aaa-radius] IMSI=345678901234567 APN=internet.operator.com result=accept framed_ip=100.65.120.9 stage=2 latency_ms=52.1
+[aaa-radius] IMSI=456789012345678 APN=internet.operator.com result=reject reason=no_range_config stage=2 latency_ms=48.3
 ```
 
-**Raw IMSI is never logged.** Only the first 8 hex characters of `SHA-256(imsi)`
-appear in logs for correlation without exposing subscriber identity.
+**IMSI is logged as the full 15-digit number** for operator readability and ease of debugging.
+All log lines in all services (lookup, API, RADIUS) use the plain IMSI.
 
 ### Key log events
 
@@ -364,18 +364,32 @@ appear in logs for correlation without exposing subscriber identity.
 | `curl_global_init` failure | `critical` | Startup failure |
 | HTTP errors (non-200/403/404) from upstreams | `warn` | Unexpected upstream response |
 
-### Metrics (future work)
+### Metrics
 
-The server does not yet emit Prometheus metrics. Planned counters:
+All metrics are exposed at `GET /metrics` (Prometheus text format) on the configured metrics port.
 
-| Metric | Labels |
-|---|---|
-| `radius_requests_total` | `result` (accept/reject), `stage` (1/2) |
-| `radius_request_duration_ms` | histogram |
-| `radius_upstream_errors_total` | `upstream` (lookup/provisioning), `status_code` |
+**RADIUS layer:**
 
-Until metrics are implemented, parse structured logs in the SIEM or use an
-nginx/Envoy sidecar to collect UDP packet counts.
+| Metric | Labels | Description |
+|---|---|---|
+| `radius_access_requests_total` | — | Valid Access-Request packets received |
+| `radius_packets_dropped_total` | — | Malformed / non-AccessRequest packets |
+| `radius_responses_total` | `result` (accept\|reject) | RADIUS responses sent |
+| `radius_requests_total` | `result` (accept\|reject), `stage` (1\|2) | Completed requests broken down by outcome and stage — stage 1 = lookup hit, stage 2 = first-connection used |
+| `radius_request_duration_ms` | — (histogram) | End-to-end RADIUS request latency; buckets: 1 5 10 25 50 100 250 500 1000 ms |
+| `radius_upstream_errors_total` | `upstream` (lookup\|first_connection), `status_code` | Unexpected upstream failures (curl errors, non-business HTTP status codes) |
+
+**Upstream call counters:**
+
+| Metric | Labels | Description |
+|---|---|---|
+| `lookup_requests_total` | — | HTTP GET requests sent to aaa-lookup-service |
+| `lookup_responses_total` | `status` (200\|403\|404\|error) | Lookup service responses |
+| `first_connection_requests_total` | — | HTTP POST requests sent to subscriber-profile-api |
+| `first_connection_responses_total` | `status` (200\|404\|503\|error) | First-connection responses |
+
+The Grafana dashboard (`charts/aaa-platform/files/aaa-platform-dashboard.json`) has panels
+for all metrics listed above.
 
 ---
 

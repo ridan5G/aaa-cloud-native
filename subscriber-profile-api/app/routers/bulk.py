@@ -201,12 +201,26 @@ async def _upsert_profile(conn, profile: dict):
 def _parse_csv(text: str) -> list[dict]:
     """Parse flat CSV format into profile dicts.
 
-    Expected columns: iccid, account_name, ip_resolution, imsi, apn, static_ip, pool_id
-    One row = one profile with one IMSI. IP is placed in iccid_ips or apn_ips based
-    on ip_resolution.
+    Expected columns: iccid, account_name, status, ip_resolution, imsi, apn, static_ip, pool_id
+
+    One IMSI per row. Rows that share the same non-empty ICCID are merged into a
+    single profile — each row adds one IMSI (and its IP) to that card.
+    Rows without an ICCID are treated as individual profiles.
+
+    Example — a dual-IMSI card:
+        iccid,            account_name, status, ip_resolution, imsi,            apn,       static_ip,   pool_id
+        8935501234567890, Melita,       active, imsi_apn,      123456789012345, internet,  10.0.0.1,    <uuid>
+        8935501234567890, Melita,       active, imsi_apn,      123456789012346, internet,  10.0.0.2,    <uuid>
+    → produces one profile with two IMSIs.
     """
     reader = csv.DictReader(io.StringIO(text))
-    profiles = []
+
+    # Ordered dict keyed by ICCID (None-keyed rows are never merged).
+    # Value is (profile_dict, sequential_index) — index preserves insertion order
+    # for None-ICCID rows which each need a unique key.
+    seen: dict = {}        # iccid → profile dict
+    ordered: list = []     # profiles in insertion order
+
     for row in reader:
         iccid = row.get("iccid") or None
         ip_resolution = row.get("ip_resolution", "imsi")
@@ -215,27 +229,42 @@ def _parse_csv(text: str) -> list[dict]:
         static_ip = row.get("static_ip") or None
         pool_id = row.get("pool_id") or None
 
-        profile: dict = {
-            "iccid": iccid,
-            "account_name": row.get("account_name") or None,
-            "status": row.get("status", "active"),
-            "ip_resolution": ip_resolution,
-            "imsis": [],
-            "iccid_ips": [],
-        }
+        # Determine whether to merge with an existing profile.
+        key = iccid if iccid else id(row)  # None-ICCID rows never merge
+
+        if key not in seen:
+            profile: dict = {
+                "iccid": iccid,
+                "account_name": row.get("account_name") or None,
+                "status": row.get("status", "active"),
+                "ip_resolution": ip_resolution,
+                "imsis": [],
+                "iccid_ips": [],
+            }
+            seen[key] = profile
+            ordered.append(profile)
+        else:
+            profile = seen[key]
 
         if imsi:
             if ip_resolution in ("iccid", "iccid_apn"):
-                # IP stored at card level; IMSI has no apn_ips
+                # IP stored at card level; IMSI has no apn_ips.
+                # Avoid duplicate iccid_ips when the same APN appears multiple times.
                 profile["imsis"].append({"imsi": imsi, "apn_ips": []})
                 if static_ip:
-                    profile["iccid_ips"].append({
-                        "apn": apn if ip_resolution == "iccid_apn" else None,
-                        "static_ip": static_ip,
-                        "pool_id": pool_id,
-                    })
+                    apn_val = apn if ip_resolution == "iccid_apn" else None
+                    already = any(
+                        e.get("apn") == apn_val and e.get("static_ip") == static_ip
+                        for e in profile["iccid_ips"]
+                    )
+                    if not already:
+                        profile["iccid_ips"].append({
+                            "apn": apn_val,
+                            "static_ip": static_ip,
+                            "pool_id": pool_id,
+                        })
             else:
-                # ip_resolution in (imsi, imsi_apn, ...): IP in apn_ips
+                # ip_resolution in (imsi, imsi_apn): IP stored per IMSI.
                 apn_ips = []
                 if static_ip:
                     apn_ips.append({
@@ -245,8 +274,7 @@ def _parse_csv(text: str) -> list[dict]:
                     })
                 profile["imsis"].append({"imsi": imsi, "apn_ips": apn_ips})
 
-        profiles.append(profile)
-    return profiles
+    return ordered
 
 
 @router.post("/profiles/bulk", status_code=202, dependencies=[Depends(require_auth)])

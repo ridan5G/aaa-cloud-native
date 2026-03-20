@@ -1,0 +1,313 @@
+{{/*
+  prometheus-rules.yaml
+  ─────────────────────────────────────────────────────────────────────────────
+  PrometheusRule CRD — AAA Platform alerting rules.
+
+  Only created when kube-prometheus-stack is enabled. The Prometheus Operator
+  watches for PrometheusRule resources with the matching ruleSelector labels
+  (set by kube-prometheus-stack defaults: release=<Release.Name>).
+
+  Alert severity levels:
+    critical — page immediately; service is degraded or data loss is occurring
+    warning  — investigate soon; trend is unfavourable
+*/}}
+{{- if (index .Values "kube-prometheus-stack" "enabled") }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ .Release.Name }}-aaa-alerts
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: aaa-platform
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    # Must match kube-prometheus-stack Prometheus ruleSelector
+    release: {{ .Release.Name }}
+spec:
+  groups:
+
+    # ── IP Pool Exhaustion ───────────────────────────────────────────────────
+    - name: aaa.pool
+      rules:
+        - alert: PoolExhausted
+          expr: sum(rate(pool_exhausted_total[5m])) > 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "IP pool exhausted"
+            description: >
+              pool_exhausted_total is increasing — at least one IP pool has
+              run out of addresses. New SIM connections will be rejected with
+              503 until the pool is expanded. Check the Subscriber Profile API
+              logs for pool_id details.
+
+    # ── First-Connection Allocation ──────────────────────────────────────────
+    - name: aaa.first_connection
+      rules:
+        - alert: FirstConnectionNotFoundSpike
+          expr: sum(rate(first_connection_total{result="not_found"}[5m])) > 0.1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High first-connection not_found rate"
+            description: >
+              More than 0.1 first-connection/s are returning not_found — IMSIs
+              are connecting but no matching range config exists. This usually
+              means a range config is missing or expired. Check
+              subscriber-profile-api logs (imsi field) to identify the affected
+              IMSI range.
+
+        - alert: BulkJobHighFailureRate
+          expr: >
+            sum(rate(bulk_job_profiles_total{outcome="failed"}[10m]))
+            /
+            sum(rate(bulk_job_profiles_total[10m])) > 0.05
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Bulk job failure rate > 5%"
+            description: >
+              More than 5% of profiles in bulk jobs are failing. Check
+              GET /v1/jobs/{id} for per-row error details.
+
+    # ── AAA Lookup Service ───────────────────────────────────────────────────
+    - name: aaa.lookup
+      rules:
+        - alert: LookupDbErrors
+          expr: sum(rate(aaa_lookup_requests_total{result="db_error"}[2m])) > 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "aaa-lookup-service database errors"
+            description: >
+              aaa-lookup-service is returning db_error — the read replica is
+              unreachable or timing out. RADIUS authentications will fail.
+              Check PostgreSQL replica status and aaa-lookup-service logs.
+
+        - alert: LookupLatencyHigh
+          expr: >
+            histogram_quantile(0.99,
+              sum(rate(aaa_lookup_duration_seconds_bucket[5m])) by (le)
+            ) * 1000 > 15
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Lookup p99 latency > 15 ms (SLA breach)"
+            description: >
+              The aaa-lookup-service p99 latency has exceeded the 15 ms SLA
+              for 5 minutes. Current value: {{ "{{ $value | humanize }}" }} ms.
+              Check DB replica lag and connection pool saturation.
+
+        - alert: LookupSuspendedRateHigh
+          expr: sum(rate(aaa_lookup_requests_total{result="suspended"}[5m])) > 0.05
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High rate of suspended-subscriber lookups"
+            description: >
+              More than 0.05 suspended-subscriber lookups/s for 5 minutes.
+              This means RADIUS is frequently encountering suspended IMSIs,
+              which may indicate a mass-suspension batch job, corrupted
+              subscriber state, or a range config pointing to a suspended pool.
+              Check subscriber-profile-api for recent suspension operations.
+
+        - alert: LookupServiceNoTraffic
+          expr: >
+            absent(aaa_lookup_requests_total) or
+            sum(rate(aaa_lookup_requests_total[5m])) == 0
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "aaa-lookup-service is receiving no traffic"
+            description: >
+              No lookup requests have been recorded for 10 minutes. Either
+              the aaa-lookup-service pod is down, RADIUS cannot reach it, or
+              there is truly no RADIUS traffic (unlikely in production).
+              Check pod status and RADIUS_LOOKUP_URL configuration.
+
+    # ── RADIUS Server ────────────────────────────────────────────────────────
+    - name: aaa.radius
+      rules:
+        - alert: RadiusUpstreamErrors
+          expr: sum(rate(radius_upstream_errors_total[2m])) > 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "RADIUS server upstream errors"
+            description: >
+              aaa-radius-server is receiving unexpected HTTP errors or curl
+              failures from its upstreams ({{ "{{ $labels.upstream }}" }},
+              status {{ "{{ $labels.status_code }}" }}). RADIUS authentications
+              may be failing. Check aaa-lookup-service and subscriber-profile-api
+              availability.
+
+        - alert: RadiusLatencyHigh
+          expr: >
+            histogram_quantile(0.99,
+              sum(rate(radius_request_duration_ms_bucket[5m])) by (le)
+            ) > 500
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "RADIUS p99 latency > 500 ms"
+            description: >
+              RADIUS end-to-end p99 latency has exceeded 500 ms for 5 minutes.
+              Current value: {{ "{{ $value | humanize }}" }} ms. Check upstream
+              service latency and thread pool saturation (RADIUS_WORKERS env var).
+
+        - alert: RadiusHighRejectRate
+          expr: >
+            sum(rate(radius_requests_total{result="reject"}[5m]))
+            /
+            sum(rate(radius_requests_total[5m])) > 0.10
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "RADIUS reject rate > 10%"
+            description: >
+              More than 10% of RADIUS requests are being rejected. This may
+              indicate suspended subscribers, range config gaps, or pool
+              exhaustion. Current reject rate:
+              {{ "{{ $value | humanizePercentage }}" }}.
+
+        - alert: RadiusStage2RateHigh
+          expr: >
+            sum(rate(radius_requests_total{stage="2"}[10m]))
+            /
+            sum(rate(radius_requests_total[10m])) > 0.25
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "RADIUS Stage 2 (first-connection) rate > 25%"
+            description: >
+              More than 25% of RADIUS requests are falling through to
+              first-connection allocation (Stage 2). At steady state this
+              should be near zero. A sustained high rate may indicate a
+              misconfigured range or a large batch of new SIMs connecting
+              simultaneously.
+
+    # ── Management UI ────────────────────────────────────────────────────────
+    - name: aaa.ui
+      rules:
+        - alert: UIApiErrorRateHigh
+          expr: >
+            sum(rate(ui_api_call_errors_total[5m]))
+            /
+            sum(rate(ui_api_call_requests_total[5m])) > 0.05
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Management UI API error rate > 5%"
+            description: >
+              The management UI is observing more than 5% API call errors from
+              the browser. This may indicate backend failures or network issues
+              affecting operator workflows.
+
+    # ── PostgreSQL / PgBouncer ────────────────────────────────────────────────
+    - name: aaa.postgres
+      rules:
+        - alert: PostgresPrimaryDown
+          expr: pg_up == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "PostgreSQL primary is unreachable"
+            description: >
+              postgres_exporter reports pg_up = 0 — the primary database is
+              unreachable. All RADIUS authentications that require a DB lookup
+              will fail immediately. Check the CloudNativePG cluster status
+              (kubectl get cluster -n {{ .Release.Namespace }}) and pod logs.
+
+        - alert: PostgresReplicaLagHigh
+          expr: max(pg_stat_replication_pg_wal_lsn_diff) > 52428800
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "PostgreSQL replica WAL lag > 50 MB"
+            description: >
+              The standby is more than 50 MB behind the primary WAL position.
+              aaa-lookup-service reads from the replica; a large lag means it
+              is serving stale data and recently-provisioned SIMs may be
+              rejected. Current lag: {{ "{{ $value | humanize1024 }}" }} bytes.
+              Check network bandwidth and primary write throughput.
+
+        - alert: PgBouncerPoolSaturated
+          expr: pgbouncer_pools_cl_waiting{database="aaa"} > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PgBouncer client queue non-empty (pool saturated)"
+            description: >
+              Clients are waiting for a free PgBouncer server connection for
+              the aaa database. This indicates the pool_size is too small
+              relative to concurrent query load. Current waiting:
+              {{ "{{ $value }}" }} clients. Increase pool_size in the
+              PgBouncer values or reduce subscriber-profile-api connection
+              concurrency.
+
+        - alert: PostgresConnectionsHigh
+          expr: sum(pg_stat_activity_count{state="active"}) > 100
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High number of active PostgreSQL connections"
+            description: >
+              More than 100 active (query-running) connections on the primary.
+              This may indicate slow queries accumulating or a connection leak.
+              Current value: {{ "{{ $value | humanize }}" }}. Check
+              pg_stat_activity for long-running queries and review
+              BULK_WORKER_THREADS / connection pool settings.
+
+        - alert: PostgresDatabaseSizeGrowthHigh
+          expr: >
+            (
+              pg_database_size_bytes{datname="aaa"}
+              - pg_database_size_bytes{datname="aaa"} offset 24h
+            )
+            / pg_database_size_bytes{datname="aaa"} offset 24h * 100 > 20
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PostgreSQL database growing > 20% in 24 h"
+            description: >
+              The aaa database has grown more than 20% in the last 24 hours.
+              This may indicate bulk-job data not being cleaned up, missing
+              vacuuming, or unexpected row bloat. Current size:
+              {{ "{{ $value | humanize1024 }}" }} bytes.
+              Review retention policies and run VACUUM ANALYZE if needed.
+
+        - alert: PostgresCacheHitRatioLow
+          expr: >
+            rate(pg_stat_database_blks_hit_total{datname="aaa"}[10m])
+            / (
+              rate(pg_stat_database_blks_hit_total{datname="aaa"}[10m])
+              + rate(pg_stat_database_blks_read_total{datname="aaa"}[10m])
+            ) * 100 < 95
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PostgreSQL block cache hit ratio < 95%"
+            description: >
+              Less than 95% of block reads are served from shared_buffers.
+              Excessive disk I/O will increase lookup latency. Current ratio:
+              {{ "{{ $value | humanize }}" }}%. Consider increasing
+              shared_buffers or adding more memory to the database pod.
+{{- end }}

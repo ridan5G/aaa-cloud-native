@@ -190,6 +190,7 @@ These rules are applied before any DB write. Validation errors return 400.
 | `imsi_slot` must be unique within a `iccid_range_id` group (enforced by DB UNIQUE constraint too) | validation_failed, field=imsi_slot |
 | `POST /first-connection`: `imsi` must be exactly 15 digits | 400 |
 | `POST /first-connection`: `apn` must be present | 400 |
+| `POST /first-connection`: `use_case_id` is optional; included in logs when present | — |
 
 ---
 
@@ -471,14 +472,26 @@ Required CSV columns:
 iccid, account_name, status, ip_resolution, imsi, apn, static_ip, pool_id
 ```
 
-One row per IMSI. Rules:
-- Multi-APN profiles (`imsi_apn` / `iccid_apn`) require multiple rows sharing the same `iccid` /
-  `account_name` — one row per APN.
-- Multi-IMSI SIM cards in `iccid` / `iccid_apn` mode: one row per IMSI sharing the same `iccid`.
+**One IMSI per row. Rows sharing the same non-empty `iccid` are merged into a single profile.**
+Each row contributes one IMSI (and its IP entry) to that card. This is the canonical format for
+all import scenarios — multi-IMSI cards are represented as consecutive rows with the same ICCID.
+
+Rules:
+- Rows with the same `iccid` are merged: the first row sets `account_name`, `status`,
+  `ip_resolution`; subsequent rows add their IMSI to the same profile.
+- `imsi_apn` / `iccid_apn` multi-APN profiles: one row per IMSI per APN, all sharing the same `iccid`.
 - The `apn` column is used only for `imsi_apn` / `iccid_apn` modes; leave blank for `imsi` / `iccid`.
 - `static_ip` and `pool_id` may be blank for auto-allocated SIMs (IP assigned on first
   RADIUS connect via range config).
-- For profiles with more than one IMSI and multiple APNs per IMSI, use the JSON bulk endpoint.
+- Rows without an `iccid` are never merged — each becomes its own profile.
+
+Example — dual-IMSI card (`iccid_apn` mode):
+```
+iccid,             account_name, status, ip_resolution, imsi,            apn,      static_ip, pool_id
+8935501234567890,  Melita,       active, iccid_apn,     123456789012345, internet, 10.0.0.1,  <uuid>
+8935501234567890,  Melita,       active, iccid_apn,     123456789012346, internet, 10.0.0.2,  <uuid>
+```
+→ produces **one** profile with two IMSIs.
 
 ---
 
@@ -490,7 +503,7 @@ described in the DB plan.
 
 The `ip_resolution` that governs how the profile is created and where the IP is stored
 comes **entirely from the range config**, not from the request body. aaa-radius-server passes
-only `imsi`, `apn`, and `imei`.
+`imsi`, `apn`, `imei`, and optionally `use_case_id` (sourced from 3GPP-Charging-Characteristics VSA).
 
 ```
 1. Validate imsi (15 digits) and apn (present)
@@ -612,14 +625,18 @@ First-connection log:
 ```json
 {
   "ts": "...", "path": "/first-connection",
-  "imsi_hash": "sha256(imsi)[0:8]",
+  "imsi": "123456789012345",
   "result": "allocated|reused|not_found|pool_exhausted",
   "multi_imsi": true,
   "siblings_provisioned": 2,
   "pool_id": "pool-uuid-abc",
+  "apns_provisioned": 2,
+  "use_case_id": "pgw1",
   "latency_ms": 18.3
 }
 ```
+Note: `use_case_id` is omitted from the log when not provided by the caller. IMSI is logged as
+the full 15-digit number for operator readability.
 
 Metrics (Prometheus):
 - `api_request_duration_ms` histogram by method + path

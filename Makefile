@@ -30,6 +30,7 @@ RADIUS_SECRET ?= testing123
 
 SCRIPT      ?= load.js   # override: make load-test-k8s SCRIPT=stress.js
 PCAP        ?= false     # set to true to attach a tcpdump sidecar: make test PCAP=true
+radiusPCAP  ?= false     # set to true to attach a tcpdump sidecar to radius-server: make deploy radiusPCAP=true
 
 .PHONY: help \
         cluster-up cluster-down cluster-status cnpg-install nginx-install dep-update prom-crds \
@@ -37,7 +38,7 @@ PCAP        ?= false     # set to true to attach a tcpdump sidecar: make test PC
         build-all build-api build-lookup build-radius-server build-tester push-all build-push build-ui \
         hosts bootstrap setup helm-unlock \
         deploy deploy-dry-run deploy-migration db-init db-flush-stale \
-        test test-secret radius-secret pcap-get \
+        test test-secret radius-secret pcap-get pcap-get-radius \
         port-forward-lookup port-forward-api port-forward-db port-forward-ui \
         port-forward-grafana port-forward-prometheus port-forward-pgbouncer \
         grafana-dashboard-reload grafana-open \
@@ -187,10 +188,11 @@ build-ui:                       ## Build just the aaa-management-ui image (dev, 
 	docker build -t aaa/aaa-management-ui:dev ./aaa-management-ui/
 
 # ── Deploy ────────────────────────────────────────────────────
-deploy: radius-secret test-secret ## Deploy/upgrade umbrella chart (creates required secrets first, then applies chart)
+deploy: radius-secret test-secret ## Deploy/upgrade umbrella chart (creates required secrets first, then applies chart); radiusPCAP=true adds tcpdump sidecar to radius-server
 	helm upgrade --install $(RELEASE) $(CHART_DIR) \
 	  --namespace $(NAMESPACE) --create-namespace \
 	  -f $(CHART_DIR)/values-dev.yaml \
+	  --set "aaa-radius-server.pcap.enabled=$(radiusPCAP)" \
 	  --timeout 10m
 
 helm-unlock:                    ## Clear a stuck Helm lock (run if deploy fails with 'another operation in progress')
@@ -277,6 +279,9 @@ test:                           ## Run regression suite (append PCAP=true to cap
 
 pcap-get:                       ## Copy test.pcap from the PCAP=true PVC to ./test.pcap (works after pod exits)
 	bash scripts/pcap-get.sh $(NAMESPACE) $(RELEASE)-aaa-regression-tester-pcap ./test.pcap
+
+pcap-get-radius:                ## Copy radius.pcap from the radiusPCAP=true PVC to ./radius.pcap (live or after pod exits)
+	bash scripts/pcap-get.sh $(NAMESPACE) $(RELEASE)-aaa-radius-server-pcap ./radius.pcap
 
 # ── Port-forwarding ───────────────────────────────────────────
 port-forward-lookup:            ## Forward aaa-lookup-service to localhost:8081

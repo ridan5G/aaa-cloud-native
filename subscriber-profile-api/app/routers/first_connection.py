@@ -51,6 +51,7 @@ class FirstConnectionRequest(BaseModel):
     imsi: str
     apn: str
     imei: str = ""
+    use_case_id: Optional[str] = None
 
 
 async def _allocate_ip(conn, pool_id: str) -> Optional[str]:
@@ -131,8 +132,9 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
             )
         first_connection_total.labels(result="reused").inc()
         logger.info(
-            '{"path":"/first-connection","imsi_hash":"%s","result":"reused","idempotent":true}',
-            body.imsi[:4] + "***",
+            '{"path":"/first-connection","imsi":"%s","result":"reused","idempotent":true,"use_case_id":"%s"}',
+            body.imsi,
+            body.use_case_id or "",
         )
         return JSONResponse(
             status_code=200,
@@ -160,8 +162,9 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
     if not range_row:
         first_connection_total.labels(result="not_found").inc()
         logger.info(
-            '{"path":"/first-connection","imsi_hash":"%s","result":"not_found"}',
-            body.imsi[:4] + "***",
+            '{"path":"/first-connection","imsi":"%s","result":"not_found","use_case_id":"%s"}',
+            body.imsi,
+            body.use_case_id or "",
         )
         raise HTTPException(status_code=404, detail={"error": "not_found"})
 
@@ -217,10 +220,11 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
 
         first_connection_total.labels(result="allocated").inc()
         logger.info(
-            '{"path":"/first-connection","imsi_hash":"%s","result":"allocated","multi_imsi":false,"pool_id":"%s","apns_provisioned":%d}',
-            body.imsi[:4] + "***",
+            '{"path":"/first-connection","imsi":"%s","result":"allocated","multi_imsi":false,"pool_id":"%s","apns_provisioned":%d,"use_case_id":"%s"}',
+            body.imsi,
             pool_id,
             len(apn_pools),
+            body.use_case_id or "",
         )
         return JSONResponse(
             status_code=201,
@@ -284,9 +288,10 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
 
             first_connection_total.labels(result="reused").inc()
             logger.info(
-                '{"path":"/first-connection","imsi_hash":"%s","result":"reused","multi_imsi":true,"pool_id":"%s"}',
-                body.imsi[:4] + "***",
+                '{"path":"/first-connection","imsi":"%s","result":"reused","multi_imsi":true,"pool_id":"%s","use_case_id":"%s"}',
+                body.imsi,
                 pool_id,
+                body.use_case_id or "",
             )
             return JSONResponse(
                 status_code=200,
@@ -382,11 +387,12 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
 
     first_connection_total.labels(result="allocated").inc()
     logger.info(
-        '{"path":"/first-connection","imsi_hash":"%s","result":"allocated","multi_imsi":true,"siblings_provisioned":%d,"pool_id":"%s","apns_provisioned":%d}',
-        body.imsi[:4] + "***",
+        '{"path":"/first-connection","imsi":"%s","result":"allocated","multi_imsi":true,"siblings_provisioned":%d,"pool_id":"%s","apns_provisioned":%d,"use_case_id":"%s"}',
+        body.imsi,
         siblings_provisioned,
         pool_id,
         len(apn_pools),
+        body.use_case_id or "",
     )
     return JSONResponse(
         status_code=201,

@@ -4,33 +4,33 @@
 #include <string>
 #include <prometheus/counter.h>
 #include <prometheus/exposer.h>
-
-// Forward declarations — avoid pulling prometheus headers into every TU
-namespace prometheus {
-class Registry;
-class Exposer;
-class Counter;
-}  // namespace prometheus
+#include <prometheus/family.h>
+#include <prometheus/histogram.h>
+#include <prometheus/registry.h>
 
 // ---------------------------------------------------------------------------
-// Metrics — process-wide Prometheus counters, exposed via HTTP /metrics
+// Metrics — process-wide Prometheus counters + histogram, exposed via HTTP /metrics
 //
 // Metrics tracked:
 //   RADIUS layer:
-//     radius_access_requests_total          — valid Access-Request packets processed
-//     radius_packets_dropped_total          — malformed / non-AccessRequest packets
-//     radius_responses_total{result}        — accept | reject
+//     radius_access_requests_total              — valid Access-Request packets processed
+//     radius_packets_dropped_total              — malformed / non-AccessRequest packets
+//     radius_responses_total{result}            — accept | reject
+//     radius_requests_total{result,stage}       — accept|reject × stage1|stage2
+//     radius_request_duration_ms (histogram)    — end-to-end RADIUS request latency
+//     radius_upstream_errors_total{upstream,status_code}
+//                                               — unexpected errors from lookup/first-connection
 //
 //   Lookup layer (Stage 1 — GET /lookup):
-//     lookup_requests_total                 — HTTP requests sent
-//     lookup_responses_total{status}        — 200 | 403 | 404 | error
+//     lookup_requests_total                     — HTTP requests sent
+//     lookup_responses_total{status}            — 200 | 403 | 404 | error
 //
 //   First-connection layer (Stage 2 — POST /v1/first-connection):
-//     first_connection_requests_total       — HTTP requests sent
-//     first_connection_responses_total{status} — 200 | 404 | 503 | error
+//     first_connection_requests_total           — HTTP requests sent
+//     first_connection_responses_total{status}  — 200 | 404 | 503 | error
 //
-// Thread-safety: prometheus-cpp Counter::Increment() is lock-free/atomic.
-// Call init() once from main before spawning worker threads.
+// Thread-safety: prometheus-cpp Counter::Increment() and Histogram::Observe()
+// are lock-free/atomic. Call init() once from main before spawning workers.
 // ---------------------------------------------------------------------------
 class Metrics {
 public:
@@ -48,6 +48,15 @@ public:
     void incPacketsDropped()  { if (packetsDropped_)  packetsDropped_->Increment(); }
     void incResponseAccepts() { if (responseAccepts_) responseAccepts_->Increment(); }
     void incResponseRejects() { if (responseRejects_) responseRejects_->Increment(); }
+
+    // result: "accept" | "reject"   stage: "1" (lookup hit) | "2" (first-connection used)
+    void incRadiusRequest(const std::string& result, const std::string& stage);
+
+    // Record end-to-end RADIUS request duration in milliseconds.
+    void recordRequestDuration(double ms) { if (durationHist_) durationHist_->Observe(ms); }
+
+    // upstream: "lookup" | "first_connection"   statusCode: HTTP status as string or "curl_error"
+    void incUpstreamError(const std::string& upstream, const std::string& statusCode);
 
     // ── Lookup layer ──────────────────────────────────────────────────────────
     void incLookupRequests() { if (lookupRequests_) lookupRequests_->Increment(); }
@@ -70,6 +79,18 @@ private:
     prometheus::Counter* packetsDropped_{};
     prometheus::Counter* responseAccepts_{};
     prometheus::Counter* responseRejects_{};
+
+    // radius_requests_total{result, stage} — pre-created label combinations
+    prometheus::Counter* radiusReqAcceptStage1_{};
+    prometheus::Counter* radiusReqAcceptStage2_{};
+    prometheus::Counter* radiusReqRejectStage1_{};
+    prometheus::Counter* radiusReqRejectStage2_{};
+
+    // radius_request_duration_ms histogram
+    prometheus::Histogram* durationHist_{};
+
+    // radius_upstream_errors_total — Family kept for dynamic label creation
+    prometheus::Family<prometheus::Counter>* upstreamErrorsFamily_{};
 
     // Lookup
     prometheus::Counter* lookupRequests_{};

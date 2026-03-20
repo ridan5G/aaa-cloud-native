@@ -1,0 +1,19 @@
+{{- if .Values.pcap.enabled }}
+# PVC that holds the tcpdump capture file for the lifetime of the radius-server pod.
+# tcpdump rotates in-place at fileSizeLimitMB so the PVC never fills.
+# Delete manually when no longer needed:
+#   kubectl delete pvc {{ include "aaa-radius-server.fullname" . }}-pcap -n {{ .Release.Namespace }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "aaa-radius-server.fullname" . }}-pcap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aaa-radius-server.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.pcap.storageSize }}
+{{- end }}

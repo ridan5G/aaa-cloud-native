@@ -4,6 +4,7 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
+#include <chrono>
 #include <format>
 #include <stdexcept>
 
@@ -13,20 +14,32 @@ Handler::Handler(const Config& cfg) : cfg_(cfg) {}
 // handle — main entry point
 // ---------------------------------------------------------------------------
 std::vector<uint8_t> Handler::handle(const RadiusRequest& req) {
+    const auto t0 = std::chrono::steady_clock::now();
     const std::string imsi = req.imsi();
     const std::string apn  = req.apn();
+
+    auto finish = [&](const std::string& result, const std::string& stage,
+                      std::vector<uint8_t> pkt) -> std::vector<uint8_t> {
+        double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count();
+        Metrics::instance().recordRequestDuration(ms);
+        Metrics::instance().incRadiusRequest(result, stage);
+        return pkt;
+    };
 
     if (imsi.empty()) {
         spdlog::warn("RADIUS id={} — no IMSI (User-Name or 3GPP-IMSI VSA missing), rejecting",
                      req.id);
         Metrics::instance().incResponseRejects();
-        return buildAccessReject(req.id, req.authenticator, cfg_.radiusSecret);
+        return finish("reject", "1",
+            buildAccessReject(req.id, req.authenticator, cfg_.radiusSecret));
     }
     if (apn.empty()) {
         spdlog::warn("RADIUS id={} IMSI={} — no APN (Called-Station-Id missing), rejecting",
                      req.id, imsi);
         Metrics::instance().incResponseRejects();
-        return buildAccessReject(req.id, req.authenticator, cfg_.radiusSecret);
+        return finish("reject", "1",
+            buildAccessReject(req.id, req.authenticator, cfg_.radiusSecret));
     }
 
     spdlog::debug(
@@ -49,13 +62,15 @@ std::vector<uint8_t> Handler::handle(const RadiusRequest& req) {
         if (!ip.empty()) {
             spdlog::info("RADIUS id={} IMSI={} APN={} → Accept IP={}", req.id, imsi, apn, ip);
             Metrics::instance().incResponseAccepts();
-            return buildAccessAccept(req.id, req.authenticator, ip, cfg_.radiusSecret);
+            return finish("accept", "1",
+                buildAccessAccept(req.id, req.authenticator, ip, cfg_.radiusSecret));
         }
     } catch (const std::exception& ex) {
         // 403 (suspended) or unexpected error → reject immediately
         spdlog::warn("RADIUS id={} IMSI={} lookup: {} → Reject", req.id, imsi, ex.what());
         Metrics::instance().incResponseRejects();
-        return buildAccessReject(req.id, req.authenticator, cfg_.radiusSecret);
+        return finish("reject", "1",
+            buildAccessReject(req.id, req.authenticator, cfg_.radiusSecret));
     }
 
     // ── Stage 2: first-connection allocation (lookup returned 404) ────────
@@ -67,7 +82,8 @@ std::vector<uint8_t> Handler::handle(const RadiusRequest& req) {
             spdlog::info("RADIUS id={} IMSI={} → first-connection Accept IP={}",
                          req.id, imsi, ip);
             Metrics::instance().incResponseAccepts();
-            return buildAccessAccept(req.id, req.authenticator, ip, cfg_.radiusSecret);
+            return finish("accept", "2",
+                buildAccessAccept(req.id, req.authenticator, ip, cfg_.radiusSecret));
         }
     } catch (const std::exception& ex) {
         spdlog::error("RADIUS id={} IMSI={} first-connection error: {}", req.id, imsi, ex.what());
@@ -75,7 +91,8 @@ std::vector<uint8_t> Handler::handle(const RadiusRequest& req) {
 
     spdlog::warn("RADIUS id={} IMSI={} → Reject (no IP available)", req.id, imsi);
     Metrics::instance().incResponseRejects();
-    return buildAccessReject(req.id, req.authenticator, cfg_.radiusSecret);
+    return finish("reject", "2",
+        buildAccessReject(req.id, req.authenticator, cfg_.radiusSecret));
 }
 
 // ---------------------------------------------------------------------------
@@ -108,6 +125,8 @@ std::string Handler::lookup(const std::string& imsi,
     }
     // -1 (curl error) or unexpected HTTP status
     Metrics::instance().incLookupResponse(resp.statusCode);
+    std::string sc = resp.statusCode == -1 ? "curl_error" : std::to_string(resp.statusCode);
+    Metrics::instance().incUpstreamError("lookup", sc);
     throw std::runtime_error(
         std::format("lookup returned HTTP {} body={}", resp.statusCode, resp.body));
 }
@@ -142,6 +161,8 @@ std::string Handler::firstConnection(const std::string& imsi,
     }
     // -1 (curl error) or unexpected HTTP status
     Metrics::instance().incFirstConnResponse(resp.statusCode);
+    std::string sc = resp.statusCode == -1 ? "curl_error" : std::to_string(resp.statusCode);
+    Metrics::instance().incUpstreamError("first_connection", sc);
     throw std::runtime_error(
         std::format("first-connection returned HTTP {} body={}",
                     resp.statusCode, resp.body));

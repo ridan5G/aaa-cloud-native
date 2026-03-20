@@ -2,13 +2,14 @@
 
 #include <prometheus/counter.h>
 #include <prometheus/exposer.h>
+#include <prometheus/histogram.h>
 #include <prometheus/registry.h>
 #include <spdlog/spdlog.h>
 
 void Metrics::init(const std::string& bindAddress) {
     registry_ = std::make_shared<prometheus::Registry>();
 
-    // ── RADIUS metrics ─────────────────────────────────────────────────────────
+    // ── RADIUS layer ───────────────────────────────────────────────────────────
     auto& radReqFam = prometheus::BuildCounter()
         .Name("radius_access_requests_total")
         .Help("Total RADIUS Access-Request packets received and dispatched to workers")
@@ -27,6 +28,30 @@ void Metrics::init(const std::string& bindAddress) {
         .Register(*registry_);
     responseAccepts_ = &radRespFam.Add({{"result", "accept"}});
     responseRejects_ = &radRespFam.Add({{"result", "reject"}});
+
+    // radius_requests_total{result, stage} — result × stage breakdown for Grafana
+    auto& radReqLabeledFam = prometheus::BuildCounter()
+        .Name("radius_requests_total")
+        .Help("RADIUS requests completed, labeled by result (accept|reject) and stage (1=lookup|2=first-connection)")
+        .Register(*registry_);
+    radiusReqAcceptStage1_ = &radReqLabeledFam.Add({{"result", "accept"}, {"stage", "1"}});
+    radiusReqAcceptStage2_ = &radReqLabeledFam.Add({{"result", "accept"}, {"stage", "2"}});
+    radiusReqRejectStage1_ = &radReqLabeledFam.Add({{"result", "reject"}, {"stage", "1"}});
+    radiusReqRejectStage2_ = &radReqLabeledFam.Add({{"result", "reject"}, {"stage", "2"}});
+
+    // radius_request_duration_ms histogram — end-to-end RADIUS latency
+    auto& durationFam = prometheus::BuildHistogram()
+        .Name("radius_request_duration_ms")
+        .Help("End-to-end RADIUS Access-Request handling latency in milliseconds")
+        .Register(*registry_);
+    durationHist_ = &durationFam.Add({},
+        prometheus::Histogram::BucketBoundaries{1, 5, 10, 25, 50, 100, 250, 500, 1000});
+
+    // radius_upstream_errors_total{upstream, status_code} — Family stored for dynamic labels
+    upstreamErrorsFamily_ = &prometheus::BuildCounter()
+        .Name("radius_upstream_errors_total")
+        .Help("Unexpected errors from upstream HTTP services (non-business HTTP errors or curl failures)")
+        .Register(*registry_);
 
     // ── Lookup (Stage 1) metrics ───────────────────────────────────────────────
     auto& lookReqFam = prometheus::BuildCounter()
@@ -83,4 +108,20 @@ void Metrics::incFirstConnResponse(int statusCode) {
         case 503: if (firstConnResp503_)   firstConnResp503_->Increment();   break;
         default:  if (firstConnRespError_) firstConnRespError_->Increment(); break;
     }
+}
+
+void Metrics::incRadiusRequest(const std::string& result, const std::string& stage) {
+    if (result == "accept") {
+        if (stage == "1") { if (radiusReqAcceptStage1_) radiusReqAcceptStage1_->Increment(); }
+        else              { if (radiusReqAcceptStage2_) radiusReqAcceptStage2_->Increment(); }
+    } else {
+        if (stage == "1") { if (radiusReqRejectStage1_) radiusReqRejectStage1_->Increment(); }
+        else              { if (radiusReqRejectStage2_) radiusReqRejectStage2_->Increment(); }
+    }
+}
+
+void Metrics::incUpstreamError(const std::string& upstream, const std::string& statusCode) {
+    if (!upstreamErrorsFamily_) return;
+    // Add() is idempotent for the same label set — returns existing counter if already created.
+    upstreamErrorsFamily_->Add({{"upstream", upstream}, {"status_code", statusCode}}).Increment();
 }

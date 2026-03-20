@@ -43,3 +43,21 @@ autoscaling:
 
 nameOverride: ""
 fullnameOverride: ""
+
+# ── Packet capture (dev/debug) ──────────────────────────────────
+# Enable with:  make deploy radiusPCAP=true
+#
+# When enabled a tcpdump sidecar is added to the radius-server pod. It captures
+# all traffic continuously, rotating the file at fileSizeLimitMB so the PVC
+# never fills.  Retrieve with: make pcap-get-radius
+pcap:
+  enabled: false
+  # Any image with tcpdump + /bin/sh works; corfr/tcpdump is Alpine-based (~6 MB).
+  image: "corfr/tcpdump"
+  # BPF filter passed verbatim to tcpdump.  Leave empty to capture everything.
+  # Example: "udp port 1812"
+  filter: ""
+  # tcpdump -C: rotate capture file at this many MB (-W 1 keeps only the latest).
+  fileSizeLimitMB: 10
+  # PVC size — should be comfortably larger than fileSizeLimitMB.
+  storageSize: "50Mi"

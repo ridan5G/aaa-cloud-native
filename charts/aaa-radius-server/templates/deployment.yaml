@@ -44,3 +44,40 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           # No liveness/readiness probes on UDP — monitor via logs/metrics
+          {{- if .Values.pcap.enabled }}
+          volumeMounts:
+            - name: captures
+              mountPath: /captures
+          {{- end }}
+
+        {{- if .Values.pcap.enabled }}
+        # ── tcpdump sidecar ────────────────────────────────────────────────────
+        # Captures RADIUS pod network traffic to /captures/radius.pcap.
+        # Rotates at fileSizeLimitMB (-C) keeping only the latest file (-W 1).
+        # Retrieve with: make pcap-get-radius
+        - name: tcpdump
+          image: {{ .Values.pcap.image | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsUser: 0
+            capabilities:
+              add: ["NET_RAW", "NET_ADMIN"]
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "[pcap] Starting capture on all interfaces (rotate at {{ .Values.pcap.fileSizeLimitMB }} MB)..."
+              exec tcpdump -i any -n -s 0 \
+                -C {{ .Values.pcap.fileSizeLimitMB }} -W 1 \
+                -w /captures/radius.pcap \
+                {{ .Values.pcap.filter }}
+          volumeMounts:
+            - name: captures
+              mountPath: /captures
+        {{- end }}
+
+      {{- if .Values.pcap.enabled }}
+      volumes:
+        - name: captures
+          persistentVolumeClaim:
+            claimName: {{ include "aaa-radius-server.fullname" . }}-pcap
+      {{- end }}
