@@ -9,6 +9,7 @@ service:
   type: ClusterIP
   port: 1812
   protocol: UDP
+  metricsPort: 9090    # TCP port for Prometheus /metrics (prometheus-cpp Exposer)
 
 # RADIUS shared secret — stored in a Kubernetes Secret.
 # Either set radiusSecret.value directly (dev only) or provide a secretRef.
@@ -43,6 +44,10 @@ autoscaling:
 
 nameOverride: ""
 fullnameOverride: ""
+
+# ── Prometheus monitoring ────────────────────────────────────────
+monitoring:
+  enabled: true
 
 # ── Packet capture (dev/debug) ──────────────────────────────────
 # Enable with:  make deploy radiusPCAP=true

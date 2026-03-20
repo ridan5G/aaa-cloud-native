@@ -37,7 +37,7 @@
   "timezone": "browser",
   "title": "AAA Platform",
   "uid": "aaa-platform-v1",
-  "version": 4,
+  "version": 5,
   "templating": {
     "list": [
       {
@@ -2801,7 +2801,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "### PostgreSQL architecture (CloudNativePG)\nThe database cluster runs as a **CloudNativePG** managed resource with one primary and one hot-standby replica.\n\n```\nsubscriber-profile-api \u2500\u2500\u25b6 PgBouncer \u2500\u2500\u25b6 Primary   (reads + writes)\naaa-lookup-service     \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u25b6 Replica    (read-only, low latency hot-path)\n```\n\n| Component | Metric prefix | Key signals |\n|-----------|--------------|-------------|\n| Primary availability | `pg_up` | Must be 1 at all times |\n| Replication health | `pg_stat_replication_*` | WAL lag < 50 MB; stale replica = stale lookup results |\n| PgBouncer pool | `pgbouncer_pools_*` | `cl_waiting > 0` = pool saturated; increase `pool_size` |\n| Active connections | `pg_stat_activity_count` | > 100 active = slow queries or connection leak |\n| Cache efficiency | `pg_stat_database_blks_*` | Hit ratio < 95% = disk I/O bottleneck; increase `shared_buffers` |\n| Lock contention | `pg_locks_count` | ExclusiveLock spikes = DDL / bulk writes competing with reads |\n\n**Recovery procedure:** if primary is down, CloudNativePG promotes the replica automatically within ~30 s.",
+        "content": "### PostgreSQL architecture (CloudNativePG)\nThe database cluster runs as a **CloudNativePG** managed resource. Metrics are scraped via a **PodMonitor** from the built-in CNPG metrics exporter on port **9187** (`cnpg_*` prefix).\n\n```\nsubscriber-profile-api \u2500\u2500\u25b6 PgBouncer (RW pooler) \u2500\u2500\u25b6 Primary   (reads + writes)\naaa-lookup-service     \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u25b6 Replica    (read-only, low latency)\n```\n\n| Metric | Source | Key threshold |\n|--------|--------|---------------|\n| `cnpg_collector_up` | CNPG exporter | Must be 1 \u2014 if 0, primary is unreachable |\n| `cnpg_pg_replication_lag` | Standby node | < 30 s \u2014 stale replica = stale lookup results |\n| `cnpg_pg_stat_activity_count{state}` | Primary | `idle in transaction` > 5 = lock hazard |\n| `cnpg_pg_database_size{datname=\"aaa\"}` | Primary | Growth > 20%/24 h = investigate retention |\n| `cnpg_pg_stat_database_blks_*` | Primary | Cache hit ratio < 95% = I/O bottleneck |\n| `cnpg_pg_locks_count{mode}` | Primary | ExclusiveLock spikes = DDL / bulk-write contention |\n\n**Recovery:** CloudNativePG auto-promotes the replica to primary within ~30 s if the primary fails.\n**Enable monitoring:** set `aaa-database.postgresql.monitoring.enabled: true` in your values file.",
         "code": {
           "language": "plaintext",
           "showLineNumbers": false,
@@ -2873,7 +2873,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "min(pg_up)",
+          "expr": "min(cnpg_collector_up{namespace=~\"$namespace\"})",
           "instant": true,
           "legendFormat": "__auto",
           "refId": "A"
@@ -2942,7 +2942,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(pg_stat_activity_count{state=\"active\"})",
+          "expr": "sum(cnpg_pg_stat_activity_count{state=\"active\",namespace=~\"$namespace\"})",
           "instant": true,
           "legendFormat": "__auto",
           "refId": "A"
@@ -2952,8 +2952,8 @@
     {
       "id": 63,
       "type": "stat",
-      "title": "Replica WAL Lag",
-      "description": "WAL bytes the standby is behind the primary. Yellow >= 10 MB, Red >= 50 MB.",
+      "title": "Replica Lag (s)",
+      "description": "Replication lag in **seconds** as reported by CloudNativePG's built-in exporter (`cnpg_pg_replication_lag`). Yellow \u2265 10 s, Red \u2265 30 s. Only populated on standby nodes; shows 0 or no data on the primary.",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -2981,7 +2981,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "bytes",
+          "unit": "s",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -2991,11 +2991,11 @@
               },
               {
                 "color": "yellow",
-                "value": 10485760
+                "value": 10
               },
               {
                 "color": "red",
-                "value": 52428800
+                "value": 30
               }
             ]
           },
@@ -3011,7 +3011,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max(pg_stat_replication_pg_wal_lsn_diff)",
+          "expr": "max(cnpg_pg_replication_lag{namespace=~\"$namespace\"})",
           "instant": true,
           "legendFormat": "__auto",
           "refId": "A"
@@ -3080,7 +3080,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "pg_database_size_bytes{datname=\"aaa\"}",
+          "expr": "cnpg_pg_database_size{datname=\"aaa\",namespace=~\"$namespace\"}",
           "instant": true,
           "legendFormat": "__auto",
           "refId": "A"
@@ -3090,8 +3090,8 @@
     {
       "id": 65,
       "type": "timeseries",
-      "title": "PgBouncer Connection Pool  (aaa database)",
-      "description": "PgBouncer pool utilisation for the aaa database. client_waiting > 0 means the pool is saturated and queries are queuing behind PgBouncer.",
+      "title": "DB Connection States (by pg_stat_activity)",
+      "description": "Active and idle connection counts per state from `pg_stat_activity` via the CloudNativePG built-in exporter. `idle in transaction` sessions hold locks; a growing count indicates long-running transactions that need investigation.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -3128,8 +3128,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "pgbouncer_pools_sv_active{database=\"aaa\"}",
-          "legendFormat": "server active",
+          "expr": "cnpg_pg_stat_activity_count{state=\"active\",namespace=~\"$namespace\"}",
+          "legendFormat": "active",
           "refId": "A"
         },
         {
@@ -3137,8 +3137,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "pgbouncer_pools_sv_idle{database=\"aaa\"}",
-          "legendFormat": "server idle",
+          "expr": "cnpg_pg_stat_activity_count{state=\"idle\",namespace=~\"$namespace\"}",
+          "legendFormat": "idle",
           "refId": "B"
         },
         {
@@ -3146,8 +3146,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "pgbouncer_pools_cl_active{database=\"aaa\"}",
-          "legendFormat": "client active",
+          "expr": "cnpg_pg_stat_activity_count{state=\"idle in transaction\",namespace=~\"$namespace\"}",
+          "legendFormat": "idle in transaction",
           "refId": "C"
         },
         {
@@ -3155,8 +3155,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "pgbouncer_pools_cl_waiting{database=\"aaa\"}",
-          "legendFormat": "client waiting \u26a0",
+          "expr": "cnpg_pg_stat_activity_count{state=\"idle in transaction (aborted)\",namespace=~\"$namespace\"}",
+          "legendFormat": "idle in transaction (aborted)",
           "refId": "D"
         }
       ]
@@ -3202,7 +3202,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "rate(pg_stat_database_xact_commit_total{datname=\"aaa\"}[$__rate_interval])",
+          "expr": "rate(cnpg_pg_stat_database_xact_commit{datname=\"aaa\",namespace=~\"$namespace\"}[$__rate_interval])",
           "legendFormat": "commits/s",
           "refId": "A"
         },
@@ -3211,7 +3211,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "rate(pg_stat_database_xact_rollback_total{datname=\"aaa\"}[$__rate_interval])",
+          "expr": "rate(cnpg_pg_stat_database_xact_rollback{datname=\"aaa\",namespace=~\"$namespace\"}[$__rate_interval])",
           "legendFormat": "rollbacks/s",
           "refId": "B"
         }
@@ -3220,8 +3220,8 @@
     {
       "id": 67,
       "type": "timeseries",
-      "title": "Replication Lag Over Time",
-      "description": "WAL replication lag trend over time. SLA threshold: 50 MB. Sustained lag means the replica is falling behind under write load.",
+      "title": "Replication Lag Over Time (seconds)",
+      "description": "Replication lag trend in seconds over time. SLA threshold: 30 s. Sustained lag means the replica is falling behind under write load.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -3258,8 +3258,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "pg_stat_replication_pg_wal_lsn_diff",
-          "legendFormat": "WAL lag (bytes)",
+          "expr": "cnpg_pg_replication_lag{namespace=~\"$namespace\"}",
+          "legendFormat": "replica lag (s)",
           "refId": "A"
         }
       ]
@@ -3305,7 +3305,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "rate(pg_stat_database_blks_hit_total{datname=\"aaa\"}[$__rate_interval]) / (rate(pg_stat_database_blks_hit_total{datname=\"aaa\"}[$__rate_interval]) + rate(pg_stat_database_blks_read_total{datname=\"aaa\"}[$__rate_interval])) * 100",
+          "expr": "rate(cnpg_pg_stat_database_blks_hit{datname=\"aaa\",namespace=~\"$namespace\"}[$__rate_interval]) / (rate(cnpg_pg_stat_database_blks_hit{datname=\"aaa\",namespace=~\"$namespace\"}[$__rate_interval]) + rate(cnpg_pg_stat_database_blks_read{datname=\"aaa\",namespace=~\"$namespace\"}[$__rate_interval])) * 100",
           "legendFormat": "hit ratio %",
           "refId": "A"
         }
@@ -3352,7 +3352,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "pg_locks_count{mode=\"ExclusiveLock\"}",
+          "expr": "cnpg_pg_locks_count{mode=\"ExclusiveLock\",namespace=~\"$namespace\"}",
           "legendFormat": "ExclusiveLock",
           "refId": "A"
         },
@@ -3361,7 +3361,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "pg_locks_count{mode=\"RowExclusiveLock\"}",
+          "expr": "cnpg_pg_locks_count{mode=\"RowExclusiveLock\",namespace=~\"$namespace\"}",
           "legendFormat": "RowExclusiveLock",
           "refId": "B"
         },
@@ -3370,7 +3370,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "pg_locks_count{mode=\"ShareLock\"}",
+          "expr": "cnpg_pg_locks_count{mode=\"ShareLock\",namespace=~\"$namespace\"}",
           "legendFormat": "ShareLock",
           "refId": "C"
         },
@@ -3379,7 +3379,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "pg_locks_count{mode=\"AccessExclusiveLock\"}",
+          "expr": "cnpg_pg_locks_count{mode=\"AccessExclusiveLock\",namespace=~\"$namespace\"}",
           "legendFormat": "AccessExclusiveLock",
           "refId": "D"
         },
@@ -3388,7 +3388,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "pg_locks_count{mode=\"RowShareLock\"}",
+          "expr": "cnpg_pg_locks_count{mode=\"RowShareLock\",namespace=~\"$namespace\"}",
           "legendFormat": "RowShareLock",
           "refId": "E"
         }

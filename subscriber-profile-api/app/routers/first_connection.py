@@ -115,17 +115,25 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
 
     # ── Idempotency: return existing allocation if IMSI already provisioned ────
     existing_imsi = await conn.fetchrow(
-        "SELECT sim_id::text FROM imsi2sim WHERE imsi = $1",
+        """
+        SELECT i.sim_id::text, sp.ip_resolution
+        FROM imsi2sim i
+        JOIN sim_profiles sp ON sp.sim_id = i.sim_id
+        WHERE i.imsi = $1
+        """,
         body.imsi,
     )
     if existing_imsi:
         sim_id = existing_imsi["sim_id"]
-        # Prefer exact APN match; fall back to apn=NULL (imsi/iccid modes store NULL).
-        static_ip = await conn.fetchval(
-            "SELECT host(static_ip) FROM imsi_apn_ips WHERE imsi = $1 AND (apn = $2 OR apn IS NULL) ORDER BY apn NULLS LAST LIMIT 1",
-            body.imsi, body.apn,
-        )
-        if not static_ip:
+        existing_ip_resolution = existing_imsi["ip_resolution"]
+        # Query the table that matches the profile's current ip_resolution mode.
+        # This avoids stale imsi_apn_ips rows that remain after a mode switch to iccid.
+        if existing_ip_resolution in ("imsi", "imsi_apn"):
+            static_ip = await conn.fetchval(
+                "SELECT host(static_ip) FROM imsi_apn_ips WHERE imsi = $1 AND (apn = $2 OR apn IS NULL) ORDER BY apn NULLS LAST LIMIT 1",
+                body.imsi, body.apn,
+            )
+        else:  # iccid, iccid_apn
             static_ip = await conn.fetchval(
                 "SELECT host(static_ip) FROM sim_apn_ips WHERE sim_id = $1::uuid AND (apn = $2 OR apn IS NULL) ORDER BY apn NULLS LAST LIMIT 1",
                 sim_id, body.apn,

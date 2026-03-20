@@ -13,18 +13,32 @@ spec:
     metadata:
       labels:
         {{- include "aaa-radius-server.selectorLabels" . | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.service.metricsPort | quote }}
+        prometheus.io/path: "/metrics"
     spec:
+      {{- if not .Values.pcap.enabled }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 999
+      {{- end }}
       containers:
         - name: aaa-radius-server
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if .Values.pcap.enabled }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+          {{- end }}
           ports:
             - name: radius-auth
               containerPort: {{ .Values.service.port }}
               protocol: UDP
+            - name: metrics
+              containerPort: {{ .Values.service.metricsPort }}
+              protocol: TCP
           env:
             - name: RADIUS_PORT
               value: {{ .Values.service.port | quote }}
@@ -41,6 +55,8 @@ spec:
               value: {{ .Values.workerThreads | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.logLevel | quote }}
+            - name: METRICS_PORT
+              value: {{ .Values.service.metricsPort | quote }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           # No liveness/readiness probes on UDP — monitor via logs/metrics

@@ -215,53 +215,57 @@ spec:
               the browser. This may indicate backend failures or network issues
               affecting operator workflows.
 
-    # ── PostgreSQL / PgBouncer ────────────────────────────────────────────────
+    # ── PostgreSQL (CloudNativePG built-in exporter — cnpg_* metrics) ────────
+    # Metrics scraped via PodMonitor from the CNPG exporter on port 9187.
+    # Enable with: aaa-database.postgresql.monitoring.enabled=true
     - name: aaa.postgres
       rules:
         - alert: PostgresPrimaryDown
-          expr: pg_up == 0
+          expr: >
+            absent(cnpg_collector_up) or
+            min(cnpg_collector_up) == 0
           for: 1m
           labels:
             severity: critical
           annotations:
-            summary: "PostgreSQL primary is unreachable"
+            summary: "CloudNativePG metrics exporter is down"
             description: >
-              postgres_exporter reports pg_up = 0 — the primary database is
-              unreachable. All RADIUS authentications that require a DB lookup
-              will fail immediately. Check the CloudNativePG cluster status
-              (kubectl get cluster -n {{ .Release.Namespace }}) and pod logs.
+              cnpg_collector_up = 0 — the CloudNativePG metrics exporter
+              cannot reach the database. The primary may be down or restarting.
+              All RADIUS authentications that require a DB lookup will fail.
+              Check: kubectl get cluster -n {{ .Release.Namespace }}
 
         - alert: PostgresReplicaLagHigh
-          expr: max(pg_stat_replication_pg_wal_lsn_diff) > 52428800
+          expr: max(cnpg_pg_replication_lag) > 30
           for: 5m
           labels:
             severity: critical
           annotations:
-            summary: "PostgreSQL replica WAL lag > 50 MB"
+            summary: "PostgreSQL replica lag > 30 s (SLA breach)"
             description: >
-              The standby is more than 50 MB behind the primary WAL position.
-              aaa-lookup-service reads from the replica; a large lag means it
-              is serving stale data and recently-provisioned SIMs may be
-              rejected. Current lag: {{ "{{ $value | humanize1024 }}" }} bytes.
+              The standby is more than 30 seconds behind the primary.
+              aaa-lookup-service reads from the replica; stale data means
+              recently-provisioned SIMs may be rejected until the replica
+              catches up. Current lag: {{ "{{ $value | humanize }}" }} s.
               Check network bandwidth and primary write throughput.
 
-        - alert: PgBouncerPoolSaturated
-          expr: pgbouncer_pools_cl_waiting{database="aaa"} > 0
+        - alert: PostgresIdleInTransactionHigh
+          expr: >
+            sum(cnpg_pg_stat_activity_count{state="idle in transaction"}) > 5
           for: 5m
           labels:
             severity: warning
           annotations:
-            summary: "PgBouncer client queue non-empty (pool saturated)"
+            summary: "High number of idle-in-transaction sessions"
             description: >
-              Clients are waiting for a free PgBouncer server connection for
-              the aaa database. This indicates the pool_size is too small
-              relative to concurrent query load. Current waiting:
-              {{ "{{ $value }}" }} clients. Increase pool_size in the
-              PgBouncer values or reduce subscriber-profile-api connection
-              concurrency.
+              More than 5 PostgreSQL sessions are idle inside an open
+              transaction. These sessions hold locks and may block bulk-job
+              writes or RADIUS lookups. Current count: {{ "{{ $value }}" }}.
+              Check for long-running transactions in subscriber-profile-api.
 
         - alert: PostgresConnectionsHigh
-          expr: sum(pg_stat_activity_count{state="active"}) > 100
+          expr: >
+            sum(cnpg_pg_stat_activity_count{state="active"}) > 100
           for: 5m
           labels:
             severity: warning
@@ -270,17 +274,17 @@ spec:
             description: >
               More than 100 active (query-running) connections on the primary.
               This may indicate slow queries accumulating or a connection leak.
-              Current value: {{ "{{ $value | humanize }}" }}. Check
-              pg_stat_activity for long-running queries and review
-              BULK_WORKER_THREADS / connection pool settings.
+              Current value: {{ "{{ $value | humanize }}" }}.
+              Check pg_stat_activity and review BULK_WORKER_THREADS /
+              connection pool settings.
 
         - alert: PostgresDatabaseSizeGrowthHigh
           expr: >
             (
-              pg_database_size_bytes{datname="aaa"}
-              - pg_database_size_bytes{datname="aaa"} offset 24h
+              cnpg_pg_database_size{datname="aaa"}
+              - cnpg_pg_database_size{datname="aaa"} offset 24h
             )
-            / pg_database_size_bytes{datname="aaa"} offset 24h * 100 > 20
+            / cnpg_pg_database_size{datname="aaa"} offset 24h * 100 > 20
           for: 30m
           labels:
             severity: warning
@@ -289,16 +293,15 @@ spec:
             description: >
               The aaa database has grown more than 20% in the last 24 hours.
               This may indicate bulk-job data not being cleaned up, missing
-              vacuuming, or unexpected row bloat. Current size:
-              {{ "{{ $value | humanize1024 }}" }} bytes.
+              vacuuming, or unexpected row bloat.
               Review retention policies and run VACUUM ANALYZE if needed.
 
         - alert: PostgresCacheHitRatioLow
           expr: >
-            rate(pg_stat_database_blks_hit_total{datname="aaa"}[10m])
+            rate(cnpg_pg_stat_database_blks_hit{datname="aaa"}[10m])
             / (
-              rate(pg_stat_database_blks_hit_total{datname="aaa"}[10m])
-              + rate(pg_stat_database_blks_read_total{datname="aaa"}[10m])
+              rate(cnpg_pg_stat_database_blks_hit{datname="aaa"}[10m])
+              + rate(cnpg_pg_stat_database_blks_read{datname="aaa"}[10m])
             ) * 100 < 95
           for: 10m
           labels:

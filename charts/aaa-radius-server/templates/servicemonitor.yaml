@@ -1,0 +1,17 @@
+{{- if .Values.monitoring.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "aaa-radius-server.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aaa-radius-server.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "aaa-radius-server.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: metrics
+      interval: 15s
+      path: /metrics
+{{- end }}

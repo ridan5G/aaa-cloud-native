@@ -38,7 +38,7 @@ aaa-database:
         cpu: "1"
         memory: "1Gi"
     monitoring:
-      enabled: false
+      enabled: true   # enables CNPG PodMonitor + built-in metrics exporter on port 9187
   pgbouncer:
     rw:
       enabled: true
@@ -74,7 +74,7 @@ aaa-lookup-service:
   podDisruptionBudget:
     minAvailable: 0      # allow full eviction on single replica
   monitoring:
-    enabled: false
+    enabled: true
   resources:
     requests:
       cpu: "100m"
@@ -141,7 +141,7 @@ aaa-management-ui:
   apiServiceName: "aaa-platform-subscriber-profile-api"
   apiServicePort: 8080
   monitoring:
-    enabled: false
+    enabled: true
   resources:
     requests:
       cpu: "50m"
@@ -165,6 +165,8 @@ aaa-radius-server:
   workerThreads: 4
   autoscaling:
     enabled: false
+  monitoring:
+    enabled: true
   resources:
     requests:
       cpu: "100m"

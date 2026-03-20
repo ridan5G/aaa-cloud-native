@@ -11,5 +11,9 @@ spec:
       port: {{ .Values.service.port }}
       targetPort: radius-auth
       protocol: {{ .Values.service.protocol }}
+    - name: metrics
+      port: {{ .Values.service.metricsPort }}
+      targetPort: metrics
+      protocol: TCP
   selector:
     {{- include "aaa-radius-server.selectorLabels" . | nindent 4 }}
