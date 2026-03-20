@@ -251,7 +251,7 @@ spec:
 
         - alert: PostgresIdleInTransactionHigh
           expr: >
-            sum(cnpg_pg_stat_activity_count{state="idle in transaction"}) > 5
+            sum(cnpg_backends_total{state="idle in transaction"}) > 5
           for: 5m
           labels:
             severity: warning
@@ -265,7 +265,7 @@ spec:
 
         - alert: PostgresConnectionsHigh
           expr: >
-            sum(cnpg_pg_stat_activity_count{state="active"}) > 100
+            sum(cnpg_backends_total{state="active"}) > 100
           for: 5m
           labels:
             severity: warning
@@ -281,10 +281,10 @@ spec:
         - alert: PostgresDatabaseSizeGrowthHigh
           expr: >
             (
-              cnpg_pg_database_size{datname="aaa"}
-              - cnpg_pg_database_size{datname="aaa"} offset 24h
+              cnpg_pg_database_size_bytes{datname="aaa"}
+              - cnpg_pg_database_size_bytes{datname="aaa"} offset 24h
             )
-            / cnpg_pg_database_size{datname="aaa"} offset 24h * 100 > 20
+            / cnpg_pg_database_size_bytes{datname="aaa"} offset 24h * 100 > 20
           for: 30m
           labels:
             severity: warning
