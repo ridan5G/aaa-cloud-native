@@ -138,6 +138,7 @@ aaa-management-ui:
     apiBaseUrl: "/v1"   # relative → same-origin; UI nginx proxies /v1/ to the API ClusterIP
     oidcAuthority: "http://auth.aaa.localhost/realms/aaa"
     oidcClientId: "aaa-management-ui"
+    pushgatewayUrl: "http://pushgateway.aaa.localhost"
   apiServiceName: "aaa-platform-subscriber-profile-api"
   apiServicePort: 8080
   monitoring:
@@ -258,6 +259,12 @@ kube-prometheus-stack:
 # ── Prometheus Pushgateway ─────────────────────────────────────────
 prometheus-pushgateway:
   enabled: true
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts:
+      - pushgateway.aaa.localhost
+    pathType: ImplementationSpecific
   resources:
     requests:
       cpu: "10m"

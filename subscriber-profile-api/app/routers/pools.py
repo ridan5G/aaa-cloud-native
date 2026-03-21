@@ -11,6 +11,7 @@ router = APIRouter()
 class PoolCreate(BaseModel):
     name: str
     account_name: Optional[str] = None
+    routing_domain: str = "default"
     subnet: str
     start_ip: Optional[str] = None
     end_ip: Optional[str] = None
@@ -58,16 +59,46 @@ def _compute_pool_ips(subnet: str, start_ip: Optional[str], end_ip: Optional[str
 
 @router.post("/pools", status_code=201, dependencies=[Depends(require_auth)])
 async def create_pool(body: PoolCreate, conn=Depends(get_conn)):
+    if not body.routing_domain or not body.routing_domain.strip():
+        _validation_error("routing_domain", "must not be empty")
+
     ips, stored_start, stored_end = _compute_pool_ips(body.subnet, body.start_ip, body.end_ip)
+
+    # Overlap check: reject if any pool in the same routing_domain has an overlapping subnet.
+    # PostgreSQL's && operator on CIDR types returns true when two networks share any addresses.
+    overlap = await conn.fetchrow(
+        """
+        SELECT pool_id::text, pool_name, subnet::text
+        FROM ip_pools
+        WHERE routing_domain = $1
+          AND subnet && $2::cidr
+        LIMIT 1
+        """,
+        body.routing_domain,
+        body.subnet,
+    )
+    if overlap:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "pool_overlap",
+                "detail": (
+                    f"Subnet {body.subnet} overlaps with pool '{overlap['pool_name']}' "
+                    f"({overlap['subnet']}) in routing domain '{body.routing_domain}'"
+                ),
+                "conflicting_pool_id": overlap["pool_id"],
+            },
+        )
 
     pool_id = await conn.fetchval(
         """
-        INSERT INTO ip_pools (account_name, pool_name, subnet, start_ip, end_ip)
-        VALUES ($1, $2, $3::cidr, $4::inet, $5::inet)
+        INSERT INTO ip_pools (account_name, pool_name, routing_domain, subnet, start_ip, end_ip)
+        VALUES ($1, $2, $3, $4::cidr, $5::inet, $6::inet)
         RETURNING pool_id::text
         """,
         body.account_name,
         body.name,
+        body.routing_domain,
         body.subnet,
         stored_start,
         stored_end,
@@ -90,6 +121,7 @@ async def get_pool(pool_id: str, conn=Depends(get_conn)):
     row = await conn.fetchrow(
         """
         SELECT pool_id::text, account_name, pool_name AS name,
+               routing_domain,
                subnet::text, start_ip::text, end_ip::text,
                status, created_at, updated_at
         FROM ip_pools WHERE pool_id = $1::uuid
@@ -107,6 +139,7 @@ async def get_pool(pool_id: str, conn=Depends(get_conn)):
 @router.get("/pools", dependencies=[Depends(require_auth)])
 async def list_pools(
     account_name: Optional[str] = None,
+    routing_domain: Optional[str] = None,
     status: Optional[str] = None,
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=100, ge=1, le=1000),
@@ -119,6 +152,10 @@ async def list_pools(
     if account_name:
         filters.append(f"p.account_name = ${idx}")
         params.append(account_name)
+        idx += 1
+    if routing_domain:
+        filters.append(f"p.routing_domain = ${idx}")
+        params.append(routing_domain)
         idx += 1
     if status:
         if status not in ("active", "suspended"):
@@ -134,6 +171,7 @@ async def list_pools(
     rows = await conn.fetch(
         f"""
         SELECT p.pool_id::text, p.account_name, p.pool_name AS name,
+               p.routing_domain,
                p.subnet::text, p.start_ip::text, p.end_ip::text, p.status,
                COALESCE(avail.cnt, 0)::int AS available,
                COALESCE(alloc.cnt, 0)::int AS allocated,
@@ -154,6 +192,15 @@ async def list_pools(
         offset,
     )
     return {"items": [dict(r) for r in rows], "total": int(total), "page": page}
+
+
+@router.get("/routing-domains", dependencies=[Depends(require_auth)])
+async def list_routing_domains(conn=Depends(get_conn)):
+    """Return all distinct routing domain names currently in use."""
+    rows = await conn.fetch(
+        "SELECT DISTINCT routing_domain FROM ip_pools ORDER BY routing_domain"
+    )
+    return {"items": [r["routing_domain"] for r in rows]}
 
 
 @router.get("/pools/{pool_id}/stats", dependencies=[Depends(require_auth)])

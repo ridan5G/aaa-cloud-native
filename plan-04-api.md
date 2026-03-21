@@ -61,12 +61,36 @@ AAA hot path — no latency SLA applies, but it must be correct and consistent.
 
 | Method | Path | Description | Success | Notes |
 |---|---|---|---|---|
-| `POST` | `/pools` | Create pool + pre-populate ip_pool_available | 201 `{pool_id}` | Synchronous pre-population |
-| `GET` | `/pools/{pool_id}` | Get pool definition | 200 | |
-| `GET` | `/pools?account_name={name}&status=active&page=1&limit=100` | List pools with filters | 200 `{items[], total, page}` | Max limit=1000 |
+| `POST` | `/pools` | Create pool + pre-populate ip_pool_available | 201 `{pool_id}` | Synchronous pre-population; rejects with 409 if subnet overlaps another pool in the same routing domain |
+| `GET` | `/pools/{pool_id}` | Get pool definition | 200 | Response includes `routing_domain` |
+| `GET` | `/pools?account_name={name}&routing_domain={domain}&status=active&page=1&limit=100` | List pools with filters | 200 `{items[], total, page}` | Max limit=1000 |
 | `GET` | `/pools/{pool_id}/stats` | total / allocated / available IP counts | 200 `{total, allocated, available}` | |
-| `PATCH` | `/pools/{pool_id}` | Update name or status | 200 | |
+| `PATCH` | `/pools/{pool_id}` | Update name or status | 200 | `routing_domain` is immutable after creation |
 | `DELETE` | `/pools/{pool_id}` | Delete pool | 204 or 409 | 409 if allocated > 0; check is app-layer only |
+| `GET` | `/routing-domains` | List all distinct routing domain names | 200 `{items[]}` | Useful for populating UI selects |
+
+**`POST /pools` request body:**
+
+```json
+{
+  "pool_name":      "Pool-A",
+  "account_name":   "Melita",
+  "routing_domain": "vpn-north",
+  "subnet":         "10.0.0.0/24",
+  "start_ip":       "10.0.0.1",
+  "end_ip":         "10.0.0.254"
+}
+```
+
+- `routing_domain` is optional; defaults to `"default"` if omitted.
+- `start_ip` / `end_ip` are optional; server derives them from the subnet if absent.
+- On creation the server checks for CIDR overlap with any existing pool sharing the same `routing_domain`. If overlap is found, responds `409 pool_overlap` (see error example below).
+
+**Routing Domain concept:**
+
+A routing domain is a named uniqueness scope for IP addresses. Within one routing domain no two pools may contain overlapping IP ranges — the same IP address can only be assigned once within a domain. Pools in different routing domains may share identical or overlapping subnets without conflict (e.g. NAT pools vs. VPN pools using the same RFC 1918 space).
+
+Pool `routing_domain` is **immutable** after creation. To move a pool to a different domain, delete and recreate it.
 
 ### IMSI Range Configs
 
@@ -177,6 +201,8 @@ These rules are applied before any DB write. Validation errors return 400.
 | Profile C: each IMSI may have multiple `apn_ips`; `apn` values must be distinct | validation_failed |
 | PATCH changing `ip_resolution` to imsi_apn without supplying `apn` fields | validation_failed |
 | `pool_id` in iccid_ips or apn_ips must exist in `ip_pools` | validation_failed, field=pool_id |
+| `POST /pools`: subnet must not overlap with any existing pool in the same `routing_domain` | 409 `pool_overlap` (see example below) |
+| `POST /pools`: `routing_domain` must not be empty if provided | validation_failed, field=routing_domain |
 | `f_imsi` must be ≤ `t_imsi` in range-configs | validation_failed |
 | `f_iccid` must be ≤ `t_iccid` in iccid-range-configs | validation_failed |
 | `f_iccid` and `t_iccid` must be 19–20 digits | validation_failed |
@@ -195,6 +221,45 @@ These rules are applied before any DB write. Validation errors return 400.
 ---
 
 ## Request / Response Examples
+
+### Create Pool (with routing domain)
+
+```http
+POST /v1/pools
+Content-Type: application/json
+
+{
+  "pool_name":      "VPN-North-A",
+  "account_name":   "Melita",
+  "routing_domain": "vpn-north",
+  "subnet":         "10.0.0.0/24"
+}
+
+HTTP/1.1 201 Created
+{ "pool_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890" }
+```
+
+### Pool Overlap Error (409)
+
+```http
+POST /v1/pools
+Content-Type: application/json
+
+{
+  "pool_name":      "VPN-North-B",
+  "routing_domain": "vpn-north",
+  "subnet":         "10.0.0.128/25"
+}
+
+HTTP/1.1 409 Conflict
+{
+  "error": "pool_overlap",
+  "detail": "Subnet 10.0.0.128/25 overlaps with pool 'VPN-North-A' (10.0.0.0/24) in routing domain 'vpn-north'",
+  "conflicting_pool_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+}
+```
+
+---
 
 ### Create Profile B (imsi mode, no ICCID yet)
 

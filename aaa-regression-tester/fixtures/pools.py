@@ -13,6 +13,7 @@ def create_pool(
     subnet: str = "100.65.120.0/24",
     pool_name: str = "test-pool",
     account_name: str = "TestAccount",
+    routing_domain: str | None = None,
     start_ip: str | None = None,
     end_ip: str | None = None,
 ) -> dict:
@@ -22,6 +23,8 @@ def create_pool(
         "account_name": account_name,
         "subnet":       subnet,
     }
+    if routing_domain is not None:
+        body["routing_domain"] = routing_domain
     if start_ip:
         body["start_ip"] = start_ip
     if end_ip:

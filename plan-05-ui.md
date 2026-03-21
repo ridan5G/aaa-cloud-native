@@ -506,23 +506,39 @@ The error CSV contains the original row data + error column for the operator to 
 
 ### 7. IP Pools
 
-**Pool List:** Table of all pools for the account. Columns: Pool Name, Subnet, Total / Allocated / Available (progress bar), Status, Actions.
+**Pool List:** Table of all pools for the account. Columns: Pool Name, Routing Domain, Subnet, Total / Allocated / Available (progress bar), Status, Actions.
+
+Filter bar above the table includes a **Routing Domain** dropdown (populated from `GET /routing-domains`) to filter pools by domain.
 
 **Pool Detail + Stats:**
-- Subnet, start_ip, end_ip, status
+- Subnet, start_ip, end_ip, routing_domain, status
 - Utilization gauge: used/total with % label
 - Recent allocations (last 10 auto-allocated profiles from this pool)
 - [Suspend Pool] / [Delete Pool] (delete blocked with tooltip if allocated > 0)
+- Routing Domain shown as a read-only badge (immutable after creation)
 
 **New Pool Form:**
 - Pool Name (required)
 - Account Name (optional)
+- Routing Domain (optional text field with autocomplete from `GET /routing-domains`; defaults to `"default"`)
+  - Helper text: "Pools in the same routing domain cannot have overlapping IP ranges."
 - Subnet in CIDR notation (required, e.g. `100.65.120.0/24`)
 - Start IP (auto-derived from subnet, editable)
 - End IP (auto-derived from subnet, editable)
 - Client-side validation: start_ip and end_ip must be within the subnet
 
 On POST /pools success, show a toast: "Pool created. 253 IPs are now available."
+
+**Overlap error (409 pool_overlap):** Show an inline error banner directly below the Subnet field:
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ ⚠ Subnet conflict — 10.0.0.128/25 overlaps with pool            │
+│   "VPN-North-A" (10.0.0.0/24) in routing domain "vpn-north".    │
+│   Use a different subnet, or assign this pool to a different     │
+│   routing domain.                                                │
+└──────────────────────────────────────────────────────────────────┘
+```
+The Subnet and Routing Domain fields are highlighted with an error border. No toast is shown for this error.
 
 ---
 

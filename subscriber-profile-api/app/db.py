@@ -15,6 +15,12 @@ CREATE TABLE IF NOT EXISTS bulk_jobs (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Routing domain: safe to run on every startup (idempotent).
+ALTER TABLE ip_pools ADD COLUMN IF NOT EXISTS
+    routing_domain TEXT NOT NULL DEFAULT 'default';
+
+CREATE INDEX IF NOT EXISTS idx_pools_routing_domain ON ip_pools (routing_domain);
 """
 
 

@@ -15,15 +15,19 @@ function poolBarColor(pct: number) {
 function PoolList() {
   const navigate  = useNavigate()
   const { show }  = useToasts()
-  const [pools,   setPools]   = useState<(Pool & PoolStats)[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error,   setError]   = useState<string | null>(null)
-  const [showNew, setShowNew] = useState(false)
+  const [pools,              setPools]             = useState<(Pool & PoolStats)[]>([])
+  const [loading,            setLoading]           = useState(true)
+  const [error,              setError]             = useState<string | null>(null)
+  const [showNew,            setShowNew]           = useState(false)
+  const [routingDomains,     setRoutingDomains]    = useState<string[]>([])
+  const [domainFilter,       setDomainFilter]      = useState('')
 
   async function load() {
     setLoading(true)
     try {
-      const res = await apiClient.get('/pools')
+      const params: Record<string, string> = {}
+      if (domainFilter) params.routing_domain = domainFilter
+      const res = await apiClient.get('/pools', { params })
       const list: Pool[] = res.data.pools ?? res.data.items ?? []
       // Fetch stats for each pool
       const enriched = await Promise.all(
@@ -38,15 +42,15 @@ function PoolList() {
     } catch (e) { setError(String(e)) } finally { setLoading(false) }
   }
 
-  useEffect(() => { load() }, [])
-
-  async function createPool(form: { name: string; subnet: string; account_name: string }) {
+  async function loadDomains() {
     try {
-      await apiClient.post('/pools', form)
-      show('success', 'Pool created')
-      setShowNew(false); load()
-    } catch (e) { show('error', String(e)) }
+      const res = await apiClient.get('/routing-domains')
+      setRoutingDomains(res.data.items ?? [])
+    } catch { /* non-critical */ }
   }
+
+  useEffect(() => { loadDomains() }, [])
+  useEffect(() => { load() }, [domainFilter]) // eslint-disable-line
 
   return (
     <div className="space-y-4">
@@ -58,9 +62,35 @@ function PoolList() {
         <button onClick={() => setShowNew(true)} className="btn-primary">+ New Pool</button>
       </div>
 
+      {/* Filter bar */}
+      <div className="flex items-center gap-3">
+        <label className="text-xs text-gray-500 font-medium whitespace-nowrap">Routing Domain</label>
+        <select
+          className="input text-sm py-1.5 w-52"
+          value={domainFilter}
+          onChange={e => setDomainFilter(e.target.value)}
+        >
+          <option value="">All domains</option>
+          {routingDomains.map(d => (
+            <option key={d} value={d}>{d}</option>
+          ))}
+        </select>
+        {domainFilter && (
+          <button onClick={() => setDomainFilter('')} className="text-xs text-gray-400 hover:text-gray-600">
+            Clear
+          </button>
+        )}
+      </div>
+
       {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-lg">{error}</div>}
 
-      {showNew && <NewPoolModal onClose={() => setShowNew(false)} onSave={createPool} />}
+      {showNew && (
+        <NewPoolModal
+          routingDomains={routingDomains}
+          onClose={() => setShowNew(false)}
+          onSuccess={() => { setShowNew(false); load(); loadDomains() }}
+        />
+      )}
 
       <div className="tbl-wrap">
         {loading ? (
@@ -70,7 +100,7 @@ function PoolList() {
         ) : (
           <table className="tbl">
             <thead><tr>
-              <th>Pool Name</th><th>Subnet</th><th>Utilization</th>
+              <th>Pool Name</th><th>Routing Domain</th><th>Subnet</th><th>Utilization</th>
               <th className="text-right">Total</th><th className="text-right">Allocated</th><th className="text-right">Available</th>
               <th>Status</th><th />
             </tr></thead>
@@ -82,6 +112,11 @@ function PoolList() {
                     className="border-b border-border hover:bg-page transition-colors cursor-pointer"
                     onClick={() => navigate(p.pool_id)}>
                     <td className="px-4 py-3 font-medium text-sm">{p.name}</td>
+                    <td className="px-4 py-3">
+                      <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-blue-200">
+                        {p.routing_domain ?? 'default'}
+                      </span>
+                    </td>
                     <td className="px-4 py-3 font-mono text-xs text-gray-600">{p.subnet}</td>
                     <td className="px-4 py-3 w-40">
                       <div className="flex items-center gap-2">
@@ -187,16 +222,23 @@ function PoolDetail() {
         {/* Info grid */}
         <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
           {[
-            { l: 'Subnet',    v: pool.subnet   },
-            { l: 'Start IP',  v: pool.start_ip },
-            { l: 'End IP',    v: pool.end_ip   },
-            { l: 'Account',   v: pool.account_name ?? '—' },
+            { l: 'Subnet',         v: pool.subnet   },
+            { l: 'Start IP',       v: pool.start_ip },
+            { l: 'End IP',         v: pool.end_ip   },
+            { l: 'Account',        v: pool.account_name ?? '—' },
           ].map(f => (
             <div key={f.l}>
               <p className="text-xs text-gray-400 uppercase tracking-wide font-medium mb-0.5">{f.l}</p>
               <p className="font-mono text-sm text-gray-800">{f.v}</p>
             </div>
           ))}
+          {/* Routing domain — full row, shown as a badge since it's immutable */}
+          <div>
+            <p className="text-xs text-gray-400 uppercase tracking-wide font-medium mb-1">Routing Domain</p>
+            <span className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 ring-1 ring-blue-200">
+              {pool.routing_domain ?? 'default'}
+            </span>
+          </div>
         </div>
 
         {/* Utilization gauge */}
@@ -231,12 +273,64 @@ function PoolDetail() {
   )
 }
 
+// ─── Overlap error shape returned by the API ──────────────────────────────────
+interface OverlapError {
+  error: 'pool_overlap'
+  detail: string
+  conflicting_pool_id: string
+}
+
 // ─── New Pool Modal ───────────────────────────────────────────────────────────
 function NewPoolModal({
-  onClose, onSave,
-}: { onClose: () => void; onSave: (f: { name: string; subnet: string; account_name: string }) => void }) {
-  const [form, setForm] = useState({ name: '', subnet: '', account_name: '' })
-  const setF = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }))
+  routingDomains,
+  onClose,
+  onSuccess,
+}: {
+  routingDomains: string[]
+  onClose: () => void
+  onSuccess: () => void
+}) {
+  const [form, setForm] = useState({
+    name: '', subnet: '', account_name: '', routing_domain: 'default',
+  })
+  const [saving,        setSaving]        = useState(false)
+  const [overlapError,  setOverlapError]  = useState<OverlapError | null>(null)
+
+  const setF = (k: string, v: string) => {
+    setForm(f => ({ ...f, [k]: v }))
+    // Clear overlap error when subnet or routing_domain changes
+    if (k === 'subnet' || k === 'routing_domain') setOverlapError(null)
+  }
+
+  async function handleCreate() {
+    setSaving(true)
+    setOverlapError(null)
+    try {
+      await apiClient.post('/pools', {
+        name:           form.name,
+        subnet:         form.subnet,
+        account_name:   form.account_name || undefined,
+        routing_domain: form.routing_domain || 'default',
+      })
+      onSuccess()
+    } catch (err: unknown) {
+      const resp = (err as { response?: { status: number; data: unknown } })?.response
+      if (resp?.status === 409) {
+        const data = resp.data as { detail?: OverlapError }
+        const detail = data?.detail ?? (data as unknown as OverlapError)
+        if (detail && (detail as OverlapError).error === 'pool_overlap') {
+          setOverlapError(detail as OverlapError)
+          return
+        }
+      }
+      // Generic error fallback
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        ?? String(err)
+      alert(`Failed to create pool: ${msg}`)
+    } finally {
+      setSaving(false)
+    }
+  }
 
   return (
     <>
@@ -252,22 +346,59 @@ function NewPoolModal({
               <label className="label">Pool Name *</label>
               <input className="input" placeholder="CGNAT Pool A" value={form.name} onChange={e => setF('name', e.target.value)} />
             </div>
+
+            {/* Routing domain */}
+            <div className="field">
+              <label className="label">Routing Domain</label>
+              <input
+                className={`input font-mono ${overlapError ? 'border-red-400 focus:ring-red-300' : ''}`}
+                placeholder="default"
+                list="routing-domain-suggestions"
+                value={form.routing_domain}
+                onChange={e => setF('routing_domain', e.target.value)}
+              />
+              <datalist id="routing-domain-suggestions">
+                {routingDomains.map(d => <option key={d} value={d} />)}
+              </datalist>
+              <p className="text-xs text-gray-400 mt-1">
+                Pools in the same routing domain cannot have overlapping IP ranges.
+              </p>
+            </div>
+
+            {/* Subnet — overlap error shown inline here */}
             <div className="field">
               <label className="label">Subnet (CIDR) *</label>
-              <input className="input font-mono" placeholder="100.65.120.0/24" value={form.subnet} onChange={e => setF('subnet', e.target.value)} />
+              <input
+                className={`input font-mono ${overlapError ? 'border-red-400 focus:ring-red-300' : ''}`}
+                placeholder="100.65.120.0/24"
+                value={form.subnet}
+                onChange={e => setF('subnet', e.target.value)}
+              />
+              {overlapError && (
+                <div className="mt-2 flex gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
+                  <span className="shrink-0 text-amber-500 mt-0.5">⚠</span>
+                  <span>
+                    {overlapError.detail}
+                    <br />
+                    Use a different subnet, or assign this pool to a different routing domain.
+                  </span>
+                </div>
+              )}
             </div>
+
             <div className="field">
               <label className="label">Account Name (optional)</label>
               <input className="input" placeholder="Melita" value={form.account_name} onChange={e => setF('account_name', e.target.value)} />
             </div>
+
             <div className="flex gap-3 pt-2 border-t border-border">
               <button onClick={onClose} className="btn-ghost">Cancel</button>
               <button
-                onClick={() => onSave(form)}
-                disabled={!form.name || !form.subnet}
+                onClick={handleCreate}
+                disabled={!form.name || !form.subnet || saving}
                 className="btn-primary ml-auto"
               >
-                Create Pool
+                {saving ? 'Creating…' : 'Create Pool'}
               </button>
             </div>
           </div>

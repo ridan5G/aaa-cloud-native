@@ -39,13 +39,14 @@ export interface Profile {
 }
 
 export interface Pool {
-  pool_id:      string
-  name:         string
-  account_name: string | null
-  subnet:       string
-  start_ip:     string
-  end_ip:       string
-  status:       'active' | 'suspended'
+  pool_id:        string
+  name:           string
+  account_name:   string | null
+  routing_domain: string
+  subnet:         string
+  start_ip:       string
+  end_ip:         string
+  status:         'active' | 'suspended'
 }
 
 export interface PoolStats {

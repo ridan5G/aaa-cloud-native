@@ -144,6 +144,7 @@ CREATE TABLE ip_pools (
     pool_id         UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
     account_name    TEXT,
     pool_name       TEXT        NOT NULL,
+    routing_domain  TEXT        NOT NULL DEFAULT 'default',  -- uniqueness scope for IP addresses
     subnet          CIDR        NOT NULL,
     start_ip        INET        NOT NULL,
     end_ip          INET        NOT NULL,    -- broadcast address (last in subnet)
@@ -153,7 +154,14 @@ CREATE TABLE ip_pools (
     CONSTRAINT chk_pool_status CHECK (status IN ('active', 'suspended'))
 );
 
-CREATE INDEX idx_pools_account ON ip_pools (account_name);
+-- Overlap detection: before INSERT, app layer runs:
+--   SELECT pool_id, pool_name, subnet FROM ip_pools
+--   WHERE routing_domain = $routing_domain AND subnet && $new_subnet::cidr
+-- PostgreSQL && operator on CIDR checks for network overlap (shared addresses).
+-- If any row is returned → reject with 409 pool_overlap.
+
+CREATE INDEX idx_pools_account       ON ip_pools (account_name);
+CREATE INDEX idx_pools_routing_domain ON ip_pools (routing_domain);
 ```
 
 ---
