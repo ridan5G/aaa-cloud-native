@@ -6,6 +6,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "aaa-radius-server.labels" . | nindent 4 }}
+    release: {{ .Release.Name }}
 spec:
   selector:
     matchLabels:

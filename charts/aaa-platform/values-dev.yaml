@@ -261,7 +261,7 @@ prometheus-pushgateway:
   enabled: true
   ingress:
     enabled: true
-    ingressClassName: nginx
+    className: nginx
     hosts:
       - pushgateway.aaa.localhost
     pathType: ImplementationSpecific

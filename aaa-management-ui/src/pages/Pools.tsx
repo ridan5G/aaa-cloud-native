@@ -14,7 +14,6 @@ function poolBarColor(pct: number) {
 // ─── Pool List ────────────────────────────────────────────────────────────────
 function PoolList() {
   const navigate  = useNavigate()
-  const { show }  = useToasts()
   const [pools,              setPools]             = useState<(Pool & PoolStats)[]>([])
   const [loading,            setLoading]           = useState(true)
   const [error,              setError]             = useState<string | null>(null)
