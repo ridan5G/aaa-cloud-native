@@ -72,7 +72,8 @@ spec:
   {{- end }}
 
   # ── Monitoring ───────────────────────────────────────────────
-  # Enables the CNPG metrics exporter on port 9187 and creates a PodMonitor
-  # so Prometheus scrapes each cluster pod automatically.
+  # Enables the CNPG metrics exporter on port 9187.
+  # PodMonitor is managed manually via templates/podmonitor.yaml
+  # (enablePodMonitor is deprecated and will be removed in a future CNPG release).
   monitoring:
-    enablePodMonitor: {{ .Values.postgresql.monitoring.enabled }}
+    enablePodMonitor: false

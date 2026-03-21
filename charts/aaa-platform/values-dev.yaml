@@ -265,6 +265,11 @@ prometheus-pushgateway:
     hosts:
       - pushgateway.aaa.localhost
     pathType: ImplementationSpecific
+    annotations:
+      nginx.ingress.kubernetes.io/enable-cors: "true"
+      nginx.ingress.kubernetes.io/cors-allow-origin: "http://ui.aaa.localhost"
+      nginx.ingress.kubernetes.io/cors-allow-methods: "POST, GET, OPTIONS"
+      nginx.ingress.kubernetes.io/cors-allow-headers: "Content-Type"
   resources:
     requests:
       cpu: "10m"

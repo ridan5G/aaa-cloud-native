@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.config import HTTP_PORT, METRICS_PORT, CORS_ORIGINS
 from app.db import init_db, close_db
-from app.metrics import start_metrics_server, api_request_duration
+from app.metrics import start_metrics_server, api_request_duration, http_requests_in_flight
 from app.routers import health, pools, range_configs, iccid_range_configs, profiles, imsis, first_connection, bulk
 import time
 
@@ -60,15 +60,19 @@ if CORS_ORIGINS:
 @app.middleware("http")
 async def metrics_middleware(request: Request, call_next):
     start = time.monotonic()
-    response = await call_next(request)
-    elapsed_ms = (time.monotonic() - start) * 1000
     path = request.url.path
     # Normalize path for label cardinality
     if path.startswith("/v1/"):
         label_path = "/" + "/".join(path.split("/")[2:3])  # e.g. /profiles
     else:
         label_path = path
-    api_request_duration.labels(method=request.method, path=label_path).observe(elapsed_ms)
+    http_requests_in_flight.labels(method=request.method, path=label_path).inc()
+    try:
+        response = await call_next(request)
+    finally:
+        elapsed_ms = (time.monotonic() - start) * 1000
+        api_request_duration.labels(method=request.method, path=label_path).observe(elapsed_ms)
+        http_requests_in_flight.labels(method=request.method, path=label_path).dec()
     return response
 
 

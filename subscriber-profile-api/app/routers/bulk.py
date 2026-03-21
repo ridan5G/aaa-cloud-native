@@ -45,6 +45,10 @@ async def _process_bulk_job(job_id: str, profiles: list[dict]):
                 except BulkValidationError as exc:
                     failed += 1
                     bulk_job_profiles_total.labels(outcome="failed").inc()
+                    logger.warning(
+                        '{"job_id":"%s","row":%d,"result":"failed","reason":"validation_error","field":"%s","message":"%s"}',
+                        job_id, row_idx, exc.field, str(exc),
+                    )
                     errors.append({
                         "row": row_idx,
                         "field": exc.field,
@@ -55,6 +59,10 @@ async def _process_bulk_job(job_id: str, profiles: list[dict]):
                 except Exception as exc:
                     failed += 1
                     bulk_job_profiles_total.labels(outcome="failed").inc()
+                    logger.error(
+                        '{"job_id":"%s","row":%d,"result":"failed","reason":"exception","message":"%s"}',
+                        job_id, row_idx, str(exc),
+                    )
                     errors.append({
                         "row": row_idx,
                         "message": str(exc),

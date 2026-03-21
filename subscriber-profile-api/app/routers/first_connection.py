@@ -39,6 +39,7 @@ from app.metrics import (
     first_connection_total,
     pool_exhausted_total,
     multi_imsi_siblings_provisioned_total,
+    db_rollbacks_total,
 )
 
 router = APIRouter()
@@ -209,6 +210,11 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
                 if not ip:
                     first_connection_total.labels(result="pool_exhausted").inc()
                     pool_exhausted_total.labels(pool_id=apn_pool).inc()
+                    db_rollbacks_total.labels(reason="pool_exhausted").inc()
+                    logger.warning(
+                        '{"path":"/first-connection","imsi":"%s","result":"pool_exhausted","pool_id":"%s","use_case_id":"%s"}',
+                        body.imsi, apn_pool, body.use_case_id or "",
+                    )
                     raise HTTPException(
                         status_code=503,
                         detail={"error": "pool_exhausted", "pool_id": apn_pool},
@@ -277,6 +283,11 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
                         if not ip:
                             first_connection_total.labels(result="pool_exhausted").inc()
                             pool_exhausted_total.labels(pool_id=apn_pool).inc()
+                            db_rollbacks_total.labels(reason="pool_exhausted").inc()
+                            logger.warning(
+                                '{"path":"/first-connection","imsi":"%s","result":"pool_exhausted","pool_id":"%s","use_case_id":"%s","multi_imsi":true,"recovery":true}',
+                                body.imsi, apn_pool, body.use_case_id or "",
+                            )
                             raise HTTPException(
                                 status_code=503,
                                 detail={"error": "pool_exhausted", "pool_id": apn_pool},
@@ -332,6 +343,11 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
             if not ip:
                 first_connection_total.labels(result="pool_exhausted").inc()
                 pool_exhausted_total.labels(pool_id=apn_pool).inc()
+                db_rollbacks_total.labels(reason="pool_exhausted").inc()
+                logger.warning(
+                    '{"path":"/first-connection","imsi":"%s","result":"pool_exhausted","pool_id":"%s","use_case_id":"%s","multi_imsi":true}',
+                    body.imsi, apn_pool, body.use_case_id or "",
+                )
                 raise HTTPException(
                     status_code=503,
                     detail={"error": "pool_exhausted", "pool_id": apn_pool},
@@ -379,6 +395,11 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
                     sibling_ip = await _allocate_ip(conn, apn_pool)
                     if not sibling_ip:
                         pool_exhausted_total.labels(pool_id=apn_pool).inc()
+                        db_rollbacks_total.labels(reason="pool_exhausted").inc()
+                        logger.warning(
+                            '{"path":"/first-connection","imsi":"%s","sibling_imsi":"%s","result":"pool_exhausted","pool_id":"%s","use_case_id":"%s","multi_imsi":true,"sibling":true}',
+                            body.imsi, sibling_imsi, apn_pool, body.use_case_id or "",
+                        )
                         raise HTTPException(
                             status_code=503,
                             detail={"error": "pool_exhausted", "pool_id": apn_pool},

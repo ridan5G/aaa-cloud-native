@@ -56,7 +56,8 @@ postgresql:
   # App sub-charts reference this name via their db.secretName value.
   appCredentialsSecretName: aaa-db-credentials
 
-  # Prometheus monitoring via CNPG PodMonitor
+  # Prometheus monitoring — deploys a PodMonitor resource (templates/podmonitor.yaml).
+  # enablePodMonitor in the Cluster spec is intentionally set to false (deprecated).
   monitoring:
     enabled: true
 

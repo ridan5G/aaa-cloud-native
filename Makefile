@@ -194,6 +194,7 @@ deploy: radius-secret test-secret ## Deploy/upgrade umbrella chart (creates requ
 	  -f $(CHART_DIR)/values-dev.yaml \
 	  --set "aaa-radius-server.pcap.enabled=$(radiusPCAP)" \
 	  --timeout 10m
+	$(MAKE) db-init
 
 helm-unlock:                    ## Clear a stuck Helm lock (run if deploy fails with 'another operation in progress')
 	@echo "Rolling back to last successful release to clear lock..."

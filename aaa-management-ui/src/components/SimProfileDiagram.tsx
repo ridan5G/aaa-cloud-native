@@ -41,7 +41,7 @@ export function VLine() { return <div className="w-px h-3 bg-gray-300 mx-auto" /
 // ─── Branch helper ────────────────────────────────────────────────────────────
 // Renders n equal-width columns with a horizontal bridge connecting their tops.
 function BranchRow({ n, children, more }: { n: number; children: React.ReactNode; more?: number }) {
-  const w = n >= 3 ? n * 90 : 200
+  const w = n >= 3 ? n * 120 : n * 150
   return (
     <div className="relative" style={{ width: `${w}px` }}>
       {n > 1 && (
@@ -67,7 +67,7 @@ export function ImsiDiagram({ data }: { data?: DiagramData }) {
   const slots = hasReal
     ? raw.slice(0, 2).map((im, i) => ({
         label: `IMSI-${i + 1}`,
-        sub:   trunc(im.imsi),
+        sub:   im.imsi,
         ip:    im.apn_ips?.[0]?.static_ip ?? 'Auto',
       }))
     : [
@@ -107,7 +107,7 @@ export function ImsiDiagram({ data }: { data?: DiagramData }) {
 export function ImsiApnDiagram({ data }: { data?: DiagramData }) {
   const firstImsi  = data?.imsis?.[0]
   const hasReal    = data != null && firstImsi != null
-  const imsiSub    = hasReal ? trunc(firstImsi!.imsi) : '278…001'
+  const imsiSub    = hasReal ? firstImsi!.imsi : '278…001'
   const rawApns    = firstImsi?.apn_ips ?? []
   const hasRealApn = hasReal && rawApns.length > 0
 
@@ -163,7 +163,7 @@ export function IccidDiagram({ data }: { data?: DiagramData }) {
   const raw   = data?.imsis ?? []
   const hasRealImsis = hasReal && raw.length > 0
   const slots = hasRealImsis
-    ? raw.slice(0, 3).map((im, i) => ({ label: `IMSI-${i + 1}`, sub: trunc(im.imsi) }))
+    ? raw.slice(0, 3).map((im, i) => ({ label: `IMSI-${i + 1}`, sub: im.imsi }))
     : [
         { label: 'IMSI-1', sub: '278…001' },
         { label: 'IMSI-2', sub: '278…002' },
@@ -216,6 +216,17 @@ export function IccidApnDiagram({ data }: { data?: DiagramData }) {
   const n    = apns.length
   const more = hasRealIps && rawIps.length > 2 ? rawIps.length - 2 : 0
 
+  const rawImsis = data?.imsis ?? []
+  const hasRealImsis = hasReal && rawImsis.length > 0
+  const imsiSlots = hasRealImsis
+    ? rawImsis.slice(0, 3).map((im, i) => ({ label: `IMSI-${i + 1}`, sub: im.imsi }))
+    : [
+        { label: 'IMSI-1', sub: '278…001' },
+        { label: 'IMSI-2', sub: '278…002' },
+        { label: 'IMSI-3', sub: '278…003' },
+      ]
+  const imsiMore = hasRealImsis && rawImsis.length > 3 ? rawImsis.length - 3 : 0
+
   return (
     <div className="flex flex-col items-center py-2 select-none">
       <Node color="navy" label="SIM Card" sub={iccidSub} wide />
@@ -238,6 +249,15 @@ export function IccidApnDiagram({ data }: { data?: DiagramData }) {
           ))}
         </BranchRow>
       )}
+      <VLine />
+      <BranchRow n={imsiSlots.length} more={imsiMore}>
+        {imsiSlots.map((s, i) => (
+          <div key={i} className="flex-1 flex flex-col items-center">
+            <div className="w-px h-3 bg-gray-300" />
+            <Node color="blue" label={s.label} sub={s.sub} />
+          </div>
+        ))}
+      </BranchRow>
       {!hasReal && (
         <div className="mt-1.5 text-[10px] text-gray-400 italic">All IMSIs share card-level IPs per APN</div>
       )}

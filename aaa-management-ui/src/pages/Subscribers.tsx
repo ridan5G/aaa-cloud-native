@@ -314,7 +314,8 @@ function ProfileDetail() {
       ])
       setProfile(pr.data)
       const d = ir.data
-      setImsis(Array.isArray(d) ? d : d.items ?? d.imsis ?? [])
+      const rawImsis = Array.isArray(d) ? d : d.items ?? d.imsis ?? []
+      setImsis(rawImsis.length > 0 ? rawImsis : (pr.data.imsis ?? []))
     } catch (e) { setError(String(e)) } finally { setLoading(false) }
   }
 

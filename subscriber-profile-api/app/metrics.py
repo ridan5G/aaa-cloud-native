@@ -1,5 +1,5 @@
 import threading
-from prometheus_client import Counter, Histogram, start_http_server
+from prometheus_client import Counter, Gauge, Histogram, start_http_server
 
 api_request_duration = Histogram(
     "api_request_duration_ms",
@@ -35,6 +35,18 @@ bulk_job_duration = Histogram(
     "bulk_job_duration_seconds",
     "Bulk job processing duration",
     buckets=[1, 5, 10, 30, 60, 120, 300, 600],
+)
+
+http_requests_in_flight = Gauge(
+    "http_requests_in_flight",
+    "Number of HTTP requests currently being processed",
+    ["method", "path"],
+)
+
+db_rollbacks_total = Counter(
+    "db_rollbacks_total",
+    "Database transaction rollbacks caused by application errors",
+    ["reason"],
 )
 
 

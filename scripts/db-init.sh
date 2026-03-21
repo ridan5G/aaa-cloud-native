@@ -128,6 +128,33 @@ END;
 $$;
 SQL
 
+# ── Column migrations (idempotent — safe to re-run on existing clusters) ──────
+# New columns added after initial cluster bootstrap must be applied here because
+# postInitApplicationSQLRefs only runs once (at cluster creation time).
+echo "Applying column migrations..."
+kubectl exec -i "${PRIMARY_POD}" \
+  -n "${NAMESPACE}" \
+  -- psql -U postgres -d "${DB_NAME}" <<'SQL'
+DO $$
+BEGIN
+  -- routing_domain (added for IP pool isolation across routing domains)
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'ip_pools' AND column_name = 'routing_domain'
+  ) THEN
+    ALTER TABLE ip_pools
+      ADD COLUMN routing_domain TEXT NOT NULL DEFAULT 'default';
+    CREATE INDEX IF NOT EXISTS idx_pools_routing_domain
+      ON ip_pools (routing_domain);
+    RAISE NOTICE 'Migration applied: ip_pools.routing_domain added';
+  ELSE
+    RAISE NOTICE 'Migration skipped: ip_pools.routing_domain already exists';
+  END IF;
+END;
+$$;
+SQL
+echo "Column migrations done."
+
 # ── Apply schema SQL from ConfigMap ───────────────────────────────────────────
 echo "Applying schema SQL from ConfigMap '${CONFIGMAP}'..."
 kubectl get configmap "${CONFIGMAP}" \

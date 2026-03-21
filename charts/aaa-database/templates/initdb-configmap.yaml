@@ -183,6 +183,7 @@ data:
         pool_id         UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
         account_name    TEXT,
         pool_name       TEXT        NOT NULL,
+        routing_domain  TEXT        NOT NULL DEFAULT 'default',
         subnet          CIDR        NOT NULL,
         start_ip        INET        NOT NULL,
         end_ip          INET        NOT NULL,
@@ -195,6 +196,9 @@ data:
 
     CREATE INDEX IF NOT EXISTS idx_pools_account
         ON ip_pools (account_name);
+
+    CREATE INDEX IF NOT EXISTS idx_pools_routing_domain
+        ON ip_pools (routing_domain);
 
     CREATE OR REPLACE TRIGGER trg_pools_updated_at
         BEFORE UPDATE ON ip_pools

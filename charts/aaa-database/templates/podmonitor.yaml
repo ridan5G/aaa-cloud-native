@@ -1,0 +1,24 @@
+{{/*
+PodMonitor for the CNPG Postgres cluster.
+
+Replaces the deprecated spec.monitoring.enablePodMonitor field.
+Selects all pods belonging to this cluster via the cnpg.io/cluster label,
+and scrapes the built-in CNPG metrics exporter on port 9187 (named "metrics").
+
+Ref: https://cloudnative-pg.io/documentation/current/monitoring/
+*/}}
+{{- if .Values.postgresql.monitoring.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "aaa-database.clusterName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aaa-database.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      cnpg.io/cluster: {{ include "aaa-database.clusterName" . }}
+  podMetricsEndpoints:
+    - port: metrics
+{{- end }}
