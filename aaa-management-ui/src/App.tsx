@@ -3,6 +3,7 @@ import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
 import Devices from './pages/Subscribers'
 import Pools from './pages/Pools'
+import RoutingDomains from './pages/RoutingDomains'
 import RangeConfigs from './pages/RangeConfigs'
 import IccidRangeConfigs from './pages/IccidRangeConfigs'
 import BulkJobs from './pages/BulkJobs'
@@ -17,6 +18,7 @@ export default function App() {
         <Route path="dashboard"             element={<Dashboard />} />
         <Route path="devices/*"              element={<Devices />} />
         <Route path="pools/*"               element={<Pools />} />
+        <Route path="routing-domains/*"     element={<RoutingDomains />} />
         <Route path="range-configs/*"       element={<RangeConfigs />} />
         <Route path="iccid-range-configs/*" element={<IccidRangeConfigs />} />
         <Route path="bulk-jobs/*"           element={<BulkJobs />} />

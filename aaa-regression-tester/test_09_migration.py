@@ -86,7 +86,8 @@ class TestMigration:
             # ── Pool ──────────────────────────────────────────────────────────
             p = create_pool(c, subnet=MIGRATION_POOL_SUBNET,
                             pool_name="athens-migrated",
-                            account_name=EXPECTED_ACCOUNT)
+                            account_name=EXPECTED_ACCOUNT,
+                            replace_on_conflict=True)
             cls.pool_id = p["pool_id"]
 
             # ── Range config (mirrors tbl_imsi_range_config row) ──────────────

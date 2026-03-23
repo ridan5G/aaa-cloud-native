@@ -47,7 +47,7 @@ from conftest import (
     make_imsi,
     poll_until,
 )
-from fixtures.pools import create_pool, delete_pool, get_pool_stats
+from fixtures.pools import create_pool, delete_pool, get_pool_stats, _force_clear_pool_ips, _force_clear_range_profiles
 from fixtures.range_configs import create_range_config, delete_range_config
 
 # ── Module constants ──────────────────────────────────────────────────────────
@@ -162,12 +162,14 @@ def pool_a(http: httpx.Client):
     Tiny /30 pool (1 usable IP) wired to IMSI range A.
     Used by: TestFirstConnection503, TestDbRollbacks, TestPoolExhaustionByPool.
     """
+    _force_clear_range_profiles(F_IMSI_A, T_IMSI_A)
     pool = create_pool(
         http,
         subnet=SUBNET_POOL_A,
         pool_name="metrics-test-pool-a",
         account_name=ACCOUNT_NAME,
         routing_domain="metrics-test-12",
+        replace_on_conflict=True,
     )
     pool_id = pool["pool_id"]
     rc = create_range_config(
@@ -180,7 +182,8 @@ def pool_a(http: httpx.Client):
     )
     yield {"pool_id": pool_id, "range_config_id": rc["id"]}
     delete_range_config(http, rc["id"])
-    delete_pool(http, pool_id)  # ignores 409 if IPs still allocated
+    _force_clear_pool_ips(pool_id)
+    delete_pool(http, pool_id)
 
 
 @pytest.fixture(scope="module")
@@ -189,12 +192,14 @@ def pool_b(http: httpx.Client):
     Tiny /30 pool (1 usable IP) wired to IMSI range B.
     Used by: TestPoolExhaustionByPool — verifies per-pool label isolation.
     """
+    _force_clear_range_profiles(F_IMSI_B, T_IMSI_B)
     pool = create_pool(
         http,
         subnet=SUBNET_POOL_B,
         pool_name="metrics-test-pool-b",
         account_name=ACCOUNT_NAME,
         routing_domain="metrics-test-12b",
+        replace_on_conflict=True,
     )
     pool_id = pool["pool_id"]
     rc = create_range_config(
@@ -207,6 +212,7 @@ def pool_b(http: httpx.Client):
     )
     yield {"pool_id": pool_id, "range_config_id": rc["id"]}
     delete_range_config(http, rc["id"])
+    _force_clear_pool_ips(pool_id)
     delete_pool(http, pool_id)
 
 

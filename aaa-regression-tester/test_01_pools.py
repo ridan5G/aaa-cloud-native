@@ -149,7 +149,7 @@ class TestRoutingDomain:
 
     # 1.9 ─────────────────────────────────────────────────────────────────────
     def test_09_pool_includes_routing_domain_in_response(self, http: httpx.Client):
-        """POST /pools with routing_domain → GET confirms field is returned."""
+        """POST /pools with routing_domain → GET confirms routing_domain name and routing_domain_id UUID returned."""
         pool = create_pool(
             http,
             subnet=RD_SUBNET_B,
@@ -161,7 +161,10 @@ class TestRoutingDomain:
         try:
             resp = http.get(f"/pools/{pid}")
             assert resp.status_code == 200
-            assert resp.json()["routing_domain"] == RD_DOMAIN_A
+            data = resp.json()
+            assert data["routing_domain"] == RD_DOMAIN_A
+            assert "routing_domain_id" in data, "routing_domain_id must be present"
+            assert len(data["routing_domain_id"]) == 36, "routing_domain_id must be a UUID"
         finally:
             delete_pool(http, pid)
 
@@ -311,9 +314,10 @@ class TestRoutingDomain:
         try:
             resp = http.get("/routing-domains")
             assert resp.status_code == 200
-            domains = resp.json()["items"]
-            assert RD_DOMAIN_A in domains, f"{RD_DOMAIN_A} not in {domains}"
-            assert RD_DOMAIN_B in domains, f"{RD_DOMAIN_B} not in {domains}"
+            # items is now a list of routing domain objects (not strings)
+            domain_names = [d["name"] for d in resp.json()["items"]]
+            assert RD_DOMAIN_A in domain_names, f"{RD_DOMAIN_A} not in {domain_names}"
+            assert RD_DOMAIN_B in domain_names, f"{RD_DOMAIN_B} not in {domain_names}"
         finally:
             delete_pool(http, pool_a["pool_id"])
             delete_pool(http, pool_b["pool_id"])
@@ -354,11 +358,15 @@ class TestRoutingDomain:
             subnet=RD_SUBNET_A,
             pool_name="rd-default-domain",
             account_name="Melita",
+            replace_on_conflict=True,
         )
         pid = pool["pool_id"]
         try:
             resp = http.get(f"/pools/{pid}")
             assert resp.status_code == 200
-            assert resp.json()["routing_domain"] == "default"
+            data = resp.json()
+            assert data["routing_domain"] == "default"
+            assert "routing_domain_id" in data, "routing_domain_id must be present"
+            assert len(data["routing_domain_id"]) == 36, "routing_domain_id must be a UUID"
         finally:
             delete_pool(http, pid)

@@ -47,6 +47,11 @@ aaa-database:
         max_client_conn: "100"
         default_pool_size: "10"
         reserve_pool_size: "5"
+        # Disable client→PgBouncer TLS in dev: traffic is internal-only and
+        # the C++ lookup service (Drogon/libpq) cannot verify CNPG's self-signed
+        # cert, causing the SSL handshake to hang and health-check timeouts.
+        # PgBouncer→PostgreSQL server TLS remains active (managed by CNPG).
+        client_tls_sslmode: "disable"
       resources:
         requests:
           cpu: "50m"
@@ -259,6 +264,9 @@ kube-prometheus-stack:
 # ── Prometheus Pushgateway ─────────────────────────────────────────
 prometheus-pushgateway:
   enabled: true
+  serviceMonitor:
+    enabled: true
+    namespace: ""   # default is "monitoring" — empty → Release.Namespace (aaa-platform)
   ingress:
     enabled: true
     className: nginx

@@ -16,7 +16,7 @@ import time
 import httpx
 
 from conftest import make_imsi, make_iccid, make_ip, poll_until, PROVISION_BASE, JWT_TOKEN, USE_CASE_ID
-from fixtures.pools import create_pool, delete_pool
+from fixtures.pools import create_pool, delete_pool, _force_clear_pool_ips
 
 MODULE = 8
 
@@ -113,11 +113,17 @@ class TestBulk:
                           headers={"Authorization": f"Bearer {JWT_TOKEN}"},
                           timeout=30.0) as c:
             pa = create_pool(c, subnet=POOL_A_SUBNET,
-                             pool_name="bulk-pool-a", account_name="TestAccount")
+                             pool_name="bulk-pool-a", account_name="TestAccount",
+                             routing_domain="bulk-test-08",
+                             replace_on_conflict=True)
             pb = create_pool(c, subnet=POOL_B_SUBNET,
-                             pool_name="bulk-pool-b", account_name="TestAccount")
+                             pool_name="bulk-pool-b", account_name="TestAccount",
+                             routing_domain="bulk-test-08",
+                             replace_on_conflict=True)
             pc = create_pool(c, subnet=POOL_C_SUBNET,
-                             pool_name="bulk-pool-c", account_name="TestAccount")
+                             pool_name="bulk-pool-c", account_name="TestAccount",
+                             routing_domain="bulk-test-08",
+                             replace_on_conflict=True)
             cls.pool_a_id = pa["pool_id"]
             cls.pool_b_id = pb["pool_id"]
             cls.pool_c_id = pc["pool_id"]
@@ -127,10 +133,10 @@ class TestBulk:
         with httpx.Client(base_url=PROVISION_BASE,
                           headers={"Authorization": f"Bearer {JWT_TOKEN}"},
                           timeout=30.0) as c:
-            # Pools are deleted; cascading deletes clean up profiles
             for pid in (cls.pool_a_id, cls.pool_b_id, cls.pool_c_id):
                 if pid:
                     try:
+                        _force_clear_pool_ips(pid)
                         c.delete(f"/pools/{pid}")
                     except Exception:
                         pass

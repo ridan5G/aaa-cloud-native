@@ -131,24 +131,109 @@ SQL
 # ── Column migrations (idempotent — safe to re-run on existing clusters) ──────
 # New columns added after initial cluster bootstrap must be applied here because
 # postInitApplicationSQLRefs only runs once (at cluster creation time).
+#
+# Migration map (three historical schema generations):
+#   Gen-1  ip_pools has NO routing column at all      → add routing_domain_id FK
+#   Gen-2  ip_pools has routing_domain TEXT           → replace with routing_domain_id FK
+#   Gen-3  ip_pools has routing_domain_id UUID FK     → already current, skip
+#   Fresh  ip_pools does not exist yet                → schema SQL creates it correctly, skip
 echo "Applying column migrations..."
 kubectl exec -i "${PRIMARY_POD}" \
   -n "${NAMESPACE}" \
   -- psql -U postgres -d "${DB_NAME}" <<'SQL'
 DO $$
+DECLARE
+  v_ip_pools_exists   BOOL;
+  v_has_rd_text       BOOL;
+  v_has_rd_id         BOOL;
+  v_default_rd_id     UUID;
 BEGIN
-  -- routing_domain (added for IP pool isolation across routing domains)
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'ip_pools' AND column_name = 'routing_domain'
-  ) THEN
-    ALTER TABLE ip_pools
-      ADD COLUMN routing_domain TEXT NOT NULL DEFAULT 'default';
-    CREATE INDEX IF NOT EXISTS idx_pools_routing_domain
-      ON ip_pools (routing_domain);
-    RAISE NOTICE 'Migration applied: ip_pools.routing_domain added';
+  SELECT EXISTS (
+    SELECT 1 FROM pg_class WHERE relname = 'ip_pools' AND relkind = 'r'
+  ) INTO v_ip_pools_exists;
+
+  IF NOT v_ip_pools_exists THEN
+    RAISE NOTICE 'Migration skipped: ip_pools not yet created (will be initialised by schema SQL)';
+    RETURN;
+  END IF;
+
+  SELECT EXISTS (
+    SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+    WHERE c.relname = 'ip_pools' AND a.attname = 'routing_domain'
+      AND a.attnum > 0 AND NOT a.attisdropped
+  ) INTO v_has_rd_text;
+
+  SELECT EXISTS (
+    SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+    WHERE c.relname = 'ip_pools' AND a.attname = 'routing_domain_id'
+      AND a.attnum > 0 AND NOT a.attisdropped
+  ) INTO v_has_rd_id;
+
+  -- ── Case B: already on current schema ──────────────────────────────────────
+  IF v_has_rd_id THEN
+    RAISE NOTICE 'Migration skipped: ip_pools.routing_domain_id already exists';
+    RETURN;
+  END IF;
+
+  -- ── Shared setup for Case A and Gen-1 ──────────────────────────────────────
+  -- Ensure routing_domains table exists before we reference it
+  CREATE TABLE IF NOT EXISTS routing_domains (
+      id               UUID        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+      name             TEXT        NOT NULL,
+      description      TEXT,
+      allowed_prefixes TEXT[]      NOT NULL DEFAULT '{}',
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT uq_routing_domain_name UNIQUE (name)
+  );
+
+  INSERT INTO routing_domains (name, description)
+  VALUES ('default', 'Default routing domain')
+  ON CONFLICT (name) DO NOTHING;
+
+  -- ── Case A (Gen-2): routing_domain TEXT → routing_domain_id UUID FK ─────────
+  IF v_has_rd_text THEN
+    RAISE NOTICE 'Migration (Gen-2): ip_pools.routing_domain TEXT → routing_domain_id UUID FK';
+
+    -- Seed a routing_domains row for every distinct name currently in ip_pools
+    INSERT INTO routing_domains (name)
+    SELECT DISTINCT routing_domain FROM ip_pools
+    ON CONFLICT (name) DO NOTHING;
+
+    ALTER TABLE ip_pools ADD COLUMN routing_domain_id UUID;
+
+    UPDATE ip_pools p
+    SET routing_domain_id = rd.id
+    FROM routing_domains rd
+    WHERE rd.name = p.routing_domain;
+
+    ALTER TABLE ip_pools ALTER COLUMN routing_domain_id SET NOT NULL;
+    ALTER TABLE ip_pools ADD CONSTRAINT ip_pools_routing_domain_id_fkey
+        FOREIGN KEY (routing_domain_id) REFERENCES routing_domains (id);
+    CREATE INDEX IF NOT EXISTS idx_pools_routing_domain_id ON ip_pools (routing_domain_id);
+
+    ALTER TABLE ip_pools DROP COLUMN routing_domain;
+    DROP INDEX IF EXISTS idx_pools_routing_domain;
+
+    RAISE NOTICE 'Migration (Gen-2) complete';
+
+  -- ── Case C (Gen-1): neither column — add routing_domain_id directly ─────────
   ELSE
-    RAISE NOTICE 'Migration skipped: ip_pools.routing_domain already exists';
+    RAISE NOTICE 'Migration (Gen-1): ip_pools has no routing column — adding routing_domain_id FK';
+
+    SELECT id INTO v_default_rd_id FROM routing_domains WHERE name = 'default';
+
+    ALTER TABLE ip_pools ADD COLUMN routing_domain_id UUID;
+
+    -- All existing pools belong to the default domain
+    UPDATE ip_pools SET routing_domain_id = v_default_rd_id;
+
+    ALTER TABLE ip_pools ALTER COLUMN routing_domain_id SET NOT NULL;
+    ALTER TABLE ip_pools ADD CONSTRAINT ip_pools_routing_domain_id_fkey
+        FOREIGN KEY (routing_domain_id) REFERENCES routing_domains (id);
+    CREATE INDEX IF NOT EXISTS idx_pools_routing_domain_id ON ip_pools (routing_domain_id);
+
+    RAISE NOTICE 'Migration (Gen-1) complete';
   END IF;
 END;
 $$;

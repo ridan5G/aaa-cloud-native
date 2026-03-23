@@ -181,6 +181,9 @@ kube-prometheus-stack:
 
 prometheus-pushgateway:
   enabled: true
+  serviceMonitor:
+    enabled: true
+    namespace: ""   # default is "monitoring" — empty → Release.Namespace
 
 # ── Migration — triggered manually; disabled by default ──────────────
 aaa-migration:

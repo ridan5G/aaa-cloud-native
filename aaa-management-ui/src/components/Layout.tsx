@@ -30,6 +30,16 @@ function PoolIcon({ c = 'w-4 h-4' }: { c?: string }) {
     </svg>
   )
 }
+function NetworkIcon({ c = 'w-4 h-4' }: { c?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" className={c}>
+      <circle cx="8" cy="3" r="1.5" fill="currentColor" stroke="none" />
+      <circle cx="3" cy="13" r="1.5" fill="currentColor" stroke="none" />
+      <circle cx="13" cy="13" r="1.5" fill="currentColor" stroke="none" />
+      <path d="M8 4.5v3M8 7.5L3 11.5M8 7.5L13 11.5" />
+    </svg>
+  )
+}
 function RangeIcon({ c = 'w-4 h-4' }: { c?: string }) {
   return (
     <svg viewBox="0 0 16 16" fill="currentColor" className={c}>
@@ -141,9 +151,10 @@ function ToastContainer() {
 
 // ─── Nav config ───────────────────────────────────────────────────────────────
 const TOP_NAV = [
-  { to: '/dashboard',        label: 'Dashboard',    Icon: DashboardIcon },
-  { to: '/devices',          label: 'SIMs',         Icon: SimIcon },
-  { to: '/pools',            label: 'IP Pools',     Icon: PoolIcon },
+  { to: '/dashboard',        label: 'Dashboard',       Icon: DashboardIcon },
+  { to: '/devices',          label: 'SIMs',            Icon: SimIcon },
+  { to: '/pools',            label: 'IP Pools',        Icon: PoolIcon },
+  { to: '/routing-domains',  label: 'Routing Domains', Icon: NetworkIcon },
 ]
 const RANGE_CHILDREN = [
   { to: '/range-configs',       label: 'IMSI Range Configs' },

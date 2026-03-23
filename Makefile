@@ -29,8 +29,8 @@ DB_URL      ?= postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_N
 RADIUS_SECRET ?= testing123
 
 SCRIPT      ?= load.js   # override: make load-test-k8s SCRIPT=stress.js
-PCAP        ?= false     # set to true to attach a tcpdump sidecar: make test PCAP=true
-radiusPCAP  ?= false     # set to true to attach a tcpdump sidecar to radius-server: make deploy radiusPCAP=true
+PCAP        ?= false# set to true to attach a tcpdump sidecar: make test PCAP=true
+radiusPCAP  ?= false# set to true to attach a tcpdump sidecar to radius-server: make deploy radiusPCAP=true
 
 .PHONY: help \
         cluster-up cluster-down cluster-status cnpg-install nginx-install dep-update prom-crds \
@@ -241,17 +241,23 @@ radius-secret:                  ## Create/update aaa-radius-secret from RADIUS_S
 test:                           ## Run regression suite (append PCAP=true to capture traffic)
 	$(MAKE) test-secret
 	$(MAKE) radius-secret
-	@echo "Repackaging aaa-regression-tester sub-chart..."
-	helm package ./charts/aaa-regression-tester -d ./charts/aaa-platform/charts/
 	@echo "Removing any previous regression-tester Job and pods..."
 	kubectl delete jobs -n $(NAMESPACE) \
 	  -l app.kubernetes.io/name=aaa-regression-tester \
 	  --ignore-not-found --wait=true
-	helm upgrade --install $(RELEASE) $(CHART_DIR) \
+	helm upgrade --install aaa-regression-tester ./charts/aaa-regression-tester \
 	  --namespace $(NAMESPACE) \
-	  -f $(CHART_DIR)/values-dev.yaml \
-	  --set "aaa-regression-tester.enabled=true" \
-	  --set "aaa-regression-tester.pcap.enabled=$(PCAP)" \
+	  --set "image.repository=aaa/aaa-regression-tester" \
+	  --set "image.tag=dev" \
+	  --set "image.pullPolicy=Never" \
+	  --set "env.PROVISION_URL=http://aaa-platform-subscriber-profile-api:8080/v1" \
+	  --set "env.LOOKUP_URL=http://aaa-platform-aaa-lookup-service:8081/v1" \
+	  --set "env.PUSHGATEWAY_URL=http://aaa-platform-prometheus-pushgateway:9091" \
+	  --set "jwtSecretName=aaa-test-jwt" \
+	  --set "radius.host=aaa-platform-aaa-radius-server" \
+	  --set "radius.port=1812" \
+	  --set "radius.secretName=aaa-radius-secret" \
+	  --set "pcap.enabled=$(PCAP)" \
 	  --timeout 10m
 	@echo "Waiting for regression-tester Job to start..."
 	kubectl wait pod \
@@ -272,17 +278,17 @@ test:                           ## Run regression suite (append PCAP=true to cap
 	  echo ""; \
 	  echo "══════════════════════════════════════════════════════════════"; \
 	  echo " Packet capture complete."; \
-	  echo " Stored in PVC: $(RELEASE)-aaa-regression-tester-pcap"; \
+	  echo " Stored in PVC: aaa-regression-tester-pcap"; \
 	  echo " Fetch:  make pcap-get          → saves ./test.pcap"; \
 	  echo " Open :  wireshark ./test.pcap"; \
 	  echo "══════════════════════════════════════════════════════════════"; \
 	fi
 
 pcap-get:                       ## Copy test.pcap from the PCAP=true PVC to ./test.pcap (works after pod exits)
-	bash scripts/pcap-get.sh $(NAMESPACE) $(RELEASE)-aaa-regression-tester-pcap ./test.pcap
+	bash scripts/pcap-get.sh $(NAMESPACE) aaa-regression-tester-pcap ./test.pcap
 
 pcap-get-radius:                ## Copy radius.pcap from the radiusPCAP=true PVC to ./radius.pcap (live or after pod exits)
-	bash scripts/pcap-get.sh $(NAMESPACE) $(RELEASE)-aaa-radius-server-pcap ./radius.pcap
+	bash scripts/pcap-get.sh $(NAMESPACE) $(RELEASE)-aaa-radius-server-pcap ./radius.pcap radius.pcap
 
 # ── Port-forwarding ───────────────────────────────────────────
 port-forward-lookup:            ## Forward aaa-lookup-service to localhost:8081
@@ -369,6 +375,9 @@ status:                         ## Show all pods, services, ingress, and CNPG cl
 	kubectl get cluster -n $(NAMESPACE)
 	@echo "═══ Jobs ════════════════════════════════════════════"
 	kubectl get jobs -n $(NAMESPACE)
+	@echo "═══ Summary ═════════════════════════════════════════"
+	@kubectl get pods -n $(NAMESPACE) --no-headers 2>/dev/null | \
+	  awk '{ split($$2, r, "/"); if (r[1] != r[2]) { bad++; print "  NOT READY: " $$1 " (" $$2 " containers ready, status=" $$4 ")" } } END { if (bad == 0) print "  All pods ready" }'
 
 # ── Load testing ──────────────────────────────────────────────
 build-load-tester:              ## Build k6 load-test image (aaa/aaa-load-tester:dev)
@@ -422,7 +431,9 @@ load-test-logs-k8s:             ## Print logs from the last load test K8s Job
 	    -o jsonpath='{.items[0].metadata.name}')
 
 # ── Teardown ──────────────────────────────────────────────────
-uninstall:                      ## Uninstall Helm release (keeps namespace and PVCs)
-	helm uninstall $(RELEASE) -n $(NAMESPACE)
+uninstall:                      ## Uninstall Helm release + delete CNPG cluster and PVCs (full DB wipe)
+	helm uninstall $(RELEASE) -n $(NAMESPACE) || true
+	kubectl delete cluster aaa-postgres -n $(NAMESPACE) --ignore-not-found
+	kubectl delete pvc -n $(NAMESPACE) -l cnpg.io/cluster=aaa-postgres --ignore-not-found
 
-clean: uninstall cluster-down   ## Full teardown: uninstall Helm release + delete k3d cluster
+clean: uninstall cluster-down   ## Full teardown: Helm release + CNPG + PVCs + k3d cluster

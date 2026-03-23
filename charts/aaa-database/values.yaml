@@ -73,6 +73,10 @@ pgbouncer:
       max_client_conn: "1000"
       default_pool_size: "20"
       reserve_pool_size: "5"
+      # The C++ lookup service (Drogon/libpq) cannot verify CNPG self-signed certs.
+      # Disable client-side TLS so the SSL handshake does not hang.
+      # PgBouncer→PostgreSQL server TLS is still managed by CNPG.
+      client_tls_sslmode: "disable"
     resources:
       requests:
         cpu: "100m"
@@ -90,6 +94,7 @@ pgbouncer:
       max_client_conn: "2000"
       default_pool_size: "20"
       reserve_pool_size: "5"
+      client_tls_sslmode: "disable"
     resources:
       requests:
         cpu: "100m"

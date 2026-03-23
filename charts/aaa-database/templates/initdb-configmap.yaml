@@ -4,10 +4,10 @@ via postInitApplicationSQLRefs. Runs as the app user (aaa_app) against the
 app database (aaa) after initdb completes.
 
 Contains the full AAA platform schema (Plan 2):
-  - 8 tables
-  - 15 indexes
+  - 10 tables (including routing_domains)
+  - 17 indexes
   - set_updated_at() trigger function
-  - 7 BEFORE UPDATE triggers (one per mutable table)
+  - 8 BEFORE UPDATE triggers (one per mutable table)
 
 PostgreSQL 15+ required for UNIQUE NULLS NOT DISTINCT.
 */}}
@@ -175,21 +175,54 @@ data:
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
     -- ================================================================
-    -- Table 5: ip_pools
+    -- Table 5: routing_domains
+    -- Named uniqueness scopes for IP address assignment.
+    -- Within one routing domain, no two pools may have overlapping subnets.
+    -- allowed_prefixes: if non-empty, new pool subnets must be contained
+    --   within one of these CIDRs (e.g. ['10.0.0.0/8', '172.16.0.0/12']).
+    --   Empty array = unrestricted (any subnet allowed).
+    -- ================================================================
+    CREATE TABLE IF NOT EXISTS routing_domains (
+        id               UUID        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+        name             TEXT        NOT NULL,
+        description      TEXT,
+        allowed_prefixes TEXT[]      NOT NULL DEFAULT '{}',
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CONSTRAINT uq_routing_domain_name UNIQUE (name)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_rd_name
+        ON routing_domains (name);
+
+    CREATE OR REPLACE TRIGGER trg_rd_updated_at
+        BEFORE UPDATE ON routing_domains
+        FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+    -- Auto-create the default routing domain
+    INSERT INTO routing_domains (name, description)
+    VALUES ('default', 'Default routing domain')
+    ON CONFLICT (name) DO NOTHING;
+
+    -- ================================================================
+    -- Table 6: ip_pools
     -- IP pool definitions. One pool covers one subnet.
     -- IPs are pre-populated into ip_pool_available at pool creation time.
+    -- routing_domain_id FK references routing_domains — pools in the same
+    -- domain cannot have overlapping subnets (enforced at app layer).
     -- ================================================================
     CREATE TABLE IF NOT EXISTS ip_pools (
-        pool_id         UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
-        account_name    TEXT,
-        pool_name       TEXT        NOT NULL,
-        routing_domain  TEXT        NOT NULL DEFAULT 'default',
-        subnet          CIDR        NOT NULL,
-        start_ip        INET        NOT NULL,
-        end_ip          INET        NOT NULL,
-        status          TEXT        NOT NULL DEFAULT 'active',
-        created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-        updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        pool_id            UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
+        account_name       TEXT,
+        pool_name          TEXT        NOT NULL,
+        routing_domain_id  UUID        NOT NULL
+                                       REFERENCES routing_domains (id),
+        subnet             CIDR        NOT NULL,
+        start_ip           INET        NOT NULL,
+        end_ip             INET        NOT NULL,
+        status             TEXT        NOT NULL DEFAULT 'active',
+        created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
         CONSTRAINT chk_pool_status
             CHECK (status IN ('active', 'suspended'))
     );
@@ -197,15 +230,15 @@ data:
     CREATE INDEX IF NOT EXISTS idx_pools_account
         ON ip_pools (account_name);
 
-    CREATE INDEX IF NOT EXISTS idx_pools_routing_domain
-        ON ip_pools (routing_domain);
+    CREATE INDEX IF NOT EXISTS idx_pools_routing_domain_id
+        ON ip_pools (routing_domain_id);
 
     CREATE OR REPLACE TRIGGER trg_pools_updated_at
         BEFORE UPDATE ON ip_pools
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
     -- ================================================================
-    -- Table 6: ip_pool_available
+    -- Table 7: ip_pool_available
     -- Work-queue of unallocated IPs. Pre-populated at pool creation.
     -- SELECT FOR UPDATE SKIP LOCKED prevents race conditions during
     -- concurrent first-connection allocation.
@@ -219,7 +252,7 @@ data:
     );
 
     -- ================================================================
-    -- Table 7: iccid_range_configs
+    -- Table 8: iccid_range_configs
     -- Parent table for Multi-IMSI SIM provisioning.
     -- Each row defines a range of ICCIDs (physical SIM cards) that carry
     -- multiple IMSIs. Child IMSI ranges are in imsi_range_configs.
@@ -269,7 +302,7 @@ data:
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
     -- ================================================================
-    -- Table 8: imsi_range_configs
+    -- Table 9: imsi_range_configs
     -- IMSI range authorization table for dynamic first-connection allocation.
     --
     -- Two modes:
@@ -330,7 +363,7 @@ data:
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
     -- ================================================================
-    -- Table 9: range_config_apn_pools
+    -- Table 10: range_config_apn_pools
     -- Per-APN pool overrides for a specific imsi_range_configs entry.
     -- When ip_resolution is 'imsi_apn' or 'iccid_apn', first-connection
     -- checks this table before using the range config's default pool_id.
@@ -353,6 +386,5 @@ data:
         ON range_config_apn_pools (range_config_id);
 
     -- ── Application user grants ──────────────────────────────────────────
-    GRANT SELECT                          ON ALL TABLES  IN SCHEMA public TO aaa_app;
-    GRANT INSERT, UPDATE, DELETE          ON ALL TABLES  IN SCHEMA public TO aaa_app;
+    GRANT SELECT, INSERT, UPDATE, DELETE  ON ALL TABLES    IN SCHEMA public TO aaa_app;
     GRANT USAGE, SELECT                   ON ALL SEQUENCES IN SCHEMA public TO aaa_app;

@@ -28,10 +28,12 @@ class TestRangeConfigs:
                           headers={"Authorization": f"Bearer {JWT_TOKEN}"},
                           timeout=30.0) as c:
             p1 = create_pool(c, subnet="100.65.130.0/24",
-                             pool_name="rc-pool-1", account_name="Melita")
+                             pool_name="rc-pool-1", account_name="Melita",
+                             replace_on_conflict=True)
             cls.pool_id  = p1["pool_id"]
             p2 = create_pool(c, subnet="100.65.131.0/24",
-                             pool_name="rc-pool-2", account_name="Melita")
+                             pool_name="rc-pool-2", account_name="Melita",
+                             replace_on_conflict=True)
             cls.pool2_id = p2["pool_id"]
 
     @classmethod

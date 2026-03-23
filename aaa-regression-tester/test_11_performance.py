@@ -141,7 +141,8 @@ class TestPerformance:
 
             # Create pool and seed
             p = create_pool(c, subnet=SEED_POOL_SUBNET,
-                            pool_name="perf-pool", account_name=SEED_ACCOUNT)
+                            pool_name="perf-pool", account_name=SEED_ACCOUNT,
+                            replace_on_conflict=True)
             _PerfSetup.pool_id = p["pool_id"]
             _seed_dataset(c, _PerfSetup.pool_id)
             _PerfSetup.seeded = True

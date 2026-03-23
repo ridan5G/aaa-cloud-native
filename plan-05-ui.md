@@ -106,6 +106,7 @@ the `subscriber-profile-api` REST endpoints — no direct DB access.
 │ ● Dashboard     │  Content area (white cards on light-grey page bg)  │
 │   SIMs          │                                                     │
 │   IP Pools      │                                                     │
+│   Routing Domains│                                                    │
 │   Range Configs ▸│                                                   │
 │   Bulk Jobs     │                                                     │
 │   Documentation │                                                     │
@@ -274,6 +275,12 @@ Login
         │     ├── Pool List
         │     ├── Pool Detail + Stats
         │     └── New Pool (form)
+        ├── Routing Domains
+        │     ├── Routing Domain List
+        │     ├── Routing Domain Detail
+        │     │     ├── Edit name / description / allowed_prefixes
+        │     │     └── Suggest-CIDR tool (size input → free block result)
+        │     └── New Routing Domain (modal)
         ├── Range Configs
         │     ├── IMSI Range Configs
         │     │     ├── Range Config List
@@ -508,10 +515,10 @@ The error CSV contains the original row data + error column for the operator to 
 
 **Pool List:** Table of all pools for the account. Columns: Pool Name, Routing Domain, Subnet, Total / Allocated / Available (progress bar), Status, Actions.
 
-Filter bar above the table includes a **Routing Domain** dropdown (populated from `GET /routing-domains`) to filter pools by domain.
+Filter bar above the table includes a **Routing Domain** dropdown (populated from `GET /routing-domains`, returns full objects) to filter pools by domain.
 
 **Pool Detail + Stats:**
-- Subnet, start_ip, end_ip, routing_domain, status
+- Subnet, start_ip, end_ip, routing_domain name badge + routing_domain_id (UUID, small grey text), status
 - Utilization gauge: used/total with % label
 - Recent allocations (last 10 auto-allocated profiles from this pool)
 - [Suspend Pool] / [Delete Pool] (delete blocked with tooltip if allocated > 0)
@@ -520,8 +527,11 @@ Filter bar above the table includes a **Routing Domain** dropdown (populated fro
 **New Pool Form:**
 - Pool Name (required)
 - Account Name (optional)
-- Routing Domain (optional text field with autocomplete from `GET /routing-domains`; defaults to `"default"`)
+- Routing Domain (select from `GET /routing-domains` objects; defaults to `"default"`)
   - Helper text: "Pools in the same routing domain cannot have overlapping IP ranges."
+- **Suggest free subnet** — appears when the selected routing domain has non-empty `allowed_prefixes`:
+  - Size input (number of IPs needed) + [Suggest] button
+  - Calls `GET /routing-domains/{id}/suggest-cidr?size=N`, auto-fills the Subnet field on success
 - Subnet in CIDR notation (required, e.g. `100.65.120.0/24`)
 - Start IP (auto-derived from subnet, editable)
 - End IP (auto-derived from subnet, editable)
@@ -540,9 +550,59 @@ On POST /pools success, show a toast: "Pool created. 253 IPs are now available."
 ```
 The Subnet and Routing Domain fields are highlighted with an error border. No toast is shown for this error.
 
+**Prefix error (409 subnet_outside_allowed_prefixes):** Show an inline error banner below the Subnet field:
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ ⚠ Subnet 192.168.1.0/24 is outside this domain's allowed        │
+│   prefixes: 10.0.0.0/8. Use a subnet within an allowed prefix   │
+│   or update the routing domain's allowed_prefixes.              │
+└──────────────────────────────────────────────────────────────────┘
+```
+
 ---
 
-### 8. IMSI Range Configs
+### 8. Routing Domains
+
+**Purpose:** Manage named uniqueness scopes for IP address assignment. Each domain can optionally
+define `allowed_prefixes` to restrict which subnets may be created and to enable the suggest-CIDR tool.
+
+**Routing Domain List:** Table. Columns: Name, Description, Allowed Prefixes (chip list), Pool Count, Created, Actions (View / Edit / Delete).
+
+- **Delete:** blocked if any pools reference the domain — shows tooltip "Domain has N pool(s) — delete all pools first."
+- **`+ New Domain` button** → opens `NewDomainModal`.
+
+**New Domain Modal:**
+- Name (required)
+- Description (optional)
+- Allowed Prefixes — chip input: type a CIDR and press Enter or click [Add]; each chip shows the CIDR with a × remove button. Validated as valid CIDR notation on entry.
+
+**Routing Domain Detail:**
+- Name, Description, Allowed Prefixes (chip list, editable inline)
+- Pool Count — link to pools list filtered by this domain
+- [Edit] / [Delete] buttons
+
+**Suggest-CIDR tool (inline in Detail):**
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ Suggest Free Subnet                                              │
+│                                                                  │
+│ IPs needed: [  250  ]   [Suggest]                               │
+│                                                                  │
+│ ✓ Suggested: 10.0.1.0/24  (254 usable hosts)  [Copy] [Use]     │
+└──────────────────────────────────────────────────────────────────┘
+```
+- Calls `GET /routing-domains/{id}/suggest-cidr?size=N`
+- Shows the result in a green card with Copy and Use buttons
+- "Use" navigates to New Pool form pre-filled with this CIDR and the current routing domain
+- If `allowed_prefixes` is empty, the tool is hidden with a note: "Configure allowed_prefixes to enable the suggest-CIDR tool."
+- On `404 no_free_cidr`: shows amber warning "No free CIDR found within the configured prefixes."
+
+**Error states in list / detail:**
+- `409 domain_name_conflict` on create/rename: "A routing domain named '...' already exists."
+
+---
+
+### 9. IMSI Range Configs
 
 **Range Config List:** Table. Columns: ID, Account, f_imsi, t_imsi, Pool Name, ip_resolution, APN Overrides count, Status, Actions (View / Edit / Delete).
 
@@ -576,7 +636,7 @@ The Subnet and Routing Domain fields are highlighted with an error border. No to
 
 ---
 
-### 9. ICCID Range Configs (Multi-IMSI SIM)
+### 10. ICCID Range Configs (Multi-IMSI SIM)
 
 **Purpose:** Manage batches of physical SIM cards that carry multiple IMSIs. Each ICCID Range Config
 is a parent that owns one or more IMSI Slot ranges, one per IMSI slot on the card.
@@ -630,7 +690,7 @@ is a parent that owns one or more IMSI Slot ranges, one per IMSI slot on the car
 
 ---
 
-### 10. Bulk Jobs
+### 11. Bulk Jobs
 
 **Job List:** Polling table (auto-refreshes every 5s while any job has status=running).
 Columns: Job ID, Submitted, Status badge, Processed, Failed, Duration, Actions.
@@ -713,6 +773,10 @@ function downloadTemplate() {
 | 400 validation_failed | Highlight the specific field(s) with inline error message |
 | 409 iccid_conflict | Banner: "ICCID already in use by [link to existing profile]" |
 | 409 imsi_conflict | Banner: "IMSI already assigned to [link to existing profile]" |
+| 409 pool_overlap | Inline banner below Subnet field (see IP Pools section) |
+| 409 subnet_outside_allowed_prefixes | Inline banner below Subnet field (see IP Pools section) |
+| 409 domain_in_use | Toast: "Routing domain has N pool(s) — delete all pools first" |
+| 409 domain_name_conflict | Inline error: "A routing domain named '...' already exists." |
 | 401 | Redirect to OIDC login |
 | 403 | Toast: "You don't have permission to access this account" |
 | 404 | "Profile not found" placeholder within the current screen |

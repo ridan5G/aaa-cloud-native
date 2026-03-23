@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
-# scripts/pcap-get.sh — copy /captures/test.pcap from the pcap PVC to a local file.
+# scripts/pcap-get.sh — copy a pcap file from a PVC to a local file.
 #
-# Usage:  bash scripts/pcap-get.sh <namespace> <pvc-name> [output-file]
+# Usage:  bash scripts/pcap-get.sh <namespace> <pvc-name> [output-file] [source-filename]
+#
+#   source-filename  — filename inside the PVC (default: test.pcap)
+#                      regression-tester writes test.pcap
+#                      radius-server writes radius.pcap
 #
 # Spins up a disposable alpine pod that mounts the PVC, runs kubectl cp,
-# then deletes the pod.  Works even after the test Job pod has exited.
+# then deletes the pod.  Works even after the Job/pod has exited.
 set -euo pipefail
 
 NAMESPACE="${1:?namespace required}"
 PVC_NAME="${2:?pvc-name required}"
 OUT_FILE="${3:-./test.pcap}"
+SRC_FILENAME="${4:-test.pcap}"
 HELPER_POD="pcap-reader"
 
 # ── Verify the PVC exists ────────────────────────────────────────────────────
@@ -40,8 +45,8 @@ kubectl wait pod "${HELPER_POD}" \
   --timeout=60s
 
 # ── Copy the file ────────────────────────────────────────────────────────────
-echo "Copying /cap/test.pcap → ${OUT_FILE} ..."
-kubectl cp "${NAMESPACE}/${HELPER_POD}:/cap/test.pcap" "${OUT_FILE}"
+echo "Copying /cap/${SRC_FILENAME} → ${OUT_FILE} ..."
+kubectl cp "${NAMESPACE}/${HELPER_POD}:/cap/${SRC_FILENAME}" "${OUT_FILE}"
 
 # ── Clean up ─────────────────────────────────────────────────────────────────
 kubectl delete pod "${HELPER_POD}" -n "${NAMESPACE}" --ignore-not-found

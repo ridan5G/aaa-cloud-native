@@ -79,6 +79,7 @@ class TestExportAndIpSearch:
             p = create_pool(
                 c, subnet=POOL_SUBNET,
                 pool_name="pool-export-13", account_name=ACCOUNT,
+                replace_on_conflict=True,
             )
             cls.pool_id = p["pool_id"]
 

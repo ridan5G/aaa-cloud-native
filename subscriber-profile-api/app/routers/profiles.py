@@ -623,6 +623,66 @@ async def patch_profile(sim_id: str, body: ProfilePatch, conn=Depends(get_conn))
     return await _build_profile_response(sim_id, conn)
 
 
+@router.post("/profiles/{sim_id}/release-ips", dependencies=[Depends(require_auth)])
+async def release_ips(sim_id: str, conn=Depends(get_conn)):
+    existing = await conn.fetchrow(
+        "SELECT sim_id FROM sim_profiles WHERE sim_id = $1::uuid AND status != 'terminated'",
+        sim_id,
+    )
+    if not existing:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "resource": "subscriber_profile", "sim_id": sim_id},
+        )
+
+    async with conn.transaction():
+        imsi_rows = await conn.fetch(
+            """
+            SELECT pool_id::text, host(static_ip) AS ip, imsi, apn
+            FROM imsi_apn_ips
+            WHERE imsi IN (SELECT imsi FROM imsi2sim WHERE sim_id = $1::uuid)
+              AND pool_id IS NOT NULL
+            """,
+            sim_id,
+        )
+        sim_rows = await conn.fetch(
+            """
+            SELECT pool_id::text, host(static_ip) AS ip, apn
+            FROM sim_apn_ips
+            WHERE sim_id = $1::uuid AND pool_id IS NOT NULL
+            """,
+            sim_id,
+        )
+
+        if imsi_rows:
+            await conn.execute(
+                "DELETE FROM imsi_apn_ips "
+                "WHERE imsi IN (SELECT imsi FROM imsi2sim WHERE sim_id = $1::uuid) "
+                "AND pool_id IS NOT NULL",
+                sim_id,
+            )
+            await conn.executemany(
+                "INSERT INTO ip_pool_available (pool_id, ip) VALUES ($1::uuid, $2::inet) ON CONFLICT DO NOTHING",
+                [(r["pool_id"], r["ip"]) for r in imsi_rows],
+            )
+
+        if sim_rows:
+            await conn.execute(
+                "DELETE FROM sim_apn_ips WHERE sim_id = $1::uuid AND pool_id IS NOT NULL",
+                sim_id,
+            )
+            await conn.executemany(
+                "INSERT INTO ip_pool_available (pool_id, ip) VALUES ($1::uuid, $2::inet) ON CONFLICT DO NOTHING",
+                [(r["pool_id"], r["ip"]) for r in sim_rows],
+            )
+
+    released = (
+        [{"imsi": r["imsi"], "apn": r["apn"], "ip": r["ip"], "pool_id": r["pool_id"]} for r in imsi_rows]
+        + [{"imsi": None, "apn": r["apn"], "ip": r["ip"], "pool_id": r["pool_id"]} for r in sim_rows]
+    )
+    return {"released_count": len(released), "ips_released": released}
+
+
 @router.delete("/profiles/{sim_id}", status_code=204, dependencies=[Depends(require_auth)])
 async def delete_profile(sim_id: str, conn=Depends(get_conn)):
     existing = await conn.fetchrow(

@@ -34,7 +34,8 @@ class TestImsiOps:
                           headers={"Authorization": f"Bearer {JWT_TOKEN}"},
                           timeout=30.0) as c:
             p = create_pool(c, subnet=POOL_SUBNET,
-                            pool_name="pool-ops-06", account_name="TestAccount")
+                            pool_name="pool-ops-06", account_name="TestAccount",
+                            replace_on_conflict=True)
             cls.pool_id = p["pool_id"]
 
             # Primary profile — imsi mode, 2 IMSIs

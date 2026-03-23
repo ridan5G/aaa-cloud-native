@@ -55,42 +55,126 @@ AAA hot path — no latency SLA applies, but it must be correct and consistent.
 | `GET` | `/profiles/{sim_id}/imsis/{imsi}` | Get specific IMSI + apn_ips | 200 |
 | `POST` | `/profiles/{sim_id}/imsis` | Add IMSI + apn_ips | 201 |
 | `PATCH` | `/profiles/{sim_id}/imsis/{imsi}` | Update IMSI status, priority, or apn_ips | 200 |
-| `DELETE` | `/profiles/{sim_id}/imsis/{imsi}` | Remove IMSI and all its apn_ips | 204 |
+| `DELETE` | `/profiles/{sim_id}/imsis/{imsi}` | Remove IMSI, its apn_ips, and return pool-managed IPs to pool | 204 |
+
+### IP Release
+
+| Method | Path | Description | Success |
+|---|---|---|---|
+| `POST` | `/profiles/{sim_id}/release-ips` | Return all pool-managed IPs for the SIM to the pool | 200 `{released_count, ips_released[]}` |
+
+**`POST /profiles/{sim_id}/release-ips`**
+
+Atomically clears all dynamic IP allocations for a SIM profile so the device gets a fresh IP on its next first-connection. IMSI bindings in `imsi2sim` are preserved — only the IP allocations in `imsi_apn_ips` and `sim_apn_ips` are removed and the IPs returned to `ip_pool_available`.
+
+- Covers all IMSIs linked to the SIM, including multi-IMSI SIM siblings
+- Static IPs (`pool_id IS NULL`) are never released
+- Idempotent: calling with no IPs allocated returns `released_count: 0`
+- Returns 404 if `sim_id` is not found or is terminated
+
+**Response (200):**
+```json
+{
+  "released_count": 2,
+  "ips_released": [
+    {"imsi": "278770000000001", "apn": null,       "ip": "10.0.0.5", "pool_id": "..."},
+    {"imsi": "278770000000002", "apn": "internet",  "ip": "10.0.0.6", "pool_id": "..."},
+    {"imsi": null,              "apn": "mgmt",      "ip": "10.0.1.1", "pool_id": "..."}
+  ]
+}
+```
+
+> `imsi: null` entries are card-level bindings from `sim_apn_ips` (e.g. `iccid`/`iccid_apn` resolution modes).
+
+**`DELETE /profiles/{sim_id}/imsis/{imsi}` — enhanced behaviour**
+
+In addition to removing the IMSI from `imsi2sim` (which cascades to `imsi_apn_ips`), any pool-managed IPs that were allocated to that IMSI are returned to `ip_pool_available` before deletion. The IMSI is then free to be assigned to a different profile without conflict.
+
+### Routing Domains
+
+A routing domain is a named uniqueness scope for IP addresses. Within one domain no two
+pools may have overlapping subnets. `allowed_prefixes` optionally constrains which subnets
+may be created in the domain.
+
+| Method | Path | Description | Success | Notes |
+|---|---|---|---|---|
+| `POST` | `/routing-domains` | Create routing domain | 201 `{id, name}` | 409 if name already exists |
+| `GET` | `/routing-domains` | List all routing domains | 200 `{items[], total, page}` | Returns full objects (id, name, description, allowed_prefixes, pool_count) |
+| `GET` | `/routing-domains/{id}` | Get routing domain by UUID | 200 | Includes pool_count |
+| `PATCH` | `/routing-domains/{id}` | Update name, description, or allowed_prefixes | 200 `{id}` | |
+| `DELETE` | `/routing-domains/{id}` | Delete routing domain | 204 or 409 | 409 `domain_in_use` if any pools still reference it |
+| `GET` | `/routing-domains/{id}/suggest-cidr?size=N` | Find smallest free CIDR with ≥ N usable IPs | 200 `{suggested_cidr, prefix_len, usable_hosts, …}` | 422 if `allowed_prefixes` is empty; 404 if no free block found |
+
+**`POST /routing-domains` request body:**
+
+```json
+{
+  "name": "vpn-north",
+  "description": "VPN pools for northern region",
+  "allowed_prefixes": ["10.0.0.0/8", "172.16.0.0/12"]
+}
+```
+
+- `description` and `allowed_prefixes` are optional.
+- `allowed_prefixes`: CIDR list; if non-empty, all pool subnets in this domain must be contained within one of these prefixes. Empty = unrestricted.
+
+**`GET /routing-domains/{id}/suggest-cidr?size=N` response:**
+
+```json
+{
+  "suggested_cidr": "10.0.1.0/24",
+  "prefix_len": 24,
+  "usable_hosts": 254,
+  "routing_domain_id": "uuid-...",
+  "routing_domain_name": "vpn-north"
+}
+```
+
+Algorithm: finds the smallest prefix (e.g. `/24` for `size=250`) where no existing pool overlaps, within `allowed_prefixes`. Scans up to 10,000 candidate blocks per prefix.
+
+**Error responses:**
+- `422 no_allowed_prefixes` — domain has no `allowed_prefixes` configured (search space undefined).
+- `404 no_free_cidr` — no non-overlapping block found within `allowed_prefixes`.
+- `409 subnet_outside_allowed_prefixes` — emitted by `POST /pools` when the subnet is not contained within any allowed prefix.
 
 ### IP Pools
 
 | Method | Path | Description | Success | Notes |
 |---|---|---|---|---|
 | `POST` | `/pools` | Create pool + pre-populate ip_pool_available | 201 `{pool_id}` | Synchronous pre-population; rejects with 409 if subnet overlaps another pool in the same routing domain |
-| `GET` | `/pools/{pool_id}` | Get pool definition | 200 | Response includes `routing_domain` |
-| `GET` | `/pools?account_name={name}&routing_domain={domain}&status=active&page=1&limit=100` | List pools with filters | 200 `{items[], total, page}` | Max limit=1000 |
+| `GET` | `/pools/{pool_id}` | Get pool definition | 200 | Response includes `routing_domain` (name) and `routing_domain_id` (UUID) |
+| `GET` | `/pools?account_name={name}&routing_domain={name}&routing_domain_id={uuid}&status=active&page=1&limit=100` | List pools with filters | 200 `{items[], total, page}` | Max limit=1000; filter by name or UUID |
 | `GET` | `/pools/{pool_id}/stats` | total / allocated / available IP counts | 200 `{total, allocated, available}` | |
-| `PATCH` | `/pools/{pool_id}` | Update name or status | 200 | `routing_domain` is immutable after creation |
+| `PATCH` | `/pools/{pool_id}` | Update name or status | 200 | `routing_domain_id` is immutable after creation |
 | `DELETE` | `/pools/{pool_id}` | Delete pool | 204 or 409 | 409 if allocated > 0; check is app-layer only |
-| `GET` | `/routing-domains` | List all distinct routing domain names | 200 `{items[]}` | Useful for populating UI selects |
 
 **`POST /pools` request body:**
 
 ```json
 {
-  "pool_name":      "Pool-A",
-  "account_name":   "Melita",
-  "routing_domain": "vpn-north",
-  "subnet":         "10.0.0.0/24",
-  "start_ip":       "10.0.0.1",
-  "end_ip":         "10.0.0.254"
+  "name":             "Pool-A",
+  "account_name":     "Melita",
+  "routing_domain":   "vpn-north",
+  "routing_domain_id": "uuid-optional",
+  "subnet":           "10.0.0.0/24",
+  "start_ip":         "10.0.0.1",
+  "end_ip":           "10.0.0.254"
 }
 ```
 
-- `routing_domain` is optional; defaults to `"default"` if omitted.
+- `routing_domain` (name) is optional; defaults to `"default"` if omitted.
+- `routing_domain_id` (UUID) takes priority over `routing_domain` if both are supplied.
 - `start_ip` / `end_ip` are optional; server derives them from the subnet if absent.
-- On creation the server checks for CIDR overlap with any existing pool sharing the same `routing_domain`. If overlap is found, responds `409 pool_overlap` (see error example below).
+- On creation the server validates:
+  1. Subnet is contained within the domain's `allowed_prefixes` (if non-empty) → `409 subnet_outside_allowed_prefixes`
+  2. No overlapping subnet in the same routing domain → `409 pool_overlap`
+- If `routing_domain` name does not exist it is **auto-created** with empty `allowed_prefixes` (backward-compatible behaviour for callers that pass only a name).
 
 **Routing Domain concept:**
 
 A routing domain is a named uniqueness scope for IP addresses. Within one routing domain no two pools may contain overlapping IP ranges — the same IP address can only be assigned once within a domain. Pools in different routing domains may share identical or overlapping subnets without conflict (e.g. NAT pools vs. VPN pools using the same RFC 1918 space).
 
-Pool `routing_domain` is **immutable** after creation. To move a pool to a different domain, delete and recreate it.
+Pool `routing_domain_id` is **immutable** after creation. To move a pool to a different domain, delete and recreate it.
 
 ### IMSI Range Configs
 
@@ -201,8 +285,13 @@ These rules are applied before any DB write. Validation errors return 400.
 | Profile C: each IMSI may have multiple `apn_ips`; `apn` values must be distinct | validation_failed |
 | PATCH changing `ip_resolution` to imsi_apn without supplying `apn` fields | validation_failed |
 | `pool_id` in iccid_ips or apn_ips must exist in `ip_pools` | validation_failed, field=pool_id |
-| `POST /pools`: subnet must not overlap with any existing pool in the same `routing_domain` | 409 `pool_overlap` (see example below) |
+| `POST /pools`: subnet must not overlap with any existing pool in the same routing domain | 409 `pool_overlap` (see example below) |
 | `POST /pools`: `routing_domain` must not be empty if provided | validation_failed, field=routing_domain |
+| `POST /pools`: subnet must be contained within the domain's `allowed_prefixes` (when non-empty) | 409 `subnet_outside_allowed_prefixes` |
+| `POST /routing-domains`: `name` must not be empty | validation_failed, field=name |
+| `POST /routing-domains`: each entry in `allowed_prefixes` must be valid CIDR notation | validation_failed, field=allowed_prefixes |
+| `DELETE /routing-domains/{id}`: cannot delete if pools exist in the domain | 409 `domain_in_use` |
+| `GET /routing-domains/{id}/suggest-cidr`: domain must have non-empty `allowed_prefixes` | 422 `no_allowed_prefixes` |
 | `f_imsi` must be ≤ `t_imsi` in range-configs | validation_failed |
 | `f_iccid` must be ≤ `t_iccid` in iccid-range-configs | validation_failed |
 | `f_iccid` and `t_iccid` must be 19–20 digits | validation_failed |
@@ -222,6 +311,41 @@ These rules are applied before any DB write. Validation errors return 400.
 
 ## Request / Response Examples
 
+### Create Routing Domain
+
+```http
+POST /v1/routing-domains
+Content-Type: application/json
+
+{
+  "name": "vpn-north",
+  "description": "VPN pools for northern region",
+  "allowed_prefixes": ["10.0.0.0/8"]
+}
+
+HTTP/1.1 201 Created
+{ "id": "d1e2f3a4-b5c6-7890-abcd-ef1234567890", "name": "vpn-north" }
+```
+
+### Suggest Free CIDR
+
+```http
+GET /v1/routing-domains/d1e2f3a4-b5c6-7890-abcd-ef1234567890/suggest-cidr?size=250
+
+HTTP/1.1 200 OK
+{
+  "suggested_cidr": "10.0.0.0/24",
+  "prefix_len": 24,
+  "usable_hosts": 254,
+  "routing_domain_id": "d1e2f3a4-b5c6-7890-abcd-ef1234567890",
+  "routing_domain_name": "vpn-north"
+}
+
+# If allowed_prefixes is empty:
+HTTP/1.1 422 Unprocessable Entity
+{ "error": "no_allowed_prefixes", "detail": "Configure allowed_prefixes on this routing domain before using suggest-cidr..." }
+```
+
 ### Create Pool (with routing domain)
 
 ```http
@@ -229,14 +353,34 @@ POST /v1/pools
 Content-Type: application/json
 
 {
-  "pool_name":      "VPN-North-A",
-  "account_name":   "Melita",
-  "routing_domain": "vpn-north",
-  "subnet":         "10.0.0.0/24"
+  "name":              "VPN-North-A",
+  "account_name":      "Melita",
+  "routing_domain_id": "d1e2f3a4-b5c6-7890-abcd-ef1234567890",
+  "subnet":            "10.0.0.0/24"
 }
 
 HTTP/1.1 201 Created
 { "pool_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890" }
+```
+
+### Subnet Outside Allowed Prefixes Error (409)
+
+```http
+POST /v1/pools
+Content-Type: application/json
+
+{
+  "name":              "Bad-Pool",
+  "routing_domain_id": "d1e2f3a4-b5c6-7890-abcd-ef1234567890",
+  "subnet":            "192.168.1.0/24"
+}
+
+HTTP/1.1 409 Conflict
+{
+  "error": "subnet_outside_allowed_prefixes",
+  "detail": "Subnet 192.168.1.0/24 is not within the allowed prefixes for this routing domain: ['10.0.0.0/8']",
+  "allowed_prefixes": ["10.0.0.0/8"]
+}
 ```
 
 ### Pool Overlap Error (409)

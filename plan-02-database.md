@@ -16,7 +16,7 @@
 
 ---
 
-## Schema — 9 Tables
+## Schema — 10 Tables
 
 ### Table 1: sim_profiles
 
@@ -134,39 +134,78 @@ CREATE INDEX idx_sii_sim_id ON sim_apn_ips (sim_id);
 
 ---
 
-### Table 5: ip_pools
+### Table 5: routing_domains
+
+Named uniqueness scopes for IP address assignment. Within one routing domain, no two
+pools may have overlapping subnets. `allowed_prefixes` (optional) restricts which
+subnets can be created in the domain and enables the suggest-CIDR endpoint.
+
+```sql
+CREATE TABLE routing_domains (
+    id               UUID        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+    name             TEXT        NOT NULL,
+    description      TEXT,
+    allowed_prefixes TEXT[]      NOT NULL DEFAULT '{}',
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_routing_domain_name UNIQUE (name)
+);
+
+CREATE INDEX idx_rd_name ON routing_domains (name);
+
+-- Auto-create the default routing domain on DB init
+INSERT INTO routing_domains (name, description)
+VALUES ('default', 'Default routing domain')
+ON CONFLICT (name) DO NOTHING;
+```
+
+**`allowed_prefixes` semantics:**
+- Empty array (`{}`) = unrestricted — any subnet may be created in this domain.
+- Non-empty array = subnet of a new pool must be contained within one of the listed CIDRs.
+  Example: `['10.0.0.0/8', '172.16.0.0/12']` restricts pools to RFC 1918 private ranges.
+- If a new pool's subnet falls outside all prefixes, the API rejects it with `409 subnet_outside_allowed_prefixes`.
+- The `suggest-cidr` endpoint (`GET /routing-domains/{id}/suggest-cidr?size=N`) uses these prefixes as the search space to find a free CIDR block.
+
+---
+
+### Table 6: ip_pools
 
 IP pool definitions. One pool covers one subnet. IPs in the pool are pre-populated
 into `ip_pool_available` at pool creation time.
 
 ```sql
 CREATE TABLE ip_pools (
-    pool_id         UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
-    account_name    TEXT,
-    pool_name       TEXT        NOT NULL,
-    routing_domain  TEXT        NOT NULL DEFAULT 'default',  -- uniqueness scope for IP addresses
-    subnet          CIDR        NOT NULL,
-    start_ip        INET        NOT NULL,
-    end_ip          INET        NOT NULL,    -- broadcast address (last in subnet)
-    status          TEXT        NOT NULL DEFAULT 'active',
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    pool_id            UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
+    account_name       TEXT,
+    pool_name          TEXT        NOT NULL,
+    routing_domain_id  UUID        NOT NULL REFERENCES routing_domains (id),
+    subnet             CIDR        NOT NULL,
+    start_ip           INET        NOT NULL,
+    end_ip             INET        NOT NULL,
+    status             TEXT        NOT NULL DEFAULT 'active',
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT chk_pool_status CHECK (status IN ('active', 'suspended'))
 );
 
 -- Overlap detection: before INSERT, app layer runs:
 --   SELECT pool_id, pool_name, subnet FROM ip_pools
---   WHERE routing_domain = $routing_domain AND subnet && $new_subnet::cidr
+--   WHERE routing_domain_id = $routing_domain_id AND subnet && $new_subnet::cidr
 -- PostgreSQL && operator on CIDR checks for network overlap (shared addresses).
 -- If any row is returned → reject with 409 pool_overlap.
 
-CREATE INDEX idx_pools_account       ON ip_pools (account_name);
-CREATE INDEX idx_pools_routing_domain ON ip_pools (routing_domain);
+CREATE INDEX idx_pools_account           ON ip_pools (account_name);
+CREATE INDEX idx_pools_routing_domain_id ON ip_pools (routing_domain_id);
 ```
+
+**Pool creation backward compatibility:**
+- `POST /pools` still accepts `routing_domain` (name string) for backward compatibility.
+  If the named domain doesn't exist it is auto-created with empty `allowed_prefixes`.
+- `routing_domain_id` (UUID) takes priority if both are supplied.
 
 ---
 
-### Table 6: ip_pool_available
+### Table 7: ip_pool_available
 
 Work-queue of unallocated IPs. Pre-populated at pool creation.
 `SELECT FOR UPDATE SKIP LOCKED` prevents race conditions during concurrent allocation.
@@ -192,7 +231,7 @@ WHERE  p.pool_id = $pool_id;
 
 ---
 
-### Table 7: iccid_range_configs
+### Table 8: iccid_range_configs
 
 Parent table for Multi-IMSI SIM provisioning. Each row defines a range of ICCIDs
 (physical SIM cards) that carry multiple IMSIs. The associated IMSI ranges are
@@ -240,7 +279,7 @@ CREATE INDEX idx_iccid_rc_range     ON iccid_range_configs (f_iccid, t_iccid);
 
 ---
 
-### Table 8: imsi_range_configs
+### Table 9: imsi_range_configs
 
 IMSI range authorization table. Each row defines one IMSI range eligible for dynamic
 first-connection allocation.
@@ -319,7 +358,7 @@ VALUES
 
 ---
 
-### Table 9: range_config_apn_pools
+### Table 10: range_config_apn_pools
 
 Per-APN pool overrides for a specific `imsi_range_configs` entry. When
 `ip_resolution` is `"imsi_apn"` or `"iccid_apn"`, the first-connection allocation
@@ -359,13 +398,14 @@ CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN NEW.updated_at = now(); RETURN NEW; END; $$;
 
-CREATE TRIGGER trg_sp_updated_at      BEFORE UPDATE ON sim_profiles      FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_si_updated_at      BEFORE UPDATE ON imsi2sim          FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_sai_updated_at     BEFORE UPDATE ON imsi_apn_ips      FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_sii_updated_at     BEFORE UPDATE ON sim_apn_ips       FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_pools_updated_at   BEFORE UPDATE ON ip_pools                FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_iccid_rc_updated_at BEFORE UPDATE ON iccid_range_configs   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_irc_updated_at     BEFORE UPDATE ON imsi_range_configs      FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_sp_updated_at      BEFORE UPDATE ON sim_profiles         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_si_updated_at      BEFORE UPDATE ON imsi2sim             FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_sai_updated_at     BEFORE UPDATE ON imsi_apn_ips         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_sii_updated_at     BEFORE UPDATE ON sim_apn_ips          FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_rd_updated_at      BEFORE UPDATE ON routing_domains      FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_pools_updated_at   BEFORE UPDATE ON ip_pools             FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_iccid_rc_updated_at BEFORE UPDATE ON iccid_range_configs FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_irc_updated_at     BEFORE UPDATE ON imsi_range_configs   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 ```
 
 ---

@@ -149,6 +149,7 @@ class TestRadiusServer:
                 subnet=KNOWN_POOL_SUBNET,
                 pool_name="pool-radius-known-12",
                 account_name=ACCOUNT_NAME,
+                replace_on_conflict=True,
             )
             cls.known_pool_id = pool_a["pool_id"]
 
@@ -172,6 +173,7 @@ class TestRadiusServer:
                 subnet=FC_POOL_SUBNET,
                 pool_name="pool-radius-fc-12",
                 account_name=ACCOUNT_NAME,
+                replace_on_conflict=True,
             )
             cls.fc_pool_id = pool_b["pool_id"]
 
@@ -252,6 +254,22 @@ class TestRadiusServer:
         resp = rc.authenticate(IMSI_KNOWN, TEST_APN)
         assert resp.is_accept, \
             f"Expected Access-Accept (code=2), got code={resp.code}"
+
+    # 12.2b ───────────────────────────────────────────────────────────────────
+    def test_02b_known_imsi_access_accept_100_requests(self, rc: RadiusClient):
+        """
+        Stress: send 100 successive Access-Requests for a pre-provisioned IMSI.
+        All 100 must return Access-Accept (code=2).
+        Failures are collected and reported together so the full 100 always run.
+        """
+        failures = []
+        for i in range(1, 101):
+            resp = rc.authenticate(IMSI_KNOWN, TEST_APN)
+            if not resp.is_accept:
+                failures.append(f"request {i}: code={resp.code}")
+        assert not failures, (
+            f"{len(failures)}/100 requests failed:\n" + "\n".join(failures)
+        )
 
     # 12.3 ────────────────────────────────────────────────────────────────────
     def test_03_framed_ip_matches_provisioned_static_ip(self, rc: RadiusClient):

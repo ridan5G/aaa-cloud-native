@@ -68,10 +68,12 @@ class TestS2SingleImsiApn:
             cls.pool_internet_id = create_pool(
                 c, subnet="100.65.230.0/29",
                 pool_name="s2-internet", account_name="TestAccount",
+                replace_on_conflict=True,
             )["pool_id"]
             cls.pool_ims_id = create_pool(
                 c, subnet="100.65.230.8/29",
                 pool_name="s2-ims", account_name="TestAccount",
+                replace_on_conflict=True,
             )["pool_id"]
             rc = create_range_config(
                 c,
@@ -165,6 +167,7 @@ class TestS3SingleIccid:
             cls.pool_id = create_pool(
                 c, subnet="100.65.230.16/29",
                 pool_name="s3-pool", account_name="TestAccount",
+                replace_on_conflict=True,
             )["pool_id"]
             rc = create_range_config(
                 c,
@@ -240,10 +243,12 @@ class TestS4SingleIccidApn:
             cls.pool_internet_id = create_pool(
                 c, subnet="100.65.230.24/29",
                 pool_name="s4-internet", account_name="TestAccount",
+                replace_on_conflict=True,
             )["pool_id"]
             cls.pool_ims_id = create_pool(
                 c, subnet="100.65.230.32/29",
                 pool_name="s4-ims", account_name="TestAccount",
+                replace_on_conflict=True,
             )["pool_id"]
             rc = create_range_config(
                 c,
@@ -333,10 +338,12 @@ class TestM1MultiImsi:
             cls.pool_slot1_id = create_pool(
                 c, subnet="100.65.230.40/29",
                 pool_name="m1-slot1", account_name="TestAccount",
+                replace_on_conflict=True,
             )["pool_id"]
             cls.pool_slot2_id = create_pool(
                 c, subnet="100.65.230.48/29",
                 pool_name="m1-slot2", account_name="TestAccount",
+                replace_on_conflict=True,
             )["pool_id"]
             iccid_rc = create_iccid_range_config(
                 c,
@@ -445,10 +452,12 @@ class TestM2MultiImsiApn:
             cls.pool_internet_id = create_pool(
                 c, subnet="100.65.230.56/29",
                 pool_name="m2-internet", account_name="TestAccount",
+                replace_on_conflict=True,
             )["pool_id"]
             cls.pool_ims_id = create_pool(
                 c, subnet="100.65.230.64/29",
                 pool_name="m2-ims", account_name="TestAccount",
+                replace_on_conflict=True,
             )["pool_id"]
             iccid_rc = create_iccid_range_config(
                 c,
@@ -569,6 +578,7 @@ class TestM3MultiIccid:
             cls.pool_id = create_pool(
                 c, subnet="100.65.230.72/29",
                 pool_name="m3-pool", account_name="TestAccount",
+                replace_on_conflict=True,
             )["pool_id"]
             iccid_rc = create_iccid_range_config(
                 c,
@@ -655,10 +665,12 @@ class TestM4MultiIccidApn:
             cls.pool_internet_id = create_pool(
                 c, subnet="100.65.230.80/29",
                 pool_name="m4-internet", account_name="TestAccount",
+                replace_on_conflict=True,
             )["pool_id"]
             cls.pool_ims_id = create_pool(
                 c, subnet="100.65.230.88/29",
                 pool_name="m4-ims", account_name="TestAccount",
+                replace_on_conflict=True,
             )["pool_id"]
             iccid_rc = create_iccid_range_config(
                 c,

@@ -216,5 +216,16 @@ async def delete_imsi(sim_id: str, imsi: str, conn=Depends(get_conn)):
             status_code=404,
             detail={"error": "not_found", "resource": "subscriber_imsi", "imsi": imsi},
         )
-    # CASCADE removes imsi_apn_ips
-    await conn.execute("DELETE FROM imsi2sim WHERE imsi = $1", imsi)
+    async with conn.transaction():
+        ip_rows = await conn.fetch(
+            "SELECT pool_id::text, host(static_ip) AS ip FROM imsi_apn_ips "
+            "WHERE imsi = $1 AND pool_id IS NOT NULL",
+            imsi,
+        )
+        # CASCADE removes imsi_apn_ips
+        await conn.execute("DELETE FROM imsi2sim WHERE imsi = $1", imsi)
+        if ip_rows:
+            await conn.executemany(
+                "INSERT INTO ip_pool_available (pool_id, ip) VALUES ($1::uuid, $2::inet) ON CONFLICT DO NOTHING",
+                [(r["pool_id"], r["ip"]) for r in ip_rows],
+            )

@@ -38,15 +38,34 @@ export interface Profile {
   updated_at:    string
 }
 
+export interface RoutingDomain {
+  id:               string
+  name:             string
+  description:      string | null
+  allowed_prefixes: string[]
+  pool_count?:      number
+  created_at?:      string
+  updated_at?:      string
+}
+
+export interface SuggestCidrResult {
+  suggested_cidr:      string
+  prefix_len:          number
+  usable_hosts:        number
+  routing_domain_id:   string
+  routing_domain_name: string
+}
+
 export interface Pool {
-  pool_id:        string
-  name:           string
-  account_name:   string | null
-  routing_domain: string
-  subnet:         string
-  start_ip:       string
-  end_ip:         string
-  status:         'active' | 'suspended'
+  pool_id:           string
+  name:              string
+  account_name:      string | null
+  routing_domain:    string        // domain name (denormalized for display)
+  routing_domain_id: string        // domain UUID
+  subnet:            string
+  start_ip:          string
+  end_ip:            string
+  status:            'active' | 'suspended'
 }
 
 export interface PoolStats {

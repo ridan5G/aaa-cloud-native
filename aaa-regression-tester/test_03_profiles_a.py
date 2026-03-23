@@ -29,7 +29,8 @@ class TestProfileA:
                           headers={"Authorization": f"Bearer {JWT_TOKEN}"},
                           timeout=30.0) as c:
             p = create_pool(c, subnet=POOL_SUBNET,
-                            pool_name="pool-a-03", account_name="TestAccount")
+                            pool_name="pool-a-03", account_name="TestAccount",
+                            replace_on_conflict=True)
             cls.pool_id = p["pool_id"]
 
     @classmethod

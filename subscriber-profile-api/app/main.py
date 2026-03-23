@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 from app.config import HTTP_PORT, METRICS_PORT, CORS_ORIGINS
 from app.db import init_db, close_db
 from app.metrics import start_metrics_server, api_request_duration, http_requests_in_flight
-from app.routers import health, pools, range_configs, iccid_range_configs, profiles, imsis, first_connection, bulk
+from app.routers import health, pools, routing_domains, range_configs, iccid_range_configs, profiles, imsis, first_connection, bulk
 import time
 
 logging.basicConfig(
@@ -80,6 +80,7 @@ async def metrics_middleware(request: Request, call_next):
 PREFIX = "/v1"
 
 app.include_router(health.router, tags=["health"])
+app.include_router(routing_domains.router, prefix=PREFIX, tags=["routing-domains"])
 app.include_router(pools.router, prefix=PREFIX, tags=["pools"])
 app.include_router(range_configs.router, prefix=PREFIX, tags=["range-configs"])
 app.include_router(iccid_range_configs.router, prefix=PREFIX, tags=["iccid-range-configs"])
