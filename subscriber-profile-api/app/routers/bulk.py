@@ -1,7 +1,9 @@
 """
-POST /profiles/bulk  — async bulk upsert (JSON body list or CSV multipart upload)
-GET  /jobs           — list bulk jobs (newest first, ?limit=N)
-GET  /jobs/{job_id} — poll bulk job status
+POST /profiles/bulk             — async bulk upsert (JSON body list or CSV multipart upload)
+POST /profiles/bulk-release-ips — async bulk IP release for a set of SIMs
+POST /imsis/bulk-delete         — async bulk IMSI removal with IP return to pool
+GET  /jobs                      — list bulk jobs (newest first, ?limit=N)
+GET  /jobs/{job_id}             — poll bulk job status
 """
 import csv
 import io
@@ -284,6 +286,277 @@ def _parse_csv(text: str) -> list[dict]:
 
     return ordered
 
+
+# ── Bulk Release IPs ─────────────────────────────────────────────────────────
+
+async def _release_sim_ips(conn, sim_id: str) -> int:
+    """Release all pool-managed IPs for one SIM. Returns count of IPs released."""
+    async with conn.transaction():
+        imsi_rows = await conn.fetch(
+            """
+            SELECT pool_id::text, host(static_ip) AS ip
+            FROM imsi_apn_ips
+            WHERE imsi IN (SELECT imsi FROM imsi2sim WHERE sim_id = $1::uuid)
+              AND pool_id IS NOT NULL
+            """,
+            sim_id,
+        )
+        sim_rows = await conn.fetch(
+            "SELECT pool_id::text, host(static_ip) AS ip FROM sim_apn_ips "
+            "WHERE sim_id = $1::uuid AND pool_id IS NOT NULL",
+            sim_id,
+        )
+        if imsi_rows:
+            await conn.execute(
+                "DELETE FROM imsi_apn_ips "
+                "WHERE imsi IN (SELECT imsi FROM imsi2sim WHERE sim_id = $1::uuid) "
+                "AND pool_id IS NOT NULL",
+                sim_id,
+            )
+            await conn.executemany(
+                "INSERT INTO ip_pool_available (pool_id, ip) VALUES ($1::uuid, $2::inet) ON CONFLICT DO NOTHING",
+                [(r["pool_id"], r["ip"]) for r in imsi_rows],
+            )
+        if sim_rows:
+            await conn.execute(
+                "DELETE FROM sim_apn_ips WHERE sim_id = $1::uuid AND pool_id IS NOT NULL",
+                sim_id,
+            )
+            await conn.executemany(
+                "INSERT INTO ip_pool_available (pool_id, ip) VALUES ($1::uuid, $2::inet) ON CONFLICT DO NOTHING",
+                [(r["pool_id"], r["ip"]) for r in sim_rows],
+            )
+    return len(imsi_rows) + len(sim_rows)
+
+
+async def _process_bulk_release_ips(job_id: str, sim_ids: list[str]):
+    start = time.monotonic()
+    processed = 0
+    failed = 0
+    errors = []
+
+    async with get_pool().acquire() as conn:
+        for idx, sim_id in enumerate(sim_ids):
+            try:
+                exists = await conn.fetchval(
+                    "SELECT 1 FROM sim_profiles WHERE sim_id = $1::uuid AND status != 'terminated'",
+                    sim_id,
+                )
+                if not exists:
+                    raise BulkValidationError("sim_id", f"SIM '{sim_id}' not found or terminated")
+                await _release_sim_ips(conn, sim_id)
+                processed += 1
+                bulk_job_profiles_total.labels(outcome="processed").inc()
+            except BulkValidationError as exc:
+                failed += 1
+                bulk_job_profiles_total.labels(outcome="failed").inc()
+                logger.warning(
+                    '{"job_id":"%s","idx":%d,"result":"failed","field":"%s","message":"%s"}',
+                    job_id, idx, exc.field, str(exc),
+                )
+                errors.append({"index": idx, "value": sim_id, "field": exc.field, "message": str(exc)})
+                if len(errors) > 1000:
+                    break
+            except Exception as exc:
+                failed += 1
+                bulk_job_profiles_total.labels(outcome="failed").inc()
+                logger.error(
+                    '{"job_id":"%s","idx":%d,"result":"failed","message":"%s"}',
+                    job_id, idx, str(exc),
+                )
+                errors.append({"index": idx, "value": sim_id, "message": str(exc)})
+                if len(errors) > 1000:
+                    break
+
+        elapsed = time.monotonic() - start
+        bulk_job_duration.observe(elapsed)
+        await conn.execute(
+            "UPDATE bulk_jobs SET status='completed', processed=$1, failed=$2, errors=$3::jsonb, updated_at=now() "
+            "WHERE job_id=$4::uuid",
+            processed, failed, errors, job_id,
+        )
+
+    logger.info(
+        '{"job_id":"%s","status":"completed","processed":%d,"failed":%d,"elapsed_s":%.1f}',
+        job_id, processed, failed, elapsed,
+    )
+
+
+@router.post("/profiles/bulk-release-ips", status_code=202, dependencies=[Depends(require_auth)])
+async def bulk_release_ips(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    conn=Depends(get_conn),
+):
+    body = await request.json()
+    sim_ids = body.get("sim_ids")
+
+    if not sim_ids:
+        # Filter mode: at least one of account_name or pool_id required
+        account_name = body.get("account_name")
+        pool_id = body.get("pool_id")
+        if not account_name and not pool_id:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "validation_failed", "details": [
+                    {"field": "sim_ids", "message": "provide sim_ids list or at least one filter (account_name, pool_id)"},
+                ]},
+            )
+        filters = ["status != 'terminated'"]
+        params: list = []
+        idx = 1
+        if account_name:
+            filters.append(f"account_name = ${idx}")
+            params.append(account_name)
+            idx += 1
+        if pool_id:
+            filters.append(
+                f"sim_id IN ("
+                f"SELECT si.sim_id FROM imsi2sim si "
+                f"JOIN imsi_apn_ips iai ON iai.imsi = si.imsi "
+                f"WHERE iai.pool_id = ${idx}::uuid "
+                f"UNION "
+                f"SELECT sim_id FROM sim_apn_ips WHERE pool_id = ${idx}::uuid"
+                f")"
+            )
+            params.append(pool_id)
+        rows = await conn.fetch(
+            f"SELECT sim_id::text FROM sim_profiles WHERE {' AND '.join(filters)}",
+            *params,
+        )
+        sim_ids = [r["sim_id"] for r in rows]
+
+    if not sim_ids:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "validation_failed", "details": [
+                {"field": "sim_ids", "message": "no matching SIMs found"},
+            ]},
+        )
+
+    submitted = len(sim_ids)
+    job_id = await conn.fetchval(
+        "INSERT INTO bulk_jobs (status, submitted) VALUES ('queued', $1) RETURNING job_id::text",
+        submitted,
+    )
+    background_tasks.add_task(_process_bulk_release_ips, job_id, sim_ids)
+    return {"job_id": job_id, "submitted": submitted, "status_url": f"/v1/jobs/{job_id}"}
+
+
+# ── Bulk Delete IMSIs ─────────────────────────────────────────────────────────
+
+async def _delete_imsi_with_ip_return(conn, imsi: str):
+    """Delete one IMSI from its SIM, returning its pool-managed IPs to the pool."""
+    row = await conn.fetchrow("SELECT imsi FROM imsi2sim WHERE imsi = $1", imsi)
+    if not row:
+        raise BulkValidationError("imsi", f"IMSI '{imsi}' not found")
+    async with conn.transaction():
+        ip_rows = await conn.fetch(
+            "SELECT pool_id::text, host(static_ip) AS ip FROM imsi_apn_ips "
+            "WHERE imsi = $1 AND pool_id IS NOT NULL",
+            imsi,
+        )
+        await conn.execute("DELETE FROM imsi2sim WHERE imsi = $1", imsi)
+        if ip_rows:
+            await conn.executemany(
+                "INSERT INTO ip_pool_available (pool_id, ip) VALUES ($1::uuid, $2::inet) ON CONFLICT DO NOTHING",
+                [(r["pool_id"], r["ip"]) for r in ip_rows],
+            )
+
+
+async def _process_bulk_imsi_delete(job_id: str, imsis: list[str]):
+    start = time.monotonic()
+    processed = 0
+    failed = 0
+    errors = []
+
+    async with get_pool().acquire() as conn:
+        for idx, imsi in enumerate(imsis):
+            try:
+                if not IMSI_RE.match(imsi):
+                    raise BulkValidationError("imsi", f"IMSI '{imsi}' must be exactly 15 digits")
+                await _delete_imsi_with_ip_return(conn, imsi)
+                processed += 1
+                bulk_job_profiles_total.labels(outcome="processed").inc()
+            except BulkValidationError as exc:
+                failed += 1
+                bulk_job_profiles_total.labels(outcome="failed").inc()
+                logger.warning(
+                    '{"job_id":"%s","idx":%d,"result":"failed","field":"%s","message":"%s"}',
+                    job_id, idx, exc.field, str(exc),
+                )
+                errors.append({"index": idx, "value": imsi, "field": exc.field, "message": str(exc)})
+                if len(errors) > 1000:
+                    break
+            except Exception as exc:
+                failed += 1
+                bulk_job_profiles_total.labels(outcome="failed").inc()
+                logger.error(
+                    '{"job_id":"%s","idx":%d,"result":"failed","message":"%s"}',
+                    job_id, idx, str(exc),
+                )
+                errors.append({"index": idx, "value": imsi, "message": str(exc)})
+                if len(errors) > 1000:
+                    break
+
+        elapsed = time.monotonic() - start
+        bulk_job_duration.observe(elapsed)
+        await conn.execute(
+            "UPDATE bulk_jobs SET status='completed', processed=$1, failed=$2, errors=$3::jsonb, updated_at=now() "
+            "WHERE job_id=$4::uuid",
+            processed, failed, errors, job_id,
+        )
+
+    logger.info(
+        '{"job_id":"%s","status":"completed","processed":%d,"failed":%d,"elapsed_s":%.1f}',
+        job_id, processed, failed, elapsed,
+    )
+
+
+def _parse_imsi_csv(text: str) -> list[str]:
+    """Parse a single-column CSV with header 'imsi', returning a list of IMSI strings."""
+    reader = csv.DictReader(io.StringIO(text))
+    return [row["imsi"].strip() for row in reader if row.get("imsi", "").strip()]
+
+
+@router.post("/imsis/bulk-delete", status_code=202, dependencies=[Depends(require_auth)])
+async def bulk_delete_imsis(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    conn=Depends(get_conn),
+):
+    content_type = request.headers.get("content-type", "")
+
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        file = form.get("file")
+        if not file:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "validation_failed", "details": [{"field": "file", "message": "required"}]},
+            )
+        content = await file.read()
+        imsis = _parse_imsi_csv(content.decode("utf-8-sig"))
+    else:
+        body = await request.json()
+        imsis = body.get("imsis", [])
+
+    if not imsis:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "validation_failed", "details": [{"field": "imsis", "message": "required"}]},
+        )
+
+    submitted = len(imsis)
+    job_id = await conn.fetchval(
+        "INSERT INTO bulk_jobs (status, submitted) VALUES ('queued', $1) RETURNING job_id::text",
+        submitted,
+    )
+    background_tasks.add_task(_process_bulk_imsi_delete, job_id, imsis)
+    return {"job_id": job_id, "submitted": submitted, "status_url": f"/v1/jobs/{job_id}"}
+
+
+# ── Bulk Upsert ───────────────────────────────────────────────────────────────
 
 @router.post("/profiles/bulk", status_code=202, dependencies=[Depends(require_auth)])
 async def bulk_upsert(

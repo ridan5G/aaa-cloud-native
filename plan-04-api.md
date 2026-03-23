@@ -259,8 +259,65 @@ pressure at failover time.
 
 | Method | Path | Description | Success |
 |---|---|---|---|
-| `POST` | `/profiles/bulk` | Upsert batch (JSON body or CSV file) | 202 `{job_id, status_url}` |
+| `POST` | `/profiles/bulk` | Upsert batch (JSON body or CSV file) | 202 `{job_id, submitted, status_url}` |
+| `POST` | `/profiles/bulk-release-ips` | Release IPs for a batch of SIMs | 202 `{job_id, submitted, status_url}` |
+| `POST` | `/imsis/bulk-delete` | Remove a batch of IMSIs and return their IPs to pool | 202 `{job_id, submitted, status_url}` |
 | `GET` | `/jobs/{job_id}` | Poll bulk job status | 200 `{status, processed, failed, errors[]}` |
+
+**`POST /profiles/bulk-release-ips`**
+
+Accepts a JSON body with a list of `sim_id`s, or filter criteria to select SIMs. For each SIM, runs the same logic as `POST /profiles/{sim_id}/release-ips` (returns all pool-managed IPs to `ip_pool_available`, clears `imsi_apn_ips` and `sim_apn_ips`). Profiles without allocated IPs are silently skipped (counted as processed).
+
+Request body (select by explicit list):
+```json
+{ "sim_ids": ["uuid1", "uuid2", "..."] }
+```
+
+Request body (select by filter — releases IPs for all matching active profiles):
+```json
+{ "account_name": "Melita", "pool_id": "uuid-of-pool" }
+```
+
+Either `sim_ids` or at least one filter field (`account_name`, `pool_id`) must be provided.
+
+**`POST /imsis/bulk-delete`**
+
+Accepts a JSON body with a list of IMSI strings, or a CSV file (single column: `imsi`). For each IMSI, runs the same logic as `DELETE /profiles/{sim_id}/imsis/{imsi}` — unlinks the IMSI from its SIM and returns its pool-managed IPs to `ip_pool_available`. IMSIs not found are recorded as errors but do not abort the job.
+
+Request body (JSON):
+```json
+{ "imsis": ["278770000000001", "278770000000002"] }
+```
+
+CSV upload (`Content-Type: multipart/form-data`):
+```csv
+imsi
+278770000000001
+278770000000002
+```
+
+Response (both endpoints, 202):
+```json
+{
+  "job_id": "bulk-job-uuid",
+  "submitted": 1500,
+  "status_url": "/v1/jobs/bulk-job-uuid"
+}
+```
+
+Job result (via `GET /jobs/{job_id}`):
+```json
+{
+  "job_id": "bulk-job-uuid",
+  "status": "completed",
+  "processed": 1498,
+  "failed": 2,
+  "errors": [
+    {"index": 42,  "value": "278770000000099", "error": "not_found"},
+    {"index": 107, "value": "278770000000200", "error": "not_found"}
+  ]
+}
+```
 
 ### Health
 

@@ -124,6 +124,10 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
         """,
         body.imsi,
     )
+    # _realloc_sim_id is set when an IMSI exists in imsi2sim but has no IP (IPs were
+    # released). The allocation path below reuses the existing profile instead of
+    # creating a new one.
+    _realloc_sim_id: Optional[str] = None
     if existing_imsi:
         sim_id = existing_imsi["sim_id"]
         existing_ip_resolution = existing_imsi["ip_resolution"]
@@ -139,16 +143,21 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
                 "SELECT host(static_ip) FROM sim_apn_ips WHERE sim_id = $1::uuid AND (apn = $2 OR apn IS NULL) ORDER BY apn NULLS LAST LIMIT 1",
                 sim_id, body.apn,
             )
-        first_connection_total.labels(result="reused").inc()
-        logger.info(
-            '{"path":"/first-connection","imsi":"%s","result":"reused","idempotent":true,"use_case_id":"%s"}',
-            body.imsi,
-            body.use_case_id or "",
-        )
-        return JSONResponse(
-            status_code=200,
-            content={"sim_id": sim_id, "static_ip": static_ip},
-        )
+        if static_ip is not None:
+            # Normal idempotent path: IP already allocated, return it.
+            first_connection_total.labels(result="reused").inc()
+            logger.info(
+                '{"path":"/first-connection","imsi":"%s","result":"reused","idempotent":true,"use_case_id":"%s"}',
+                body.imsi,
+                body.use_case_id or "",
+            )
+            return JSONResponse(
+                status_code=200,
+                content={"sim_id": sim_id, "static_ip": static_ip},
+            )
+        # IPs were released — fall through to range config lookup and re-allocate.
+        # The existing profile and imsi2sim row are reused (not recreated).
+        _realloc_sim_id = sim_id
 
     # Step 1: Find matching range config.
     # COALESCE prefers the slot's own pool_id; parent ICCID range pool is fallback.
@@ -189,20 +198,23 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
             apn_pools = await _load_apn_pools(conn, range_config_id, pool_id, ip_resolution, body.apn)
             allocated_ip = None
 
-            metadata = json.dumps({"tags": ["auto-allocated"], "imei": body.imei})
-            sim_id = await conn.fetchval(
-                """
-                INSERT INTO sim_profiles (account_name, status, ip_resolution, metadata)
-                VALUES ($1, 'active', $2, $3::jsonb)
-                RETURNING sim_id::text
-                """,
-                account_name, ip_resolution, metadata,
-            )
-
-            await conn.execute(
-                "INSERT INTO imsi2sim (imsi, sim_id, status, priority) VALUES ($1, $2::uuid, 'active', 1)",
-                body.imsi, sim_id,
-            )
+            if _realloc_sim_id:
+                # Re-allocation: profile and imsi2sim already exist; reuse them.
+                sim_id = _realloc_sim_id
+            else:
+                metadata = json.dumps({"tags": ["auto-allocated"], "imei": body.imei})
+                sim_id = await conn.fetchval(
+                    """
+                    INSERT INTO sim_profiles (account_name, status, ip_resolution, metadata)
+                    VALUES ($1, 'active', $2, $3::jsonb)
+                    RETURNING sim_id::text
+                    """,
+                    account_name, ip_resolution, metadata,
+                )
+                await conn.execute(
+                    "INSERT INTO imsi2sim (imsi, sim_id, status, priority) VALUES ($1, $2::uuid, 'active', 1)",
+                    body.imsi, sim_id,
+                )
 
             request_apn_val = body.apn if ip_resolution in ("imsi_apn", "iccid_apn") else None
             for apn_val, apn_pool in apn_pools:

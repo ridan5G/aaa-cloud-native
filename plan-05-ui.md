@@ -340,7 +340,9 @@ Login
 
 **Pagination:** 50 rows per page, next/previous. Displays `total` from API response.
 
-**Bulk actions:** Select multiple rows → Suspend all / Terminate all (sends individual PATCH per row, shows progress toast)
+**Bulk actions:** Select multiple rows → action dropdown appears in toolbar:
+- **Suspend all** / **Terminate all** — sends individual PATCH per row, shows progress toast
+- **Release IPs** — opens confirmation: "Release IPs for N selected SIMs?" → POST `/profiles/bulk-release-ips` with `{sim_ids:[...]}` → navigates to Bulk Jobs screen showing the new job
 
 ---
 
@@ -350,27 +352,27 @@ Login
 
 **Layout:**
 ```
-┌─────────────────────────────────────────────┐
-│ SIM Profile                                  │
-│ sim_id: 550e8400-...  [Copy]                │
-│ ICCID: 8944501012345678901  (or "Not set")  │
-│ Account: Melita                             │
-│ Status: ● Active    [Suspend] [Terminate]   │
-│ IP Resolution: imsi                         │
-│ Created: 2026-01-15  Updated: 2026-02-26   │
-├─────────────────────────────────────────────┤
-│ IMSIs                                        │
-│ ┌─────────────────────────────────────────────────────┐   │
-│ │ IMSI          │ Priority │ Status  │ Static IP    │   │
-│ │ 2787730000... │ 1        │ Active  │ 100.65.120.5 │   │
-│ │ 2787730000... │ 2        │ Suspend │ 101.65.120.5 │   │
-│ └─────────────────────────────────────────────────────┘   │
-│ [+ Add IMSI]                                │
-├─────────────────────────────────────────────┤
-│ Metadata                                     │
-│ IMEI: 8659140301783797                      │
-│ Tags: iot, nova-project                     │
-└─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│ SIM Profile                                              │
+│ sim_id: 550e8400-...  [Copy]                            │
+│ ICCID: 8944501012345678901  (or "Not set")              │
+│ Account: Melita                                         │
+│ Status: ● Active    [Suspend] [Terminate]               │
+│ IP Resolution: imsi                                     │
+│ Created: 2026-01-15  Updated: 2026-02-26               │
+├─────────────────────────────────────────────────────────┤
+│ IMSIs                                    [Release IPs]  │
+│ ┌──────────────────────────────────────────────────────────────┐ │
+│ │ IMSI          │ Priority │ Status  │ Static IP    │ Actions │ │
+│ │ 2787730000... │ 1        │ Active  │ 100.65.120.5 │ [⋯]    │ │
+│ │ 2787730000... │ 2        │ Suspend │ 101.65.120.5 │ [⋯]    │ │
+│ └──────────────────────────────────────────────────────────────┘ │
+│ [+ Add IMSI]                                            │
+├─────────────────────────────────────────────────────────┤
+│ Metadata                                                 │
+│ IMEI: 8659140301783797                                  │
+│ Tags: iot, nova-project                                 │
+└─────────────────────────────────────────────────────────┘
 ```
 
 **Actions from this screen:**
@@ -378,8 +380,57 @@ Login
 - Set/update ICCID (PATCH with `{iccid: "..."}`)
 - Open Edit Profile (full form)
 - Add IMSI: inline form with IMSI (15 digits), Priority (integer ≥ 1), APN/IP rows → POST `/profiles/{sim_id}/imsis`
-- Suspend / Reactivate / Remove individual IMSIs → PATCH or DELETE `/profiles/{sim_id}/imsis/{imsi}`
+- Suspend / Reactivate individual IMSIs → PATCH `/profiles/{sim_id}/imsis/{imsi}` with `{status: "..."}`
 - Edit IMSI priority inline → PATCH `/profiles/{sim_id}/imsis/{imsi}` with `{priority: N}`
+- **Remove IMSI** (per-row action in IMSI table) → confirmation modal → DELETE `/profiles/{sim_id}/imsis/{imsi}`; on success toast "IMSI removed — IP returned to pool" and row removed from table
+- **Release IPs** (button at top-right of IMSIs section) → POST `/profiles/{sim_id}/release-ips`; see details below
+
+#### Remove IMSI — confirmation modal
+
+Triggered by the [⋯] row action menu → "Remove IMSI". Shows:
+
+```
+┌─────────────────────────────────────────────┐
+│ Remove IMSI                                  │
+│                                             │
+│ Remove 278773000001234 from this SIM?       │
+│                                             │
+│ The IMSI's allocated IP (100.65.120.5) will │
+│ be returned to the pool and the IMSI will   │
+│ be unlinked. This cannot be undone.         │
+│                                             │
+│               [Cancel]  [Remove IMSI]       │
+└─────────────────────────────────────────────┘
+```
+
+- If the IMSI has no allocated IP (no `apn_ips`), the line about IP return is omitted.
+- On success: toast "IMSI 278773…1234 removed", row removed from table, pool stats refreshed.
+- On 404: toast "IMSI not found — already removed?"
+
+#### Release IPs — confirmation modal
+
+Triggered by the **[Release IPs]** button shown in the IMSIs section header. Shows:
+
+```
+┌─────────────────────────────────────────────┐
+│ Release All IPs                              │
+│                                             │
+│ Return all allocated IPs for this SIM to    │
+│ their pools? The device will receive a new  │
+│ IP on its next connection.                  │
+│                                             │
+│ IPs to be released: 2                       │
+│   • 100.65.120.5  (IMSI 2787730000…)       │
+│   • 101.65.120.5  (IMSI 2787730000…)       │
+│                                             │
+│             [Cancel]  [Release IPs]         │
+└─────────────────────────────────────────────┘
+```
+
+- The IP list is pre-populated from the current `apn_ips` shown in the IMSI table (client-side, no extra fetch needed).
+- If no IPs are currently allocated the button is disabled with tooltip "No IPs allocated".
+- On success: toast "2 IP(s) released — will be re-allocated on next connection", all `apn_ips` cells cleared in the table.
+- On 404: toast "Profile not found."
 
 ---
 
@@ -432,15 +483,31 @@ On conflict (409), shows which ICCID or IMSI is already in use.
 
 ---
 
-### 6. Bulk Import — CSV Upload
+### 6. Bulk Operations
 
-**Purpose:** Upsert up to 100K profiles in one operation via POST /profiles/bulk with a CSV file.
+**Purpose:** Three async bulk actions, each dispatched as a background job and tracked in the Bulk Jobs screen. A tab bar selects the operation.
+
+```
+┌─────────────────────────────────────────────────┐
+│  Bulk Operations                                 │
+│  ┌───────────┬──────────────┬────────────────┐  │
+│  │  Import   │  Release IPs │  Delete IMSIs  │  │
+│  └───────────┴──────────────┴────────────────┘  │
+│  [tab content below]                             │
+└─────────────────────────────────────────────────┘
+```
+
+---
+
+#### Tab A — Import (Upsert)
+
+Upsert up to 100K profiles via `POST /profiles/bulk`.
 
 #### Layout
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  Bulk Import                                     │
+│  Import (Upsert)                                 │
 │                                                  │
 │  Step 1: Download template                       │
 │  [↓ Download CSV Template]                       │
@@ -508,6 +575,84 @@ Row 4502: IMSI "278773000002002" is already assigned to another device
 ```
 
 The error CSV contains the original row data + error column for the operator to fix and re-upload.
+
+---
+
+#### Tab B — Release IPs
+
+Release all pool-managed IPs for a batch of SIMs so they receive a fresh IP on next connection. Dispatched via `POST /profiles/bulk-release-ips`.
+
+**Layout:**
+```
+┌─────────────────────────────────────────────────┐
+│  Release IPs (Bulk)                              │
+│                                                  │
+│  Select SIMs by:                                 │
+│  ○ SIM ID list   ● Filter                        │
+│                                                  │
+│  ── Filter mode ─────────────────────────────── │
+│  Account Name:  [________________]               │
+│  Pool:          [select pool ▼  ]               │
+│                                                  │
+│  Matching SIMs: 1,240  (fetched on change)       │
+│                                                  │
+│  ── SIM ID list mode ────────────────────────── │
+│  Paste or upload a .txt/.csv of sim_ids          │
+│  ┌──────────────────────────────────────────┐   │
+│  │  One sim_id per line                     │   │
+│  └──────────────────────────────────────────┘   │
+│  SIMs loaded: 0                                  │
+│                                                  │
+│  [Cancel]               [Release IPs for N SIMs] │
+└─────────────────────────────────────────────────┘
+```
+
+- **Filter mode:** fetches `GET /profiles?account_name=X&pool_id=Y&limit=1` (count only) on field change to show preview count. On submit, sends `{account_name, pool_id}` to `POST /profiles/bulk-release-ips`.
+- **SIM ID list mode:** validates each line is a UUID. Non-UUIDs highlighted red. Sends `{sim_ids:[...]}`.
+- Confirmation: "Release IPs for N SIM(s)? Devices will receive a new IP on next connection." → [Cancel] [Confirm].
+- On 202: navigates to Bulk Jobs showing the new job at top.
+
+---
+
+#### Tab C — Delete IMSIs
+
+Remove a batch of IMSIs from their SIMs and return their IPs to the pool. Dispatched via `POST /imsis/bulk-delete`.
+
+**Layout:**
+```
+┌─────────────────────────────────────────────────┐
+│  Delete IMSIs (Bulk)                             │
+│                                                  │
+│  Upload a CSV with one IMSI per row.             │
+│  [↓ Download CSV Template]                       │
+│                                                  │
+│  ┌──────────────────────────────────────────┐   │
+│  │  Drag & drop CSV here, or click to browse│   │
+│  │  Max 100,000 rows · .csv only            │   │
+│  └──────────────────────────────────────────┘   │
+│                                                  │
+│  Preview (first 5 rows):                         │
+│  │ imsi            │                             │
+│  │ 278773000000001 │                             │
+│  │ 278773000000002 │                             │
+│                                                  │
+│  IMSIs loaded: 1,500                             │
+│                                                  │
+│  [Cancel]            [Delete 1,500 IMSIs]        │
+└─────────────────────────────────────────────────┘
+```
+
+**CSV Template** (`imsi-delete-template.csv`):
+```csv
+imsi
+278773000000001
+278773000000002
+```
+
+- Client-side validation: each value must be exactly 15 digits. Invalid rows shown in preview with red highlight and blocked from upload.
+- Confirmation: "Delete 1,500 IMSI(s)? Their allocated IPs will be returned to the pool. This cannot be undone." → [Cancel] [Confirm].
+- On 202: navigates to Bulk Jobs screen.
+- Error report for not-found IMSIs downloadable as CSV (same pattern as Import tab).
 
 ---
 

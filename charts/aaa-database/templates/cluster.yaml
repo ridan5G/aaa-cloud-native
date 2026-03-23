@@ -37,12 +37,6 @@ spec:
       # CNPG reads the 'password' key (and optionally 'username').
       secret:
         name: {{ include "aaa-database.appSecretName" . }}
-      # Execute the full AAA schema after the database is created.
-      # Runs as the app user (aaa_app) against the app database (aaa).
-      postInitApplicationSQLRefs:
-        configMapRefs:
-          - name: {{ include "aaa-database.clusterName" . }}-initdb-sql
-            key: schema.sql
 
   # ── Storage ─────────────────────────────────────────────────
   storage:
