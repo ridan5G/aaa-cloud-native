@@ -319,6 +319,7 @@ function ProfileDetail() {
   const [showForm, setShowForm] = useState(false)
   const [newImsi, setNewImsi] = useState({ imsi: '', priority: '1', static_ip: '', pool_id: '' })
   const [saving,  setSaving]  = useState(false)
+  const [connecting, setConnecting] = useState(false)
 
   async function load() {
     if (!sim_id) return
@@ -366,6 +367,22 @@ function ProfileDetail() {
         : 'No pool-managed IPs to release')
       load()
     } catch (e) { show('error', String(e)) }
+  }
+
+  async function simulateFirstConnect() {
+    const imsi = imsis[0]?.imsi
+    if (!imsi) { show('error', 'No IMSIs on this SIM'); return }
+    // Use first known APN from existing IP mappings; fall back to dummy for APN-agnostic modes
+    const apn = imsis[0]?.apn_ips?.[0]?.apn ?? profile?.iccid_ips?.[0]?.apn ?? 'internet'
+    setConnecting(true)
+    try {
+      const r = await apiClient.post('/first-connection', { imsi, apn })
+      const { static_ip } = r.data
+      const label = r.status === 201 ? 'IP allocated' : 'Already provisioned'
+      show('success', static_ip ? `${label}: ${static_ip}` : `${label} (no IP returned)`)
+      load()
+    } catch (e) { show('error', String(e)) }
+    finally { setConnecting(false) }
   }
 
   async function addImsi() {
@@ -429,6 +446,12 @@ function ProfileDetail() {
             )}
             {profile.status === 'suspended' && (
               <button onClick={() => patchProfile({ status: 'active' })} className="btn-ghost text-xs text-green-600 border border-green-200">Reactivate</button>
+            )}
+            {profile.status === 'active' && (
+              <button onClick={simulateFirstConnect} disabled={connecting}
+                className="btn-ghost text-xs text-purple-600 border border-purple-200">
+                {connecting ? 'Connecting…' : 'Simulate 1st Connect'}
+              </button>
             )}
             {profile.status !== 'terminated' && (
               <button onClick={releaseIps} className="btn-ghost text-xs text-blue-600 border border-blue-200">Release IPs</button>

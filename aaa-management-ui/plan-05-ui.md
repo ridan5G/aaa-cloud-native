@@ -268,7 +268,9 @@ Login
         │     ├── List / Search
         │     ├── Profile Detail
         │     │     ├── Edit Profile
-        │     │     └── IMSI Manager (add / remove / suspend / set priority)
+        │     │     ├── IMSI Manager (add / remove / suspend / set priority)
+        │     │     ├── Simulate 1st Connect (single-click IP allocation)
+        │     │     └── Release IPs (return pool IPs, re-allocated on next connect)
         │     ├── New SIM Profile (form)
         │     └── Bulk Import (CSV upload)
         ├── IP Pools
@@ -352,85 +354,77 @@ Login
 
 **Layout:**
 ```
-┌─────────────────────────────────────────────────────────┐
-│ SIM Profile                                              │
-│ sim_id: 550e8400-...  [Copy]                            │
-│ ICCID: 8944501012345678901  (or "Not set")              │
-│ Account: Melita                                         │
-│ Status: ● Active    [Suspend] [Terminate]               │
-│ IP Resolution: imsi                                     │
-│ Created: 2026-01-15  Updated: 2026-02-26               │
-├─────────────────────────────────────────────────────────┤
-│ IMSIs                                    [Release IPs]  │
-│ ┌──────────────────────────────────────────────────────────────┐ │
-│ │ IMSI          │ Priority │ Status  │ Static IP    │ Actions │ │
-│ │ 2787730000... │ 1        │ Active  │ 100.65.120.5 │ [⋯]    │ │
-│ │ 2787730000... │ 2        │ Suspend │ 101.65.120.5 │ [⋯]    │ │
-│ └──────────────────────────────────────────────────────────────┘ │
-│ [+ Add IMSI]                                            │
-├─────────────────────────────────────────────────────────┤
-│ Metadata                                                 │
-│ IMEI: 8659140301783797                                  │
-│ Tags: iot, nova-project                                 │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ SIM Profile                                                                  │
+│ sim_id: 550e8400-...  [Copy]                                                │
+│ ICCID: 8944501012345678901  (or "Not set")                                  │
+│ Account: Melita                                                              │
+│ Status: ● Active                                                             │
+│ [Suspend]  [Simulate 1st Connect]  [Release IPs]  [Terminate]               │
+│ IP Resolution: imsi                                                          │
+│ Created: 2026-01-15  Updated: 2026-02-26                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ IMSIs                                                                        │
+│ ┌──────────────────────────────────────────────────────────────────────┐    │
+│ │ IMSI            │ Slot │ Status  │ Static IP    │ Actions            │    │
+│ │ 2787730000...   │ 1    │ Active  │ 100.65.120.5 │ [Suspend] [Remove] │    │
+│ │ 2787730000...   │ 2    │ Suspend │ 101.65.120.5 │ [Activate][Remove] │    │
+│ └──────────────────────────────────────────────────────────────────────┘    │
+│ [+ Add IMSI]                                                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Metadata                                                                     │
+│ IMEI: 8659140301783797                                                       │
+│ Tags: iot, nova-project                                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 **Actions from this screen:**
-- Suspend / Reactivate / Terminate the SIM
-- Set/update ICCID (PATCH with `{iccid: "..."}`)
-- Open Edit Profile (full form)
-- Add IMSI: inline form with IMSI (15 digits), Priority (integer ≥ 1), APN/IP rows → POST `/profiles/{sim_id}/imsis`
-- Suspend / Reactivate individual IMSIs → PATCH `/profiles/{sim_id}/imsis/{imsi}` with `{status: "..."}`
-- Edit IMSI priority inline → PATCH `/profiles/{sim_id}/imsis/{imsi}` with `{priority: N}`
-- **Remove IMSI** (per-row action in IMSI table) → confirmation modal → DELETE `/profiles/{sim_id}/imsis/{imsi}`; on success toast "IMSI removed — IP returned to pool" and row removed from table
-- **Release IPs** (button at top-right of IMSIs section) → POST `/profiles/{sim_id}/release-ips`; see details below
 
-#### Remove IMSI — confirmation modal
+| Button | Visibility | API | Behaviour |
+|--------|-----------|-----|-----------|
+| Suspend | `active` only | `PATCH /profiles/{sim_id}` `{status:"suspended"}` | Suspends SIM |
+| Reactivate | `suspended` only | `PATCH /profiles/{sim_id}` `{status:"active"}` | Reactivates SIM |
+| **Simulate 1st Connect** | `active` only | `POST /first-connection` | See below |
+| **Release IPs** | non-terminated | `POST /profiles/{sim_id}/release-ips` | See below |
+| Terminate | non-terminated | `PATCH /profiles/{sim_id}` `{status:"terminated"}` | Terminates SIM |
+| Add IMSI | non-terminated | `POST /profiles/{sim_id}/imsis` | Inline form |
+| Suspend/Activate IMSI | per-row | `PATCH /profiles/{sim_id}/imsis/{imsi}` | Toggles IMSI status |
+| **Remove IMSI** | per-row | `DELETE /profiles/{sim_id}/imsis/{imsi}` | See below |
 
-Triggered by the [⋯] row action menu → "Remove IMSI". Shows:
+#### Simulate 1st Connect
 
-```
-┌─────────────────────────────────────────────┐
-│ Remove IMSI                                  │
-│                                             │
-│ Remove 278773000001234 from this SIM?       │
-│                                             │
-│ The IMSI's allocated IP (100.65.120.5) will │
-│ be returned to the pool and the IMSI will   │
-│ be unlinked. This cannot be undone.         │
-│                                             │
-│               [Cancel]  [Remove IMSI]       │
-└─────────────────────────────────────────────┘
-```
+Triggered by **[Simulate 1st Connect]** in the profile card header. Simulates a RADIUS
+first-connection as if the device had just connected for the first time.
 
-- If the IMSI has no allocated IP (no `apn_ips`), the line about IP return is omitted.
-- On success: toast "IMSI 278773…1234 removed", row removed from table, pool stats refreshed.
-- On 404: toast "IMSI not found — already removed?"
+- Auto-selects: `imsis[0].imsi` (first IMSI on the SIM)
+- APN resolution order (no user input required):
+  1. `imsis[0].apn_ips[0].apn` — existing APN from IMSI-level IP mapping (`imsi_apn` mode)
+  2. `iccid_ips[0].apn` — existing APN from card-level IP mapping (`iccid_apn` mode)
+  3. `"internet"` — dummy fallback for APN-agnostic modes (`imsi` / `iccid`)
+- Calls `POST /v1/first-connection` with `{imsi, apn}` (same endpoint used by RADIUS server)
+- Button shows "Connecting…" and is disabled while request is in flight
+- On 201: toast "IP allocated: x.x.x.x" → profile reloads with new IP in IMSI table
+- On 200: toast "Already provisioned: x.x.x.x" (idempotent / re-allocation after release)
+- On error: toast with error message
 
-#### Release IPs — confirmation modal
+#### Release IPs
 
-Triggered by the **[Release IPs]** button shown in the IMSIs section header. Shows:
+Triggered by **[Release IPs]** in the profile card header.
 
-```
-┌─────────────────────────────────────────────┐
-│ Release All IPs                              │
-│                                             │
-│ Return all allocated IPs for this SIM to    │
-│ their pools? The device will receive a new  │
-│ IP on its next connection.                  │
-│                                             │
-│ IPs to be released: 2                       │
-│   • 100.65.120.5  (IMSI 2787730000…)       │
-│   • 101.65.120.5  (IMSI 2787730000…)       │
-│                                             │
-│             [Cancel]  [Release IPs]         │
-└─────────────────────────────────────────────┘
-```
+- `confirm()` dialog: "Release all pool-managed IPs for this SIM? IPs will be returned to the pool and re-allocated on the next first-connection."
+- Calls `POST /profiles/{sim_id}/release-ips`
+- On success: toast "Released N IP(s) back to pool" (or "No pool-managed IPs to release" if `released_count == 0`)
+- Profile reloads — IP columns in IMSI table clear immediately
+- Static IPs (`pool_id IS NULL`) are never affected
 
-- The IP list is pre-populated from the current `apn_ips` shown in the IMSI table (client-side, no extra fetch needed).
-- If no IPs are currently allocated the button is disabled with tooltip "No IPs allocated".
-- On success: toast "2 IP(s) released — will be re-allocated on next connection", all `apn_ips` cells cleared in the table.
-- On 404: toast "Profile not found."
+#### Remove IMSI
+
+Triggered by **[Remove]** in each IMSI table row.
+
+- `confirm()` dialog: "Remove IMSI {imsi}?"
+- Calls `DELETE /profiles/{sim_id}/imsis/{imsi}`
+- On success: toast "IMSI removed", row disappears, pool IP is returned automatically by API
+- On 404: toast with error
 
 ---
 

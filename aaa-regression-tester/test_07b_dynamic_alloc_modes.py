@@ -13,7 +13,7 @@ Scenario matrix:
   M3 — Multi-IMSI,  iccid     — 1 shared card IP, all slots mapped, 1 COMMIT
   M4 — Multi-IMSI,  iccid_apn — N shared card IPs via APN catalog, 1 COMMIT
 
-Test module = 13 → IMSI prefix 27877 13 (no overlap with other modules).
+Test module = 9 → IMSI prefix 27877 09 (no overlap with other modules).
 """
 import httpx
 import pytest
@@ -30,7 +30,7 @@ from fixtures.range_configs import (
     delete_iccid_range_config,
 )
 
-MODULE = 13
+MODULE = 9
 APN_INTERNET = "internet.operator.com"
 APN_IMS      = "ims.operator.com"
 
@@ -64,7 +64,7 @@ class TestS2SingleImsiApn:
     @classmethod
     def setup_class(cls):
         with _new_client() as c:
-            cleanup_stale_profiles(c, "27877130000000")
+            cleanup_stale_profiles(c, "27877090000000")
             cls.pool_internet_id = create_pool(
                 c, subnet="100.65.230.0/29",
                 pool_name="s2-internet", account_name="TestAccount",
@@ -159,7 +159,7 @@ class TestS3SingleIccid:
     @classmethod
     def setup_class(cls):
         with _new_client() as c:
-            cleanup_stale_profiles(c, "27877130000020")
+            cleanup_stale_profiles(c, "27877090000020")
             cls.pool_id = create_pool(
                 c, subnet="100.65.230.16/29",
                 pool_name="s3-pool", account_name="TestAccount",
@@ -231,7 +231,7 @@ class TestS4SingleIccidApn:
     @classmethod
     def setup_class(cls):
         with _new_client() as c:
-            cleanup_stale_profiles(c, "27877130000040")
+            cleanup_stale_profiles(c, "27877090000040")
             cls.pool_internet_id = create_pool(
                 c, subnet="100.65.230.24/29",
                 pool_name="s4-internet", account_name="TestAccount",
@@ -323,7 +323,7 @@ class TestM1MultiImsi:
     def setup_class(cls):
         with _new_client() as c:
             # Slot-1 prefix is sufficient — profiles contain both IMSI slots
-            cleanup_stale_profiles(c, "27877130000060")
+            cleanup_stale_profiles(c, "27877090000060")
             cls.pool_slot1_id = create_pool(
                 c, subnet="100.65.230.40/29",
                 pool_name="m1-slot1", account_name="TestAccount",
@@ -432,7 +432,7 @@ class TestM2MultiImsiApn:
     @classmethod
     def setup_class(cls):
         with _new_client() as c:
-            cleanup_stale_profiles(c, "27877130000080")
+            cleanup_stale_profiles(c, "27877090000080")
             cls.pool_internet_id = create_pool(
                 c, subnet="100.65.230.56/29",
                 pool_name="m2-internet", account_name="TestAccount",
@@ -554,7 +554,7 @@ class TestM3MultiIccid:
     @classmethod
     def setup_class(cls):
         with _new_client() as c:
-            cleanup_stale_profiles(c, "27877130000100")
+            cleanup_stale_profiles(c, "27877090000100")
             cls.pool_id = create_pool(
                 c, subnet="100.65.230.72/29",
                 pool_name="m3-pool", account_name="TestAccount",
@@ -636,7 +636,7 @@ class TestM4MultiIccidApn:
     @classmethod
     def setup_class(cls):
         with _new_client() as c:
-            cleanup_stale_profiles(c, "27877130000120")
+            cleanup_stale_profiles(c, "27877090000120")
             cls.pool_internet_id = create_pool(
                 c, subnet="100.65.230.80/29",
                 pool_name="m4-internet", account_name="TestAccount",

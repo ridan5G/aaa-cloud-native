@@ -287,18 +287,23 @@ function PoolList() {
           <h3 className="text-sm font-semibold text-gray-800">Free CIDR Finder</h3>
           <p className="text-xs text-gray-500 mt-0.5">
             Find an available subnet in a routing domain and create a pool directly from the result.
-            Only domains with configured allowed_prefixes are listed.
+            The routing domain must have <code className="font-mono">allowed_prefixes</code> configured.
           </p>
         </div>
         <div className="flex items-end gap-3 flex-wrap">
           <div className="field mb-0 w-56">
             <label className="label">Routing Domain</label>
             <DomainComboBox
-              domains={routingDomains.filter(d => d.allowed_prefixes.length > 0)}
+              domains={routingDomains}
               value={cidrDomain}
               onChange={v => { setCidrDomain(v); setCidrSuggestion(null); setCidrError(null) }}
               placeholder="Select domain…"
             />
+            {cidrSelectedDomain && !cidrSelectedDomain.allowed_prefixes.length && (
+              <p className="text-xs text-amber-600 mt-1">
+                ⚠ This domain has no allowed_prefixes — configure them first to enable CIDR suggestion.
+              </p>
+            )}
           </div>
           <div className="field mb-0 w-36">
             <label className="label">Min hosts needed *</label>
@@ -316,6 +321,7 @@ function PoolList() {
             onClick={handleCidrSuggest}
             disabled={!cidrCanSuggest || !cidrSize || cidrSuggesting}
             className="btn-primary"
+            title={cidrSelectedDomain && !cidrSelectedDomain.allowed_prefixes.length ? 'Configure allowed_prefixes on this domain first' : ''}
           >
             {cidrSuggesting ? 'Searching…' : 'Find Free CIDR'}
           </button>
@@ -625,8 +631,12 @@ function NewPoolModal({
       setSuggestion(res.data)
       setF('subnet', res.data.suggested_cidr)  // auto-fill subnet field
     } catch (e: unknown) {
-      const data = (e as { response?: { data?: { detail?: string; error?: string } } })?.response?.data
-      setSuggestError(data?.detail ?? data?.error ?? String(e))
+      const raw = (e as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+      const msg: string = typeof raw === 'string' ? raw
+        : (raw as { detail?: string; error?: string } | undefined)?.detail
+          ?? (raw as { detail?: string; error?: string } | undefined)?.error
+          ?? String(e)
+      setSuggestError(msg)
     } finally { setSuggesting(false) }
   }
 

@@ -116,10 +116,12 @@ export function ImsiApnDiagram({ data }: { data?: DiagramData }) {
         apn: ap.apn ?? 'any APN',
         ip:  ap.static_ip ?? 'Auto',
       }))
-    : [
-        { apn: 'internet', ip: '100.65.0.1' },
-        { apn: 'ims',      ip: '100.65.0.2' },
-      ]
+    : hasReal
+      ? [{ apn: '—', ip: 'Auto' }]
+      : [
+          { apn: 'internet', ip: '100.65.0.1' },
+          { apn: 'ims',      ip: '100.65.0.2' },
+        ]
   const n    = apns.length
   const more = hasRealApn && rawApns.length > 2 ? rawApns.length - 2 : 0
 
@@ -158,7 +160,7 @@ export function ImsiApnDiagram({ data }: { data?: DiagramData }) {
 export function IccidDiagram({ data }: { data?: DiagramData }) {
   const hasReal  = data != null
   const iccidSub = hasReal && data.iccid ? trunc(data.iccid, 6, 4) : 'ICCID-level'
-  const sharedIp = data?.iccidIps?.[0]?.static_ip ?? '100.65.0.1'
+  const sharedIp = data?.iccidIps?.[0]?.static_ip ?? (data != null ? 'Auto' : '100.65.0.1')
 
   const raw   = data?.imsis ?? []
   const hasRealImsis = hasReal && raw.length > 0
@@ -209,10 +211,12 @@ export function IccidApnDiagram({ data }: { data?: DiagramData }) {
         apn:      ip.apn ?? 'any APN',
         sharedIp: ip.static_ip ?? 'Auto',
       }))
-    : [
-        { apn: 'internet', sharedIp: '100.65.0.1' },
-        { apn: 'ims',      sharedIp: '100.65.0.2' },
-      ]
+    : hasReal
+      ? [{ apn: '—', sharedIp: 'Auto' }]
+      : [
+          { apn: 'internet', sharedIp: '100.65.0.1' },
+          { apn: 'ims',      sharedIp: '100.65.0.2' },
+        ]
   const n    = apns.length
   const more = hasRealIps && rawIps.length > 2 ? rawIps.length - 2 : 0
 
