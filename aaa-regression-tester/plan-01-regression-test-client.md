@@ -13,7 +13,7 @@ bulk operations, export/search, and failure scenarios.
 - Local: Docker Compose (`docker-compose.test.yml`) against the same containers
 **Output:** JUnit XML (`/app/results/results.xml`) · console pass/fail summary · Prometheus Pushgateway metrics
 
-**Current suite result: 136 passed · 0 failed · 0 skipped · ~72 s**
+**Current suite result: 159 passed · 0 failed · 0 skipped · ~80 s**
 
 ---
 
@@ -41,10 +41,12 @@ aaa-regression-tester/
 ├── test_06_imsi_ops.py               # Add / remove IMSI, per-IMSI suspend       [ 8 tests]
 ├── test_07_dynamic_alloc.py          # First-connection single-IMSI baseline      [ 9 tests]
 ├── test_07b_dynamic_alloc_modes.py   # First-connection all 7 allocation modes   [25 tests]
+├── test_07c_release_ips.py           # IP release / IMSI detach + IP return       [ 7 tests]
 ├── test_08_bulk.py                   # Bulk upsert via POST /profiles/bulk        [ 8 tests]
 ├── test_10_errors.py                 # Validation, 404, 409, 503, auth errors    [16 tests]
 ├── test_12_radius.py                 # End-to-end RADIUS authentication          [14 tests]
-└── test_13_export_and_ip_search.py   # Export CSV + IP filter + terminated SIMs  [13 tests]
+├── test_13_export_and_ip_search.py   # Export CSV + IP filter + terminated SIMs  [13 tests]
+└── test_14_export_delete_reprovision.py  # Export → delete → bulk re-import (4 SIM types) [16 tests]
 ```
 
 > **Not implemented:** `test_09_migration.py` (migration script tests — deferred) ·
@@ -326,6 +328,32 @@ pre-provisioned when the first slot connects.
 
 ---
 
+### test_07c_release_ips.py — IP Release & IMSI Detach
+
+**APIs validated:** `POST /profiles/{sim_id}/release-ips` · `DELETE /profiles/{sim_id}/imsis/{imsi}` ·
+`GET /pools/{id}/stats` · `POST /profiles/first-connection`
+
+Covers two operations that return pool-managed IPs back to the available set:
+
+- **`POST /release-ips`** — clears all IP allocations for a SIM (both `imsi_apn_ips` and
+  `sim_apn_ips`). The profile and its IMSI bindings are preserved; next first-connection
+  re-allocates fresh IPs (re-allocation path in first-connection code).
+- **`DELETE /imsis/{imsi}`** — removes a single IMSI from a profile and returns its IPs.
+
+> **IMSI range:** `278773075000001` – `278773075000099`
+
+| # | Test | Expected |
+|---|---|---|
+| 7c.1 | Pool + range config reachable; ≤1 stale allocated IP tolerated from previous run | pool stats verified |
+| 7c.2 | First-connection → allocate IP; `POST /release-ips` | 200, `released_count=1`; IP returned to pool; profile still active, `apn_ips=[]` |
+| 7c.3 | `POST /release-ips` on SIM with no IPs (idempotent) | 200, `released_count=0`, `ips_released=[]` |
+| 7c.4 | First-connection on same IMSI after release → fresh IP allocated | 200/201, new IP; pool allocated count back up |
+| 7c.5 | `POST /release-ips` on unknown `sim_id` | 404 |
+| 7c.6 | First-connection for IMSI_DEL1; `DELETE /imsis/{imsi}` | 204; pool `available` +1 |
+| 7c.7 | `POST /profiles` with IMSI_DEL2; delete IMSI; re-add to new profile | 201 on both creates; no `imsi_conflict` after deletion |
+
+---
+
 ### test_08_bulk.py — Bulk Upsert
 
 **APIs validated:** `POST /profiles/bulk` · `GET /jobs/{job_id}` · `GET /profiles/{sim_id}` ·
@@ -464,17 +492,77 @@ Covers three new behaviours introduced together:
 
 ---
 
+### test_14_export_delete_reprovision.py — Export → Delete → Bulk Re-import
+
+**APIs validated:** `GET /profiles/export` · `DELETE /profiles/{sim_id}` ·
+`POST /profiles/bulk` · `GET /jobs/{job_id}` · `GET /lookup`
+
+Exercises the full SIM lifecycle used by the UI export-and-reprovision workflow:
+
+1. Provision 4 SIMs of a given type via API.
+2. Export them via `GET /profiles/export` (the same endpoint the UI uses).
+3. Delete each via `DELETE /profiles/{sim_id}`.
+4. Convert the flat export rows back to bulk JSON and reprovision via `POST /profiles/bulk`.
+5. Verify profiles are active and `GET /lookup` returns the correct IPs.
+
+Repeated for all four `ip_resolution` modes — one pytest class per type, 4 tests each
+= **16 tests total**.
+
+> **IMSI prefix:** `27877140` (module 14)
+
+| # | Test | SIM type | Expected |
+|---|---|---|---|
+| 14.A.1 | Export 4 `iccid` SIMs; every row has non-null `static_ip` | iccid | Validates iccid export fix |
+| 14.A.2 | `DELETE` all 4 `sim_id`s; GET confirms `status=terminated` | iccid | 204 × 4 |
+| 14.A.3 | `POST /profiles/bulk` from exported rows | iccid | job completed, `processed=4`, `failed=0` |
+| 14.A.4 | `GET /lookup` for one IMSI per SIM | iccid | 200, IP matches original |
+| 14.B.1–4 | Same flow for `imsi` type (1 IP per IMSI, APN-agnostic) | imsi | — |
+| 14.C.1–4 | Same flow for `imsi_apn` type (1 IP per IMSI×APN pair) | imsi_apn | — |
+| 14.D.1–4 | Same flow for `iccid_apn` type (card-level per-APN IPs) | iccid_apn | — |
+
+> **`iccid`/`imsi` lookup note:** the `/lookup` endpoint always requires an `apn` parameter
+> even though it is ignored in APN-agnostic modes. Tests pass `apn="any"` as a placeholder.
+
+---
+
 ## Run Order & Teardown
 
 ```
 1. conftest.py setup_session: DB flush (delete from sim_profiles, ip_pools, etc.)
-2. Run test_01 → test_13 sequentially (pytest -v --junitxml=/app/results/results.xml)
+2. Run test_01 → test_14 sequentially (pytest -v --junitxml=/app/results/results.xml)
 3. Each module:  setup_class → tests → teardown_class
 4. run_all.sh pushes JUnit totals to Prometheus Pushgateway (non-fatal if push fails)
 
 Result (full suite, RADIUS enabled):
-  136 passed · 0 failed · 0 skipped · ~72 s
+  159 passed · 0 failed · 0 skipped · ~80 s
 ```
+
+### Profile Visibility After a Run
+
+**Static-provisioning modules** (test_03–test_06, test_08, test_10, test_12–test_14) delete
+their fixtures in `teardown_class` as usual — the test data is not meaningful to inspect
+after the run.
+
+**Dynamic-allocation modules** (test_07, test_07b, test_07c) follow a different lifecycle:
+
+| Phase | Action |
+|---|---|
+| `setup_class` | Calls `cleanup_stale_profiles(client, *imsi_prefixes)` to soft-delete (`status→terminated`) any active profiles left by a previous interrupted run |
+| Tests | First-connection and manual `POST /profiles` calls create profiles normally |
+| `teardown_class` | Deletes only **infrastructure** (range configs + pools); **profiles are left active** |
+
+After a successful run you can run:
+
+```
+GET /profiles/export?status=active&account_name=TestAccount
+```
+
+and see every SIM that was auto-provisioned during the suite — with its allocated IP,
+`ip_resolution` mode, and pool. This is useful for verifying the allocation results
+end-to-end without needing to re-run the tests.
+
+The next run's `setup_class` will terminate those profiles before re-creating the
+infrastructure, so no manual cleanup is needed between runs.
 
 ---
 

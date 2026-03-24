@@ -16,6 +16,7 @@ import httpx
 
 from conftest import PROVISION_BASE, JWT_TOKEN, USE_CASE_ID
 from fixtures.pools import create_pool, delete_pool
+from fixtures.profiles import cleanup_stale_profiles
 from fixtures.range_configs import create_range_config, delete_range_config
 
 # A /29 subnet: network .0, broadcast .7 → 6 usable host IPs (.1–.6)
@@ -40,14 +41,16 @@ T_IMSI2      = "278773071000099"
 class TestDynamicAlloc:
     pool_id:         str | None = None
     range_config_id: str | None = None
-    # All auto-provisioned sim_ids collected for teardown
-    alloc_sim_ids: list[str] = []
 
     @classmethod
     def setup_class(cls):
         with httpx.Client(base_url=PROVISION_BASE,
                           headers={"Authorization": f"Bearer {JWT_TOKEN}"},
                           timeout=30.0) as c:
+            # Terminate any profiles left by a previous interrupted run so the
+            # pool stats and range-config start from a known clean state.
+            cleanup_stale_profiles(c, "278773070", "278773071")
+
             p = create_pool(c, subnet=POOL_SUBNET,
                             pool_name="pool-dyn-07", account_name="TestAccount",
                             replace_on_conflict=True)
@@ -62,18 +65,15 @@ class TestDynamicAlloc:
                 account_name="TestAccount",
             )
             cls.range_config_id = rc["id"]
-            cls.alloc_sim_ids = []
 
     @classmethod
     def teardown_class(cls):
+        # Profiles are intentionally NOT deleted here — they remain active after
+        # the run so they can be inspected via GET /profiles/export.
+        # The next run's setup_class will terminate them via cleanup_stale_profiles.
         with httpx.Client(base_url=PROVISION_BASE,
                           headers={"Authorization": f"Bearer {JWT_TOKEN}"},
                           timeout=30.0) as c:
-            for did in cls.alloc_sim_ids:
-                try:
-                    c.delete(f"/profiles/{did}")
-                except Exception:
-                    pass
             if cls.range_config_id:
                 delete_range_config(c, cls.range_config_id)
             if cls.pool_id:
@@ -122,7 +122,6 @@ class TestDynamicAlloc:
         body = r_s2.json()
         assert "sim_id" in body, "Response must contain sim_id"
         assert "static_ip" in body, "Response must contain static_ip"
-        TestDynamicAlloc.alloc_sim_ids.append(body["sim_id"])
 
         # Stage 1 again — now the profile exists → 200
         r_s1b = lookup_http.get("/lookup",
@@ -225,17 +224,11 @@ class TestDynamicAlloc:
         The pool has USABLE_COUNT=6 IPs.  IMSI_FC1 used 1.  We fill the rest
         then attempt one more — must get 503.
         """
-        created_ids: list[str] = []
-
         for seq in range(2, USABLE_COUNT + 2):
             imsi = f"2787730700{seq:05d}"
             r = self._first_connection(http, imsi, "internet.operator.com")
-            if r.status_code == 201:
-                created_ids.append(r.json()["sim_id"])
-            elif r.status_code == 503:
+            if r.status_code == 503:
                 break   # exhausted sooner than expected (pool already had allocations)
-
-        TestDynamicAlloc.alloc_sim_ids.extend(created_ids)
 
         # Now the pool must be exhausted
         overflow_imsi = "278773070000099"
@@ -279,7 +272,6 @@ class TestDynamicAlloc:
             rc2_id = rc2["id"]
 
         allocated_ips:  list[str] = []
-        created_ids:    list[str] = []
         thread_errors:  list[Exception] = []
         lock = threading.Lock()
 
@@ -292,7 +284,6 @@ class TestDynamicAlloc:
                 )
                 if r.status_code == 201:
                     with lock:
-                        created_ids.append(r.json()["sim_id"])
                         allocated_ips.append(r.json()["static_ip"])
             except Exception as ex:
                 with lock:
@@ -312,11 +303,9 @@ class TestDynamicAlloc:
         assert len(allocated_ips) == len(set(allocated_ips)), \
             f"Duplicate IPs detected: {allocated_ips}"
 
-        # Teardown secondary fixtures
+        # Teardown secondary infrastructure only (profiles remain for post-run inspection)
         with _h.Client(base_url=base,
                        headers={"Authorization": f"Bearer {jwt}"},
                        timeout=30.0) as c:
-            for did in created_ids:
-                c.delete(f"/profiles/{did}")
             c.delete(f"/range-configs/{rc2_id}")
             c.delete(f"/pools/{pool2_id}")

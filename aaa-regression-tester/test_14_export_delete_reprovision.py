@@ -33,6 +33,7 @@ from fixtures.profiles import (
     create_profile_imsi_apn,
     create_profile_iccid_apn,
     delete_profile,
+    cleanup_stale_profiles,
 )
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -163,6 +164,10 @@ class TestExportDeleteReprovisionIccid:
         cls.verify_lookups = []
 
         with _client() as c:
+            # Terminate any profiles left by a previous interrupted run so
+            # ICCID/IMSI uniqueness checks start from a clean state.
+            cleanup_stale_profiles(c, "27877140000000")
+
             p = create_pool(c, subnet=cls.SUBNET,
                             pool_name=f"pool-14-iccid", account_name=ACCOUNT,
                             replace_on_conflict=True)
@@ -300,6 +305,9 @@ class TestExportDeleteReprovisionImsi:
         cls.verify_lookups = []
 
         with _client() as c:
+            # Terminate any profiles left by a previous interrupted run.
+            cleanup_stale_profiles(c, "27877140000010")
+
             p = create_pool(c, subnet=cls.SUBNET,
                             pool_name="pool-14-imsi", account_name=ACCOUNT,
                             replace_on_conflict=True)
@@ -435,6 +443,9 @@ class TestExportDeleteReprovisionImsiApn:
         cls.verify_lookups = []
 
         with _client() as c:
+            # Terminate any profiles left by a previous interrupted run.
+            cleanup_stale_profiles(c, "27877140000020")
+
             p = create_pool(c, subnet=cls.SUBNET,
                             pool_name="pool-14-imsi-apn", account_name=ACCOUNT,
                             replace_on_conflict=True)
@@ -583,6 +594,9 @@ class TestExportDeleteReprovisionIccidApn:
         cls.verify_lookups = []
 
         with _client() as c:
+            # Terminate any profiles left by a previous interrupted run.
+            cleanup_stale_profiles(c, "27877140000030")
+
             p = create_pool(c, subnet=cls.SUBNET,
                             pool_name="pool-14-iccid-apn", account_name=ACCOUNT,
                             replace_on_conflict=True)

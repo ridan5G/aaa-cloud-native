@@ -410,6 +410,28 @@ CREATE TRIGGER trg_irc_updated_at     BEFORE UPDATE ON imsi_range_configs   FOR 
 
 ---
 
+## Schema Initialization
+
+`db-init.sh` (`scripts/db-init.sh`) is the **sole schema initializer**. CNPG's `initdb`
+only creates the database and `aaa_app` owner — it does not run any SQL.
+`make setup` and `make db-init` both call `db-init.sh`, which:
+
+1. Drops stale tables from superseded schema generations (idempotent)
+2. Runs column migrations for pre-existing clusters (idempotent — skipped on fresh clusters)
+3. Applies the full schema SQL from the `aaa-postgres-initdb-sql` ConfigMap
+4. Sets `ALTER DEFAULT PRIVILEGES` for `aaa_app`
+
+### Column migration history — `ip_pools`
+
+| Generation | Cluster state | Migration action |
+|---|---|---|
+| Fresh | `ip_pools` not yet created | Skip — schema SQL creates it with `routing_domain_id` correctly |
+| Gen-1 | `ip_pools` exists, no routing column | Add `routing_domain_id` UUID FK; assign all existing rows to the `default` domain |
+| Gen-2 | `ip_pools` has `routing_domain TEXT` | Seed `routing_domains` rows from distinct values, then replace column with `routing_domain_id` UUID FK |
+| Gen-3 / current | `ip_pools` has `routing_domain_id UUID` | Skip — already current |
+
+---
+
 ## AAA Hot-Path Lookup Query
 
 Executed on every RADIUS/Diameter Access-Request. Covers all three production profiles

@@ -80,11 +80,12 @@ This single command runs the full chain:
 > Watch progress in a second terminal: `kubectl get pods -n aaa-platform -w`
 
 > **Why `db-init`?**
-> CloudNativePG runs the initdb SQL only once — at the moment the database cluster is first
-> created (`postInitApplicationSQLRefs`). If the cluster already exists (e.g. from a previous
-> deploy) the SQL never runs automatically. `make db-init` applies the schema idempotently at
-> any time. `make setup` calls it automatically; for day-to-day re-deploys, run it manually
-> whenever you add new tables to the schema.
+> `db-init.sh` is the **sole schema initializer** — CNPG's `initdb` only creates the database
+> and `aaa_app` user. `db-init.sh` applies all tables, indexes, grants, and column migrations.
+> On a fresh cluster it creates everything from scratch with no migration needed. On a cluster
+> created before a recent schema change (e.g. before `routing_domain_id` was added to
+> `ip_pools`) it runs the appropriate idempotent column migration to bring the schema up to date.
+> `make setup` calls it automatically; run it manually whenever you add new tables or columns.
 
 ### Step 3 — Configure Windows hosts file (one-time)
 
@@ -147,11 +148,12 @@ wsl make db-init
 
 Under the hood this script (`scripts/db-init.sh`):
 1. Finds the CNPG primary pod (`cnpg.io/instanceRole=primary`)
-2. Extracts `schema.sql` from the `aaa-postgres-initdb-sql` ConfigMap
-3. Pipes it into psql as the `postgres` superuser (peer auth, no password needed)
-4. Runs `ALTER DEFAULT PRIVILEGES` so future objects are automatically accessible to `aaa_app`
+2. Drops stale tables from superseded schema generations (idempotent — only acts when old names exist and new names don't)
+3. Runs column migrations for clusters predating recent schema changes (idempotent — skipped entirely on fresh clusters where `ip_pools` doesn't yet exist)
+4. Extracts `schema.sql` from the `aaa-postgres-initdb-sql` ConfigMap and applies it via psql
+5. Runs `ALTER DEFAULT PRIVILEGES` so future objects are automatically accessible to `aaa_app`
 
-It is fully idempotent — `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, and `GRANT` are safe to re-run.
+It is fully idempotent — `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, `ON CONFLICT DO NOTHING`, and `GRANT` are safe to re-run.
 
 ### Check status
 
@@ -296,11 +298,7 @@ To re-run tests, call `wsl make test` again — it creates a fresh Job each time
 
 ### `relation "..." does not exist` or `permission denied for table ...`
 
-The database schema was not initialized. This happens when the CNPG cluster was
-created before the initdb ConfigMap existed — CloudNativePG runs `postInitApplicationSQLRefs`
-only once, at cluster bootstrap.
-
-Fix: apply the schema idempotently:
+The database schema was not initialized or is out of date. Run:
 ```bash
 wsl make db-init
 ```

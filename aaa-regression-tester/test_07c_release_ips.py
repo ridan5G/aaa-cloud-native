@@ -16,6 +16,7 @@ import pytest
 
 from conftest import PROVISION_BASE, JWT_TOKEN, USE_CASE_ID
 from fixtures.pools import create_pool, delete_pool
+from fixtures.profiles import cleanup_stale_profiles
 from fixtures.range_configs import create_range_config, delete_range_config
 
 # Isolated /29 pool → 6 usable IPs (.1–.6)
@@ -35,13 +36,15 @@ IMSI_DEL2 = "278773075000011"   # 7c.7 — deleted IMSI can be re-added
 class TestReleaseIps:
     pool_id:         str | None = None
     range_config_id: str | None = None
-    alloc_sim_ids:   list[str]  = []
 
     @classmethod
     def setup_class(cls):
         with httpx.Client(base_url=PROVISION_BASE,
                           headers={"Authorization": f"Bearer {JWT_TOKEN}"},
                           timeout=30.0) as c:
+            # Terminate any profiles left by a previous interrupted run.
+            cleanup_stale_profiles(c, "278773075")
+
             p = create_pool(c, subnet=POOL_SUBNET,
                             pool_name="pool-rel-07c", account_name="TestAccount",
                             replace_on_conflict=True)
@@ -56,18 +59,14 @@ class TestReleaseIps:
                 account_name="TestAccount",
             )
             cls.range_config_id = rc["id"]
-            cls.alloc_sim_ids = []
 
     @classmethod
     def teardown_class(cls):
+        # Profiles are intentionally NOT deleted — they remain visible after
+        # the run for post-run inspection via GET /profiles/export.
         with httpx.Client(base_url=PROVISION_BASE,
                           headers={"Authorization": f"Bearer {JWT_TOKEN}"},
                           timeout=30.0) as c:
-            for did in cls.alloc_sim_ids:
-                try:
-                    c.delete(f"/profiles/{did}")
-                except Exception:
-                    pass
             if cls.range_config_id:
                 delete_range_config(c, cls.range_config_id)
             if cls.pool_id:
@@ -102,7 +101,6 @@ class TestReleaseIps:
         assert r_fc.status_code == 201, f"first-connection failed: {r_fc.text}"
         sim_id = r_fc.json()["sim_id"]
         allocated_ip = r_fc.json()["static_ip"]
-        TestReleaseIps.alloc_sim_ids.append(sim_id)
 
         stats_before = http.get(f"/pools/{TestReleaseIps.pool_id}/stats").json()
         assert stats_before["allocated"] >= 1
@@ -169,7 +167,6 @@ class TestReleaseIps:
         r_fc = self._first_connection(http, IMSI_DEL1)
         assert r_fc.status_code == 201, f"first-connection failed: {r_fc.text}"
         sim_id = r_fc.json()["sim_id"]
-        TestReleaseIps.alloc_sim_ids.append(sim_id)
 
         stats_before = http.get(f"/pools/{TestReleaseIps.pool_id}/stats").json()
 
@@ -190,7 +187,6 @@ class TestReleaseIps:
         r_fc = self._first_connection(http, IMSI_DEL2)
         assert r_fc.status_code == 201
         sim_id = r_fc.json()["sim_id"]
-        TestReleaseIps.alloc_sim_ids.append(sim_id)
 
         # Delete the IMSI from the profile
         r_del = http.delete(f"/profiles/{sim_id}/imsis/{IMSI_DEL2}")
@@ -204,4 +200,3 @@ class TestReleaseIps:
         })
         assert r_new.status_code == 201, \
             f"Expected 201 reassigning deleted IMSI, got {r_new.status_code}: {r_new.text}"
-        TestReleaseIps.alloc_sim_ids.append(r_new.json()["sim_id"])

@@ -20,6 +20,7 @@ import pytest
 
 from conftest import PROVISION_BASE, JWT_TOKEN, make_imsi, make_iccid, USE_CASE_ID
 from fixtures.pools import create_pool, delete_pool
+from fixtures.profiles import cleanup_stale_profiles
 from fixtures.range_configs import (
     create_range_config,
     delete_range_config,
@@ -59,12 +60,11 @@ class TestS2SingleImsiApn:
     pool_internet_id: str | None = None
     pool_ims_id:      str | None = None
     range_config_id:  int | None = None
-    alloc_sim_ids: list[str] = []
 
     @classmethod
     def setup_class(cls):
-        cls.alloc_sim_ids = []
         with _new_client() as c:
+            cleanup_stale_profiles(c, "27877130000000")
             cls.pool_internet_id = create_pool(
                 c, subnet="100.65.230.0/29",
                 pool_name="s2-internet", account_name="TestAccount",
@@ -93,8 +93,6 @@ class TestS2SingleImsiApn:
     @classmethod
     def teardown_class(cls):
         with _new_client() as c:
-            for did in cls.alloc_sim_ids:
-                c.delete(f"/profiles/{did}")
             if cls.range_config_id:
                 delete_range_config(c, cls.range_config_id)
             if cls.pool_internet_id:
@@ -111,7 +109,6 @@ class TestS2SingleImsiApn:
         assert "sim_id" in body
         assert "static_ip" in body
         assert body["static_ip"].startswith("100.65.230.")
-        TestS2SingleImsiApn.alloc_sim_ids.append(body["sim_id"])
 
     def test_02_both_apns_provisioned(self, http: httpx.Client):
         """After first-connection, both APN IPs exist on the profile."""
@@ -158,12 +155,11 @@ class TestS3SingleIccid:
 
     pool_id:          str | None = None
     range_config_id:  int | None = None
-    alloc_sim_ids: list[str] = []
 
     @classmethod
     def setup_class(cls):
-        cls.alloc_sim_ids = []
         with _new_client() as c:
+            cleanup_stale_profiles(c, "27877130000020")
             cls.pool_id = create_pool(
                 c, subnet="100.65.230.16/29",
                 pool_name="s3-pool", account_name="TestAccount",
@@ -182,8 +178,6 @@ class TestS3SingleIccid:
     @classmethod
     def teardown_class(cls):
         with _new_client() as c:
-            for did in cls.alloc_sim_ids:
-                c.delete(f"/profiles/{did}")
             if cls.range_config_id:
                 delete_range_config(c, cls.range_config_id)
             if cls.pool_id:
@@ -197,7 +191,6 @@ class TestS3SingleIccid:
         body = r.json()
         assert "sim_id" in body
         assert "static_ip" in body
-        TestS3SingleIccid.alloc_sim_ids.append(body["sim_id"])
 
     def test_02_profile_has_iccid_resolution(self, http: httpx.Client):
         """GET /profiles?imsi= → ip_resolution=iccid; iccid_ips present."""
@@ -234,12 +227,11 @@ class TestS4SingleIccidApn:
     pool_internet_id: str | None = None
     pool_ims_id:      str | None = None
     range_config_id:  int | None = None
-    alloc_sim_ids: list[str] = []
 
     @classmethod
     def setup_class(cls):
-        cls.alloc_sim_ids = []
         with _new_client() as c:
+            cleanup_stale_profiles(c, "27877130000040")
             cls.pool_internet_id = create_pool(
                 c, subnet="100.65.230.24/29",
                 pool_name="s4-internet", account_name="TestAccount",
@@ -267,8 +259,6 @@ class TestS4SingleIccidApn:
     @classmethod
     def teardown_class(cls):
         with _new_client() as c:
-            for did in cls.alloc_sim_ids:
-                c.delete(f"/profiles/{did}")
             if cls.range_config_id:
                 delete_range_config(c, cls.range_config_id)
             if cls.pool_internet_id:
@@ -284,7 +274,6 @@ class TestS4SingleIccidApn:
         body = r.json()
         assert "sim_id" in body
         assert "static_ip" in body
-        TestS4SingleIccidApn.alloc_sim_ids.append(body["sim_id"])
 
     def test_02_both_apns_provisioned_at_card_level(self, http: httpx.Client):
         """Profile has 2 card-level IPs (one per APN), no per-IMSI IPs."""
@@ -322,7 +311,6 @@ class TestM1MultiImsi:
     iccid_range_id:    int | None = None
     slot1_rc_id:       int | None = None
     slot2_rc_id:       int | None = None
-    alloc_sim_ids:  list[str] = []
 
     F_ICCID = make_iccid(MODULE, 0)
     T_ICCID = make_iccid(MODULE, 9)
@@ -333,8 +321,9 @@ class TestM1MultiImsi:
 
     @classmethod
     def setup_class(cls):
-        cls.alloc_sim_ids = []
         with _new_client() as c:
+            # Slot-1 prefix is sufficient — profiles contain both IMSI slots
+            cleanup_stale_profiles(c, "27877130000060")
             cls.pool_slot1_id = create_pool(
                 c, subnet="100.65.230.40/29",
                 pool_name="m1-slot1", account_name="TestAccount",
@@ -371,8 +360,6 @@ class TestM1MultiImsi:
     @classmethod
     def teardown_class(cls):
         with _new_client() as c:
-            for did in set(cls.alloc_sim_ids):
-                c.delete(f"/profiles/{did}")
             if cls.iccid_range_id:
                 delete_iccid_range_config(c, cls.iccid_range_id)
             if cls.pool_slot1_id:
@@ -387,7 +374,6 @@ class TestM1MultiImsi:
         body = r.json()
         assert "sim_id" in body
         assert "static_ip" in body
-        TestM1MultiImsi.alloc_sim_ids.append(body["sim_id"])
 
     def test_02_sibling_slot2_pre_provisioned(self, http: httpx.Client):
         """Slot-2 IMSI was pre-provisioned atomically; GET /profiles returns it."""
@@ -407,7 +393,6 @@ class TestM1MultiImsi:
         assert r.status_code == 200, f"Expected 200 for pre-provisioned slot-2: {r.text}"
         body = r.json()
         assert "static_ip" in body
-        TestM1MultiImsi.alloc_sim_ids.append(body["sim_id"])
 
     def test_04_each_slot_has_distinct_ip(self, http: httpx.Client):
         """Slot-1 and slot-2 IMSIs have different IPs drawn from their own pools."""
@@ -436,7 +421,6 @@ class TestM2MultiImsiApn:
     iccid_range_id:    int | None = None
     slot1_rc_id:       int | None = None
     slot2_rc_id:       int | None = None
-    alloc_sim_ids:  list[str] = []
 
     F_ICCID = make_iccid(MODULE, 100)
     T_ICCID = make_iccid(MODULE, 109)
@@ -447,8 +431,8 @@ class TestM2MultiImsiApn:
 
     @classmethod
     def setup_class(cls):
-        cls.alloc_sim_ids = []
         with _new_client() as c:
+            cleanup_stale_profiles(c, "27877130000080")
             cls.pool_internet_id = create_pool(
                 c, subnet="100.65.230.56/29",
                 pool_name="m2-internet", account_name="TestAccount",
@@ -496,8 +480,6 @@ class TestM2MultiImsiApn:
     @classmethod
     def teardown_class(cls):
         with _new_client() as c:
-            for did in set(cls.alloc_sim_ids):
-                c.delete(f"/profiles/{did}")
             if cls.iccid_range_id:
                 delete_iccid_range_config(c, cls.iccid_range_id)
             if cls.pool_internet_id:
@@ -511,7 +493,6 @@ class TestM2MultiImsiApn:
         assert r.status_code == 201, f"Expected 201: {r.status_code} {r.text}"
         body = r.json()
         assert "sim_id" in body and "static_ip" in body
-        TestM2MultiImsiApn.alloc_sim_ids.append(body["sim_id"])
 
     def test_02_slot1_has_both_apns_provisioned(self, http: httpx.Client):
         """Slot-1 IMSI has 2 apn_ips entries after first-connection."""
@@ -562,7 +543,6 @@ class TestM3MultiIccid:
 
     pool_id:           str | None = None
     iccid_range_id:    int | None = None
-    alloc_sim_ids:  list[str] = []
 
     F_ICCID = make_iccid(MODULE, 200)
     T_ICCID = make_iccid(MODULE, 209)
@@ -573,8 +553,8 @@ class TestM3MultiIccid:
 
     @classmethod
     def setup_class(cls):
-        cls.alloc_sim_ids = []
         with _new_client() as c:
+            cleanup_stale_profiles(c, "27877130000100")
             cls.pool_id = create_pool(
                 c, subnet="100.65.230.72/29",
                 pool_name="m3-pool", account_name="TestAccount",
@@ -602,8 +582,6 @@ class TestM3MultiIccid:
     @classmethod
     def teardown_class(cls):
         with _new_client() as c:
-            for did in set(cls.alloc_sim_ids):
-                c.delete(f"/profiles/{did}")
             if cls.iccid_range_id:
                 delete_iccid_range_config(c, cls.iccid_range_id)
             if cls.pool_id:
@@ -615,7 +593,6 @@ class TestM3MultiIccid:
         assert r.status_code == 201, f"Expected 201: {r.status_code} {r.text}"
         body = r.json()
         assert "sim_id" in body and "static_ip" in body
-        TestM3MultiIccid.alloc_sim_ids.append(body["sim_id"])
 
     def test_02_slot2_shares_same_device_and_ip(self, http: httpx.Client):
         """Slot-2 IMSI returns 200 with the SAME IP (shared card IP, iccid mode)."""
@@ -627,7 +604,6 @@ class TestM3MultiIccid:
             "iccid mode: all slots share one card IP"
         assert r1.json()["sim_id"] == r2.json()["sim_id"], \
             "iccid mode: all slots share one sim_id"
-        TestM3MultiIccid.alloc_sim_ids.append(r2.json()["sim_id"])
 
     def test_03_pool_allocates_exactly_one_ip(self, http: httpx.Client):
         """iccid mode: only 1 IP consumed from pool regardless of slot count."""
@@ -649,7 +625,6 @@ class TestM4MultiIccidApn:
     pool_ims_id:       str | None = None
     iccid_range_id:    int | None = None
     slot1_rc_id:       int | None = None
-    alloc_sim_ids:  list[str] = []
 
     F_ICCID = make_iccid(MODULE, 300)
     T_ICCID = make_iccid(MODULE, 309)
@@ -660,8 +635,8 @@ class TestM4MultiIccidApn:
 
     @classmethod
     def setup_class(cls):
-        cls.alloc_sim_ids = []
         with _new_client() as c:
+            cleanup_stale_profiles(c, "27877130000120")
             cls.pool_internet_id = create_pool(
                 c, subnet="100.65.230.80/29",
                 pool_name="m4-internet", account_name="TestAccount",
@@ -702,8 +677,6 @@ class TestM4MultiIccidApn:
     @classmethod
     def teardown_class(cls):
         with _new_client() as c:
-            for did in set(cls.alloc_sim_ids):
-                c.delete(f"/profiles/{did}")
             if cls.iccid_range_id:
                 delete_iccid_range_config(c, cls.iccid_range_id)
             if cls.pool_internet_id:
@@ -717,7 +690,6 @@ class TestM4MultiIccidApn:
         assert r.status_code == 201, f"Expected 201: {r.status_code} {r.text}"
         body = r.json()
         assert "sim_id" in body and "static_ip" in body
-        TestM4MultiIccidApn.alloc_sim_ids.append(body["sim_id"])
 
     def test_02_both_apns_at_card_level(self, http: httpx.Client):
         """Profile has 2 card-level IPs (internet + ims) shared across both slots."""
@@ -740,7 +712,6 @@ class TestM4MultiIccidApn:
         assert r2.status_code == 200
         assert r1.json()["static_ip"] == r2.json()["static_ip"], \
             "iccid_apn: both slots share the same card-level internet IP"
-        TestM4MultiIccidApn.alloc_sim_ids.append(r2.json()["sim_id"])
 
     def test_04_ims_apn_also_shared(self, http: httpx.Client):
         """Slot-2 ims APN returns same card-level ims IP as slot-1."""

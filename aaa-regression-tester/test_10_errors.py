@@ -21,20 +21,20 @@ from fixtures.profiles import (
 MODULE = 10
 
 # Pool shared across all tests in this module
-POOL_SUBNET = "100.65.230.0/24"
+POOL_SUBNET = "100.65.200.0/24"
 
 # Two IMSIs used to set up conflict scenarios
 IMSI_EXISTING  = make_imsi(MODULE, 1)   # used in 10.5 / 10.6 conflict tests
 ICCID_EXISTING = make_iccid(MODULE, 1)  # used in 10.5 / 10.9 conflict tests
-IP_EXISTING    = "100.65.230.1"
+IP_EXISTING    = "100.65.200.1"
 
 IMSI_SECOND    = make_imsi(MODULE, 2)   # second profile for 10.9 ICCID conflict
-IP_SECOND      = "100.65.230.2"
+IP_SECOND      = "100.65.200.2"
 
 # Profile used across multiple tests (10.10 / 10.11 / 10.12)
 IMSI_MAIN      = make_imsi(MODULE, 10)
-IP_MAIN_A      = "100.65.230.10"
-IP_MAIN_ICCID  = "100.65.230.11"
+IP_MAIN_A      = "100.65.200.10"
+IP_MAIN_ICCID  = "100.65.200.11"
 ICCID_MAIN     = make_iccid(MODULE, 10)
 
 
@@ -98,7 +98,7 @@ class TestErrors:
             "status": "active", "ip_resolution": "imsi",
             "imsis": [
                 {"imsi": "27877310000001",   # 14 digits (one short)
-                 "apn_ips": [{"static_ip": "100.65.230.100",
+                 "apn_ips": [{"static_ip": "100.65.200.100",
                               "pool_id": TestErrors.pool_id}]},
             ],
         })
@@ -117,7 +117,7 @@ class TestErrors:
             "account_name": "TestAccount",
             "status": "active", "ip_resolution": "iccid",
             "imsis": [{"imsi": make_imsi(MODULE, 901), "apn_ips": []}],
-            "iccid_ips": [{"static_ip": "100.65.230.101",
+            "iccid_ips": [{"static_ip": "100.65.200.101",
                            "pool_id": TestErrors.pool_id,
                            "pool_name": "pool-err-10"}],
         })
@@ -137,7 +137,7 @@ class TestErrors:
             # ip_resolution intentionally omitted
             "imsis": [
                 {"imsi": make_imsi(MODULE, 902),
-                 "apn_ips": [{"static_ip": "100.65.230.102",
+                 "apn_ips": [{"static_ip": "100.65.200.102",
                               "pool_id": TestErrors.pool_id}]},
             ],
         })
@@ -154,7 +154,7 @@ class TestErrors:
             "ip_resolution": "bogus_value",
             "imsis": [
                 {"imsi": make_imsi(MODULE, 903),
-                 "apn_ips": [{"static_ip": "100.65.230.103",
+                 "apn_ips": [{"static_ip": "100.65.200.103",
                               "pool_id": TestErrors.pool_id}]},
             ],
         })
@@ -170,7 +170,7 @@ class TestErrors:
             "status": "active",
             "ip_resolution": "iccid",
             "imsis": [{"imsi": make_imsi(MODULE, 904), "apn_ips": []}],
-            "iccid_ips": [{"static_ip": "100.65.230.104",
+            "iccid_ips": [{"static_ip": "100.65.200.104",
                            "pool_id": TestErrors.pool_id,
                            "pool_name": "pool-err-10"}],
         })
@@ -189,7 +189,7 @@ class TestErrors:
             "ip_resolution": "imsi",
             "imsis": [
                 {"imsi": IMSI_EXISTING,   # already on device_conflict
-                 "apn_ips": [{"static_ip": "100.65.230.105",
+                 "apn_ips": [{"static_ip": "100.65.200.105",
                               "pool_id": TestErrors.pool_id}]},
             ],
         })

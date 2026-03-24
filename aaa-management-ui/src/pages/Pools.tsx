@@ -173,12 +173,58 @@ function DomainComboBox({
 // ─── Pool List ────────────────────────────────────────────────────────────────
 function PoolList() {
   const navigate  = useNavigate()
+  const { show }  = useToasts()
   const [pools,          setPools]          = useState<(Pool & PoolStats)[]>([])
   const [loading,        setLoading]        = useState(true)
   const [error,          setError]          = useState<string | null>(null)
   const [showNew,        setShowNew]        = useState(false)
   const [routingDomains, setRoutingDomains] = useState<RoutingDomain[]>([])
   const [domainFilter,   setDomainFilter]   = useState('')
+
+  // ── Free CIDR Finder ──────────────────────────────────────────────────────
+  const [cidrDomain,     setCidrDomain]     = useState('')
+  const [cidrSize,       setCidrSize]       = useState('')
+  const [cidrSuggesting, setCidrSuggesting] = useState(false)
+  const [cidrSuggestion, setCidrSuggestion] = useState<SuggestCidrResult | null>(null)
+  const [cidrError,      setCidrError]      = useState<string | null>(null)
+
+  // Pre-fill values passed into NewPoolModal when "Create Pool" is clicked
+  const [prefillDomain, setPrefillDomain] = useState<string | undefined>()
+  const [prefillSubnet, setPrefillSubnet] = useState<string | undefined>()
+
+  const cidrSelectedDomain = routingDomains.find(d => d.name === cidrDomain)
+  const cidrCanSuggest     = !!cidrSelectedDomain && cidrSelectedDomain.allowed_prefixes.length > 0
+
+  async function handleCidrSuggest() {
+    if (!cidrSelectedDomain || !cidrSize) return
+    const size = parseInt(cidrSize, 10)
+    if (isNaN(size) || size < 1) { setCidrError('Enter a valid number ≥ 1'); return }
+    setCidrSuggesting(true); setCidrSuggestion(null); setCidrError(null)
+    try {
+      const res = await apiClient.get(`/routing-domains/${cidrSelectedDomain.id}/suggest-cidr`, { params: { size } })
+      setCidrSuggestion(res.data)
+    } catch (e: unknown) {
+      const raw = (e as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+      const msg: string = typeof raw === 'string' ? raw
+        : (raw as { detail?: string; error?: string } | undefined)?.detail
+          ?? (raw as { detail?: string; error?: string } | undefined)?.error
+          ?? String(e)
+      setCidrError(msg)
+    } finally { setCidrSuggesting(false) }
+  }
+
+  function handleCreateFromSuggestion() {
+    if (!cidrSuggestion || !cidrSelectedDomain) return
+    setPrefillDomain(cidrSelectedDomain.name)
+    setPrefillSubnet(cidrSuggestion.suggested_cidr)
+    setShowNew(true)
+  }
+
+  function closeModal() {
+    setShowNew(false)
+    setPrefillDomain(undefined)
+    setPrefillSubnet(undefined)
+  }
 
   async function load() {
     setLoading(true)
@@ -235,11 +281,84 @@ function PoolList() {
 
       {error && <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-lg">{error}</div>}
 
+      {/* Free CIDR Finder */}
+      <div className="card p-5 space-y-3">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-800">Free CIDR Finder</h3>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Find an available subnet in a routing domain and create a pool directly from the result.
+            Only domains with configured allowed_prefixes are listed.
+          </p>
+        </div>
+        <div className="flex items-end gap-3 flex-wrap">
+          <div className="field mb-0 w-56">
+            <label className="label">Routing Domain</label>
+            <DomainComboBox
+              domains={routingDomains.filter(d => d.allowed_prefixes.length > 0)}
+              value={cidrDomain}
+              onChange={v => { setCidrDomain(v); setCidrSuggestion(null); setCidrError(null) }}
+              placeholder="Select domain…"
+            />
+          </div>
+          <div className="field mb-0 w-36">
+            <label className="label">Min hosts needed *</label>
+            <input
+              className="input font-mono"
+              type="number"
+              min={1}
+              placeholder="e.g. 254"
+              value={cidrSize}
+              onChange={e => { setCidrSize(e.target.value); setCidrSuggestion(null); setCidrError(null) }}
+              onKeyDown={e => { if (e.key === 'Enter') handleCidrSuggest() }}
+            />
+          </div>
+          <button
+            onClick={handleCidrSuggest}
+            disabled={!cidrCanSuggest || !cidrSize || cidrSuggesting}
+            className="btn-primary"
+          >
+            {cidrSuggesting ? 'Searching…' : 'Find Free CIDR'}
+          </button>
+        </div>
+        {cidrError && (
+          <div className="flex gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-700">
+            <span className="shrink-0 mt-0.5">✕</span>
+            <span>{cidrError}</span>
+          </div>
+        )}
+        {cidrSuggestion && (
+          <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 flex items-center gap-4 flex-wrap">
+            <div className="space-y-0.5 flex-1 min-w-0">
+              <p className="text-xs font-semibold text-green-700 uppercase tracking-wide">Suggested</p>
+              <div className="flex items-center gap-3 flex-wrap">
+                <code className="text-base font-mono font-bold text-green-800">{cidrSuggestion.suggested_cidr}</code>
+                <span className="text-xs text-green-600">
+                  /{cidrSuggestion.prefix_len} · {cidrSuggestion.usable_hosts.toLocaleString()} usable hosts · no overlap in "{cidrSuggestion.routing_domain_name}"
+                </span>
+              </div>
+            </div>
+            <div className="flex gap-2 shrink-0">
+              <button
+                onClick={() => { navigator.clipboard.writeText(cidrSuggestion!.suggested_cidr); show('info', 'Copied to clipboard') }}
+                className="btn-ghost text-xs py-1.5 px-3"
+              >
+                Copy
+              </button>
+              <button onClick={handleCreateFromSuggestion} className="btn-primary text-xs py-1.5 px-3">
+                Create Pool
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {showNew && (
         <NewPoolModal
           routingDomains={routingDomains}
-          onClose={() => setShowNew(false)}
-          onSuccess={() => { setShowNew(false); load(); loadDomains() }}
+          initialDomain={prefillDomain}
+          initialSubnet={prefillSubnet}
+          onClose={closeModal}
+          onSuccess={() => { closeModal(); load(); loadDomains() }}
         />
       )}
 
@@ -452,16 +571,20 @@ interface PrefixError {
 // ─── New Pool Modal ───────────────────────────────────────────────────────────
 function NewPoolModal({
   routingDomains,
+  initialDomain,
+  initialSubnet,
   onClose,
   onSuccess,
 }: {
   routingDomains: RoutingDomain[]
+  initialDomain?: string
+  initialSubnet?: string
   onClose: () => void
   onSuccess: () => void
 }) {
   const { show } = useToasts()
   const [form, setForm] = useState({
-    name: '', subnet: '', account_name: '', routing_domain: 'default',
+    name: '', subnet: initialSubnet ?? '', account_name: '', routing_domain: initialDomain ?? 'default',
   })
   const [saving,       setSaving]       = useState(false)
   const [overlapError, setOverlapError] = useState<OverlapError | null>(null)

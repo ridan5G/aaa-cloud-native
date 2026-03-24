@@ -168,3 +168,36 @@ def delete_profile(http: httpx.Client, sim_id: str) -> None:
         raise AssertionError(
             f"delete_profile({sim_id}) returned {resp.status_code}: {resp.text}"
         )
+
+
+def cleanup_stale_profiles(http: httpx.Client, *imsi_prefixes: str) -> None:
+    """Soft-delete any leftover active profiles from previous runs.
+
+    Called at the start of setup_class for dynamic-allocation test modules
+    (test_07, test_07b, test_07c).  Each module owns a distinct IMSI prefix so
+    the query is precise and never touches another module's data.
+
+    Design rationale
+    ─────────────────
+    teardown_class no longer deletes profiles — profiles created during a run
+    are intentionally left active so they can be inspected via GET /profiles/export
+    after the suite finishes.  The next run's setup_class calls this function to
+    terminate any survivors before re-creating the infrastructure, guaranteeing a
+    clean slate without requiring a full DB flush between runs.
+    """
+    for prefix in imsi_prefixes:
+        r = http.get("/profiles", params={"imsi_prefix": prefix, "limit": 1000})
+        if r.status_code != 200:
+            continue
+        data = r.json()
+        items = (
+            data
+            if isinstance(data, list)
+            else data.get("profiles", data.get("items", []))
+        )
+        for profile in items:
+            if profile.get("status") != "terminated":
+                try:
+                    http.delete(f"/profiles/{profile['sim_id']}")
+                except Exception:
+                    pass

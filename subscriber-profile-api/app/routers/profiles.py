@@ -157,7 +157,7 @@ async def create_profile(body: ProfileCreate, conn=Depends(get_conn)):
         # Check ICCID uniqueness
         if body.iccid:
             existing = await conn.fetchval(
-                "SELECT sim_id::text FROM sim_profiles WHERE iccid = $1",
+                "SELECT sim_id::text FROM sim_profiles WHERE iccid = $1 AND status != 'terminated'",
                 body.iccid,
             )
             if existing:

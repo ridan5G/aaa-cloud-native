@@ -26,7 +26,9 @@ function DeviceList() {
   const [iccidPrefix,   setIccidPrefix]   = useState('')
   const [ipResFilter,   setIpResFilter]   = useState('')
   const [ipFilter,      setIpFilter]      = useState('')
+  const [poolFilter,    setPoolFilter]    = useState('')
   const [accounts,  setAccounts]  = useState<string[]>([])
+  const [pools,     setPools]     = useState<Pool[]>([])
   const [loading,   setLoading]   = useState(false)
   const [exporting, setExporting] = useState(false)
   const [error,     setError]     = useState<string | null>(null)
@@ -34,12 +36,15 @@ function DeviceList() {
   useEffect(() => {
     apiClient.get('/profiles/accounts').then(r => setAccounts(r.data ?? [])).catch(() => {})
   }, [])
+  useEffect(() => {
+    apiClient.get('/pools').then(r => setPools(r.data.pools ?? r.data.items ?? [])).catch(() => {})
+  }, [])
 
   async function load(
     st       = status,       pg       = page,
     acc      = accountFilter, ipRes   = ipResFilter,
     imsiPfx  = imsiPrefix,   iccidPfx = iccidPrefix,
-    ipAddr   = ipFilter,
+    ipAddr   = ipFilter,     poolId   = poolFilter,
   ) {
     setLoading(true); setError(null)
     try {
@@ -50,6 +55,7 @@ function DeviceList() {
       if (imsiPfx.trim())  params.imsi_prefix   = imsiPfx.trim()
       if (iccidPfx.trim()) params.iccid_prefix  = iccidPfx.trim()
       if (ipAddr.trim())   params.ip            = ipAddr.trim()
+      if (poolId)          params.pool_id       = poolId
       const res = await apiClient.get('/profiles', { params })
       setItems(res.data.items ?? res.data.profiles ?? [])
       setTotal(res.data.total ?? 0)
@@ -60,18 +66,19 @@ function DeviceList() {
 
   function handleSearch(e: React.FormEvent) {
     e.preventDefault(); setPage(1)
-    load(status, 1, accountFilter, ipResFilter, imsiPrefix, iccidPrefix, ipFilter)
+    load(status, 1, accountFilter, ipResFilter, imsiPrefix, iccidPrefix, ipFilter, poolFilter)
   }
-  function handleSelectFilter(field: 'status' | 'account' | 'ipRes', v: string) {
-    if (field === 'status')  { setStatus(v);        setPage(1); load(v,       1, accountFilter, ipResFilter, imsiPrefix, iccidPrefix, ipFilter) }
-    if (field === 'account') { setAccountFilter(v); setPage(1); load(status,  1, v,             ipResFilter, imsiPrefix, iccidPrefix, ipFilter) }
-    if (field === 'ipRes')   { setIpResFilter(v);   setPage(1); load(status,  1, accountFilter, v,           imsiPrefix, iccidPrefix, ipFilter) }
+  function handleSelectFilter(field: 'status' | 'account' | 'ipRes' | 'pool', v: string) {
+    if (field === 'status')  { setStatus(v);        setPage(1); load(v,      1, accountFilter, ipResFilter, imsiPrefix, iccidPrefix, ipFilter, poolFilter) }
+    if (field === 'account') { setAccountFilter(v); setPage(1); load(status, 1, v,             ipResFilter, imsiPrefix, iccidPrefix, ipFilter, poolFilter) }
+    if (field === 'ipRes')   { setIpResFilter(v);   setPage(1); load(status, 1, accountFilter, v,           imsiPrefix, iccidPrefix, ipFilter, poolFilter) }
+    if (field === 'pool')    { setPoolFilter(v);    setPage(1); load(status, 1, accountFilter, ipResFilter, imsiPrefix, iccidPrefix, ipFilter, v) }
   }
   function handleReset() {
-    setStatus(''); setAccountFilter(''); setImsiPrefix(''); setIccidPrefix(''); setIpResFilter(''); setIpFilter('')
-    setPage(1); load('', 1, '', '', '', '', '')
+    setStatus(''); setAccountFilter(''); setImsiPrefix(''); setIccidPrefix(''); setIpResFilter(''); setIpFilter(''); setPoolFilter('')
+    setPage(1); load('', 1, '', '', '', '', '', '')
   }
-  function goPage(p: number) { setPage(p); load(status, p, accountFilter, ipResFilter, imsiPrefix, iccidPrefix, ipFilter) }
+  function goPage(p: number) { setPage(p); load(status, p, accountFilter, ipResFilter, imsiPrefix, iccidPrefix, ipFilter, poolFilter) }
   const totalPages = Math.ceil(total / PER_PAGE)
 
   async function handleExport() {
@@ -84,6 +91,7 @@ function DeviceList() {
       if (imsiPrefix.trim())  params.imsi_prefix   = imsiPrefix.trim()
       if (iccidPrefix.trim()) params.iccid_prefix  = iccidPrefix.trim()
       if (ipFilter.trim())    params.ip            = ipFilter.trim()
+      if (poolFilter)         params.pool_id       = poolFilter
 
       const res = await apiClient.get('/profiles/export', { params })
       const rows: Record<string, string | null>[] = res.data
@@ -168,6 +176,14 @@ function DeviceList() {
             <option value="active">Active</option>
             <option value="suspended">Suspended</option>
             <option value="terminated">Terminated</option>
+          </select>
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-gray-500 font-medium">Pool</label>
+          <select className="select w-44" value={poolFilter}
+            onChange={e => handleSelectFilter('pool', e.target.value)}>
+            <option value="">All pools</option>
+            {pools.map(p => <option key={p.pool_id} value={p.pool_id}>{p.name}</option>)}
           </select>
         </div>
         <div className="flex flex-col gap-1">
@@ -337,6 +353,21 @@ function ProfileDetail() {
     catch (e) { show('error', String(e)) }
   }
 
+  async function releaseIps() {
+    if (!confirm(
+      'Release all pool-managed IPs for this SIM?\n\n' +
+      'IPs will be returned to the pool and re-allocated on the next first-connection.'
+    )) return
+    try {
+      const r = await apiClient.post(`/profiles/${sim_id}/release-ips`)
+      const { released_count } = r.data
+      show('success', released_count > 0
+        ? `Released ${released_count} IP(s) back to pool`
+        : 'No pool-managed IPs to release')
+      load()
+    } catch (e) { show('error', String(e)) }
+  }
+
   async function addImsi() {
     setSaving(true)
     try {
@@ -398,6 +429,9 @@ function ProfileDetail() {
             )}
             {profile.status === 'suspended' && (
               <button onClick={() => patchProfile({ status: 'active' })} className="btn-ghost text-xs text-green-600 border border-green-200">Reactivate</button>
+            )}
+            {profile.status !== 'terminated' && (
+              <button onClick={releaseIps} className="btn-ghost text-xs text-blue-600 border border-blue-200">Release IPs</button>
             )}
             {profile.status !== 'terminated' && (
               <button onClick={() => patchProfile({ status: 'terminated' })} className="btn-danger text-xs py-1 px-3">Terminate</button>
