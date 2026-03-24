@@ -294,25 +294,52 @@ async def export_profiles(
         )
         params.append(ip); idx += 1
 
-    where = f"WHERE {' AND '.join(filters)}" if filters else ""
+    user_filter = (" AND ".join(filters) + " AND ") if filters else ""
 
     rows = await conn.fetch(
         f"""
-        SELECT
-            sp.sim_id::text,
-            sp.iccid,
-            sp.account_name,
-            sp.status,
-            sp.ip_resolution,
-            si.imsi,
-            ia.apn,
-            host(ia.static_ip) AS static_ip,
-            ia.pool_id::text    AS pool_id
-        FROM sim_profiles sp
-        LEFT JOIN imsi2sim       si ON si.sim_id = sp.sim_id
-        LEFT JOIN imsi_apn_ips   ia ON ia.imsi   = si.imsi
-        {where}
-        ORDER BY sp.created_at DESC, si.priority, ia.id
+        WITH combined AS (
+            SELECT
+                sp.sim_id::text    AS sim_id,
+                sp.iccid,
+                sp.account_name,
+                sp.status,
+                sp.ip_resolution,
+                si.imsi,
+                ia.apn,
+                host(ia.static_ip) AS static_ip,
+                ia.pool_id::text   AS pool_id,
+                sp.created_at,
+                si.priority,
+                ia.id              AS row_sort
+            FROM sim_profiles sp
+            LEFT JOIN imsi2sim     si ON si.sim_id = sp.sim_id
+            LEFT JOIN imsi_apn_ips ia ON ia.imsi   = si.imsi
+            WHERE {user_filter}sp.ip_resolution NOT IN ('iccid', 'iccid_apn')
+
+            UNION ALL
+
+            SELECT
+                sp.sim_id::text    AS sim_id,
+                sp.iccid,
+                sp.account_name,
+                sp.status,
+                sp.ip_resolution,
+                si.imsi,
+                sa.apn,
+                host(sa.static_ip) AS static_ip,
+                sa.pool_id::text   AS pool_id,
+                sp.created_at,
+                si.priority,
+                sa.id              AS row_sort
+            FROM sim_profiles sp
+            JOIN imsi2sim    si ON si.sim_id = sp.sim_id
+            JOIN sim_apn_ips sa ON sa.sim_id = sp.sim_id
+            WHERE {user_filter}sp.ip_resolution IN ('iccid', 'iccid_apn')
+        )
+        SELECT sim_id, iccid, account_name, status, ip_resolution, imsi, apn, static_ip, pool_id
+        FROM combined
+        ORDER BY created_at DESC, priority, row_sort
         """,
         *params,
     )

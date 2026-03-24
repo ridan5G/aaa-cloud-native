@@ -42,6 +42,10 @@ IP_CARD   = make_ip(170, 40)   # sim_card — card-level (sim_apn_ips table)
 IP_TERM   = make_ip(170, 50)   # sim_term — terminated in test 13.10
 
 APN1 = "apn1.export-test.com"
+
+# Module-scoped IMSI/ICCID prefixes (format mirrors make_imsi / make_iccid in conftest.py)
+IMSI_PREFIX  = f"27877{13:02d}"    # "2787713"   — all test-13 IMSIs share this
+ICCID_PREFIX = f"8944501{13:02d}"  # "894450113" — test-13 ICCID prefix
 APN2 = "apn2.export-test.com"
 
 # The 9 columns that must appear in every export row (== import template)
@@ -307,3 +311,106 @@ class TestExportAndIpSearch:
         )
         sim_ids = {item["sim_id"] for item in items}
         assert self.__class__.sim_term_id in sim_ids
+
+    # ── 13.14 ────────────────────────────────────────────────────────────────
+
+    def test_14_list_imsi_prefix_filter(self, http: httpx.Client):
+        """GET /profiles?imsi_prefix= — returns SIMs whose IMSIs match the prefix."""
+        r = http.get("/profiles", params={"imsi_prefix": IMSI_PREFIX, "limit": 50})
+        assert r.status_code == 200
+        body = r.json()
+        found_ids = {item["sim_id"] for item in body["items"]}
+        # All SIMs with active IMSIs from this module must appear
+        # (sim_term's IMSIs were removed on termination in test_11)
+        assert self.__class__.sim_a_id    in found_ids
+        assert self.__class__.sim_b_id    in found_ids
+        assert self.__class__.sim_card_id in found_ids
+        # No SIM outside this module's set should appear
+        module_ids = {
+            self.__class__.sim_a_id, self.__class__.sim_b_id,
+            self.__class__.sim_card_id, self.__class__.sim_term_id,
+        }
+        for item in body["items"]:
+            assert item["sim_id"] in module_ids, (
+                f"Unexpected SIM {item['sim_id']} returned by IMSI prefix filter"
+            )
+
+    # ── 13.15 ────────────────────────────────────────────────────────────────
+
+    def test_15_export_imsi_prefix_filter(self, http: httpx.Client):
+        """GET /profiles/export?imsi_prefix= — rows only for IMSIs matching the prefix."""
+        r = http.get("/profiles/export", params={"imsi_prefix": IMSI_PREFIX})
+        assert r.status_code == 200
+        rows = r.json()
+        assert len(rows) > 0, "Expected export rows for IMSI prefix"
+        for row in rows:
+            assert row["imsi"] is None or row["imsi"].startswith(IMSI_PREFIX), (
+                f"Row IMSI {row['imsi']!r} does not match prefix {IMSI_PREFIX!r}"
+            )
+
+    # ── 13.16 ────────────────────────────────────────────────────────────────
+
+    def test_16_list_iccid_prefix_filter(self, http: httpx.Client):
+        """GET /profiles?iccid_prefix= — returns only SIMs whose ICCID matches the prefix."""
+        r = http.get("/profiles", params={"iccid_prefix": ICCID_PREFIX, "limit": 50})
+        assert r.status_code == 200
+        body = r.json()
+        found_ids = {item["sim_id"] for item in body["items"]}
+        # Only sim_card has an ICCID in this module
+        assert self.__class__.sim_card_id in found_ids
+        assert self.__class__.sim_a_id not in found_ids, (
+            "imsi-mode SIM has no ICCID — should not match ICCID prefix filter"
+        )
+        assert self.__class__.sim_b_id not in found_ids, (
+            "imsi_apn-mode SIM has no ICCID — should not match ICCID prefix filter"
+        )
+
+    # ── 13.17 ────────────────────────────────────────────────────────────────
+
+    def test_17_export_iccid_prefix_filter(self, http: httpx.Client):
+        """GET /profiles/export?iccid_prefix= — rows only for the matching ICCID."""
+        r = http.get("/profiles/export", params={"iccid_prefix": ICCID_PREFIX})
+        assert r.status_code == 200
+        rows = r.json()
+        assert len(rows) > 0, "Expected rows for ICCID prefix"
+        sim_ids = {row["sim_id"] for row in rows}
+        assert self.__class__.sim_card_id in sim_ids
+        assert self.__class__.sim_a_id not in sim_ids
+        assert self.__class__.sim_b_id not in sim_ids
+
+    # ── 13.18 ────────────────────────────────────────────────────────────────
+
+    def test_18_list_account_filter(self, http: httpx.Client):
+        """GET /profiles?account_name= — returns all SIMs for that account only."""
+        r = http.get("/profiles", params={"account_name": ACCOUNT, "limit": 100})
+        assert r.status_code == 200
+        body = r.json()
+        items = body["items"]
+        assert all(item["account_name"] == ACCOUNT for item in items), (
+            "All listed SIMs should belong to the filtered account"
+        )
+        found_ids = {item["sim_id"] for item in items}
+        assert self.__class__.sim_a_id    in found_ids
+        assert self.__class__.sim_b_id    in found_ids
+        assert self.__class__.sim_card_id in found_ids
+        assert self.__class__.sim_term_id in found_ids  # terminated but still listed
+
+    # ── 13.19 ────────────────────────────────────────────────────────────────
+
+    def test_19_export_status_active_excludes_terminated(self, http: httpx.Client):
+        """GET /profiles/export?status=active — terminated SIM absent from export."""
+        r = http.get(
+            "/profiles/export",
+            params={"status": "active", "account_name": ACCOUNT},
+        )
+        assert r.status_code == 200
+        rows = r.json()
+        sim_ids = {row["sim_id"] for row in rows}
+        # Active SIMs must be present
+        assert self.__class__.sim_a_id    in sim_ids
+        assert self.__class__.sim_b_id    in sim_ids
+        assert self.__class__.sim_card_id in sim_ids
+        # Terminated SIM must NOT appear
+        assert self.__class__.sim_term_id not in sim_ids, (
+            "Terminated SIM should not appear when export is filtered by status=active"
+        )

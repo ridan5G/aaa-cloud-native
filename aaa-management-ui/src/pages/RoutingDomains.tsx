@@ -1,5 +1,5 @@
 /**
- * RoutingDomains.tsx — Routing Domain CRUD + free-CIDR suggestion tool.
+ * RoutingDomains.tsx — Routing Domain CRUD.
  *
  * Routes:
  *   /routing-domains          → RoutingDomainList
@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react'
 import { Routes, Route, useNavigate, useParams } from 'react-router-dom'
 import { apiClient } from '../apiClient'
 import { useToasts } from '../stores/toast'
-import type { RoutingDomain, SuggestCidrResult } from '../types'
+import type { RoutingDomain } from '../types'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -133,12 +133,6 @@ function RoutingDomainDetail() {
   const [newPrefix, setNewPrefix] = useState('')
   const [saving, setSaving] = useState(false)
 
-  // Suggest-CIDR state
-  const [suggestSize, setSuggestSize] = useState('')
-  const [suggesting, setSuggesting] = useState(false)
-  const [suggestion, setSuggestion] = useState<SuggestCidrResult | null>(null)
-  const [suggestError, setSuggestError] = useState<string | null>(null)
-
   async function load() {
     if (!domain_id) return
     setLoading(true)
@@ -201,24 +195,6 @@ function RoutingDomainDetail() {
         show('error', String(e))
       }
     }
-  }
-
-  async function handleSuggest() {
-    if (!domain_id || !suggestSize) return
-    const size = parseInt(suggestSize, 10)
-    if (isNaN(size) || size < 1) { setSuggestError('Enter a valid number ≥ 1'); return }
-    setSuggesting(true)
-    setSuggestion(null)
-    setSuggestError(null)
-    try {
-      const res = await apiClient.get(`/routing-domains/${domain_id}/suggest-cidr`, {
-        params: { size },
-      })
-      setSuggestion(res.data)
-    } catch (e: unknown) {
-      const data = (e as { response?: { data?: { detail?: string; error?: string } } })?.response?.data
-      setSuggestError(data?.detail ?? data?.error ?? String(e))
-    } finally { setSuggesting(false) }
   }
 
   if (loading) return <div className="flex items-center justify-center h-60 text-gray-400 text-sm">Loading…</div>
@@ -321,70 +297,6 @@ function RoutingDomainDetail() {
         )}
       </div>
 
-      {/* Suggest-CIDR tool */}
-      <div className="card p-6 space-y-4">
-        <div>
-          <h3 className="text-sm font-semibold text-gray-800">Free CIDR Suggestion</h3>
-          <p className="text-xs text-gray-500 mt-0.5">
-            Find the smallest available subnet in this routing domain that provides at
-            least the requested number of usable host IPs.
-            {domain.allowed_prefixes.length === 0 && (
-              <span className="text-amber-600 ml-1">
-                ⚠ Requires allowed_prefixes to be configured above.
-              </span>
-            )}
-          </p>
-        </div>
-
-        <div className="flex items-end gap-3">
-          <div className="field mb-0 flex-1 max-w-xs">
-            <label className="label">Minimum usable hosts *</label>
-            <input
-              className="input font-mono"
-              type="number"
-              min={1}
-              placeholder="e.g. 254"
-              value={suggestSize}
-              onChange={e => { setSuggestSize(e.target.value); setSuggestion(null); setSuggestError(null) }}
-              onKeyDown={e => { if (e.key === 'Enter') handleSuggest() }}
-            />
-          </div>
-          <button
-            onClick={handleSuggest}
-            disabled={!suggestSize || suggesting || domain.allowed_prefixes.length === 0}
-            className="btn-primary"
-            title={domain.allowed_prefixes.length === 0 ? 'Configure allowed_prefixes first' : ''}
-          >
-            {suggesting ? 'Searching…' : 'Suggest CIDR'}
-          </button>
-        </div>
-
-        {suggestError && (
-          <div className="flex gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-700">
-            <span className="shrink-0 mt-0.5">✕</span>
-            <span>{suggestError}</span>
-          </div>
-        )}
-
-        {suggestion && (
-          <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 space-y-1">
-            <p className="text-xs font-semibold text-green-700 uppercase tracking-wide">Suggested CIDR</p>
-            <div className="flex items-center gap-3">
-              <code className="text-base font-mono font-bold text-green-800">{suggestion.suggested_cidr}</code>
-              <span className="text-xs text-green-600">/{suggestion.prefix_len} · {suggestion.usable_hosts.toLocaleString()} usable hosts</span>
-              <button
-                onClick={() => { navigator.clipboard.writeText(suggestion.suggested_cidr); show('info', 'Copied to clipboard') }}
-                className="ml-auto text-xs text-green-600 hover:text-green-800 underline"
-              >
-                Copy
-              </button>
-            </div>
-            <p className="text-xs text-green-600">
-              This CIDR does not overlap any existing pool in routing domain "{suggestion.routing_domain_name}".
-            </p>
-          </div>
-        )}
-      </div>
     </div>
   )
 }
