@@ -49,8 +49,6 @@ spec:
                   key: radius-secret
             - name: LOOKUP_URL
               value: {{ .Values.lookupUrl | quote }}
-            - name: PROVISIONING_URL
-              value: {{ .Values.provisioningUrl | quote }}
             - name: WORKER_THREADS
               value: {{ .Values.workerThreads | quote }}
             - name: LOG_LEVEL

@@ -30,6 +30,10 @@ db:
   poolSize: 8         # server-side connections per replica pod
   timeoutSec: "1.0"   # query-start deadline in seconds
 
+# ── Upstream services ───────────────────────────────────────────
+# subscriber-profile-api base URL (in-cluster) — called on DB-miss for first-connection
+provisioningUrl: "http://subscriber-profile-api:8080"
+
 # ── Performance tuning ──────────────────────────────────────────
 tuning:
   threadCount: 0      # 0 = auto (one thread per logical CPU)

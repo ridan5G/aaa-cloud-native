@@ -104,6 +104,78 @@ return true;
 }
 
 // ---------------------------------------------------------------------------
+// LookupController::callFirstConnection — Stage 2 fallback
+// ---------------------------------------------------------------------------
+void LookupController::callFirstConnection(
+        const std::string& imsi,
+        const std::string& apn,
+        const std::string& imei,
+        const std::string& useCaseId,
+        std::shared_ptr<std::function<void(const drogon::HttpResponsePtr&)>> sharedCb) {
+
+    // Lazily initialise the HTTP client (reused across requests).
+    if (!firstConnClient_) {
+        firstConnClient_ = drogon::HttpClient::newHttpClient(
+            Config::instance().provisioningUrl);
+    }
+
+    Json::Value fcBody;
+    fcBody["imsi"] = imsi;
+    fcBody["apn"]  = apn;
+    if (!imei.empty())       fcBody["imei"]        = imei;
+    if (!useCaseId.empty())  fcBody["use_case_id"] = useCaseId;
+
+    auto fcReq = drogon::HttpRequest::newHttpJsonRequest(fcBody);
+    fcReq->setPath("/v1/first-connection");
+    fcReq->setMethod(drogon::Post);
+
+    Metrics::instance().incFirstConnRequests();
+
+    firstConnClient_->sendRequest(fcReq,
+        [sharedCb, imsi, apn](drogon::ReqResult res,
+                               const drogon::HttpResponsePtr& fcResp) {
+            auto& cb = *sharedCb;
+
+            if (res != drogon::ReqResult::Ok) {
+                spdlog::error(
+                    R"({{"imsi":"{}","apn":"{}","result":"first_conn_error","error":"network"}})",
+                    imsi, apn);
+                Metrics::instance().incFirstConnResponse(-1);
+                cb(LookupController::errorResponse(
+                    drogon::k503ServiceUnavailable, "upstream_error"));
+                return;
+            }
+
+            const int code = static_cast<int>(fcResp->getStatusCode());
+            Metrics::instance().incFirstConnResponse(code);
+
+            if (code == 200 || code == 201) {
+                auto j = fcResp->getJsonObject();
+                Json::Value body;
+                body["static_ip"] = (*j)["static_ip"];
+                auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
+                resp->setStatusCode(drogon::k200OK);
+                spdlog::info(
+                    R"({{"imsi":"{}","apn":"{}","result":"first_conn_allocated","ip":"{}"}})",
+                    imsi, apn, (*j)["static_ip"].asString());
+                cb(resp);
+            } else if (code == 404) {
+                spdlog::info(
+                    R"({{"imsi":"{}","apn":"{}","result":"first_conn_not_found"}})",
+                    imsi, apn);
+                cb(LookupController::errorResponse(drogon::k404NotFound, "not_found"));
+            } else {
+                // 503 (pool exhausted) or unexpected
+                spdlog::warn(
+                    R"({{"imsi":"{}","apn":"{}","result":"first_conn_rejected","status":{}}})",
+                    imsi, apn, code);
+                cb(LookupController::errorResponse(
+                    drogon::k503ServiceUnavailable, "pool_exhausted"));
+            }
+        });
+}
+
+// ---------------------------------------------------------------------------
 // LookupController::lookup — the hot path
 // ---------------------------------------------------------------------------
 void LookupController::lookup(
@@ -114,8 +186,10 @@ void LookupController::lookup(
     if (!verifyJwt(req, callback)) return;
 
     // ── 2. Parameter extraction & validation ──────────────────────────────
-    const std::string imsi = req->getParameter("imsi");
-    const std::string apn  = req->getParameter("apn");
+    const std::string imsi      = req->getParameter("imsi");
+    const std::string apn       = req->getParameter("apn");
+    const std::string imei      = req->getParameter("imei");       // optional
+    const std::string useCaseId = req->getParameter("use_case_id"); // optional
 
     if (imsi.empty()) {
         Metrics::instance().recordLookup("bad_request", 0.0);
@@ -149,7 +223,7 @@ void LookupController::lookup(
         HOT_PATH_SQL,
 
         // ── Success callback ──────────────────────────────────────────────
-        [sharedCb, imsi, apn, t0](
+        [this, sharedCb, imsi, apn, imei, useCaseId, t0](
                 const drogon::orm::Result& result) mutable {
             auto& callback = *sharedCb;
 
@@ -204,12 +278,12 @@ void LookupController::lookup(
                 break;
 
             case ResolveStatus::NotFound:
-                // Expected for first-connection IMSIs — aaa-radius-server falls
-                // through to subscriber-profile-api.  Not an error.
-                resp = LookupController::errorResponse(
-                    drogon::k404NotFound, "not_found");
-                resultLabel = "not_found";
-                break;
+                // IMSI not in DB yet — trigger first-connection allocation
+                // asynchronously and send response from that callback.
+                metrics.decrementInFlight();
+                metrics.recordLookup("not_found", latency);
+                callFirstConnection(imsi, apn, imei, useCaseId, sharedCb);
+                return;  // response will be sent by callFirstConnection
 
             case ResolveStatus::ApnNotFound:
                 resp = LookupController::errorResponse(

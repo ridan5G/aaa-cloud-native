@@ -136,9 +136,8 @@ int main() {
     else if (cfg.logLevel == "error") spdlog::set_level(spdlog::level::err);
     else                              spdlog::set_level(spdlog::level::info);
 
-    spdlog::info("aaa-radius-server starting — port={} workers={} lookup={} provisioning={} metrics={}",
-                 cfg.radiusPort, cfg.workerThreads, cfg.lookupUrl, cfg.provisioningUrl,
-                 cfg.metricsPort);
+    spdlog::info("aaa-radius-server starting — port={} workers={} lookup={} metrics={}",
+                 cfg.radiusPort, cfg.workerThreads, cfg.lookupUrl, cfg.metricsPort);
 
     // ── 3. Prometheus metrics ─────────────────────────────────────────────────
     try {

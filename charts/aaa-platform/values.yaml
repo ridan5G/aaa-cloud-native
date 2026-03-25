@@ -33,6 +33,7 @@ aaa-lookup-service:
     secretName: aaa-db-credentials
   jwt:
     skipVerify: "false"
+  provisioningUrl: "http://subscriber-profile-api:8080"   # override per release name in env values
   autoscaling:
     enabled: true
     minReplicas: 3

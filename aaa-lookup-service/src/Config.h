@@ -29,6 +29,9 @@ struct Config {
     std::string jwtPublicKeyPath = "/etc/jwt/public.key";  // RS256 PEM
     bool        jwtSkipVerify   = false;   // true only in local dev (values-dev.yaml)
 
+    // ── Upstream provisioning API ────────────────────────────────────────────
+    std::string provisioningUrl = "http://subscriber-profile-api:8080";
+
     // ── Observability ────────────────────────────────────────────────────────
     std::string logLevel = "info";   // trace | debug | info | warn | error
 
@@ -53,6 +56,8 @@ struct Config {
 
         jwtPublicKeyPath = envStr("JWT_PUBLIC_KEY_PATH", "/etc/jwt/public.key");
         jwtSkipVerify    = envBool("JWT_SKIP_VERIFY",    false);
+
+        provisioningUrl = envStr("PROVISIONING_URL", "http://subscriber-profile-api:8080");
 
         logLevel = envStr("LOG_LEVEL", "info");
 

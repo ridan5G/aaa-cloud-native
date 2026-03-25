@@ -43,6 +43,11 @@ public:
     /// Record a DB pool error (connection failure, timeout).
     void recordDbError();
 
+    // ── First-connection layer (Stage 2 — POST /v1/first-connection) ────────
+    void incFirstConnRequests();
+    // statusCode: 200 | 404 | 503 | -1 (network error) | anything-else → "error"
+    void incFirstConnResponse(int statusCode);
+
 private:
     Metrics() = default;
 
@@ -70,4 +75,11 @@ private:
     // aaa_db_errors_total counter
     prometheus::Family<prometheus::Counter>* dbErrorFamily_{nullptr};
     prometheus::Counter* cntDbErrors_{nullptr};
+
+    // first_connection_requests_total / first_connection_responses_total
+    prometheus::Counter* firstConnRequests_{nullptr};
+    prometheus::Counter* firstConnResp200_{nullptr};
+    prometheus::Counter* firstConnResp404_{nullptr};
+    prometheus::Counter* firstConnResp503_{nullptr};
+    prometheus::Counter* firstConnRespError_{nullptr};
 };

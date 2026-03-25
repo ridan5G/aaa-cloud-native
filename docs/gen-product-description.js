@@ -290,9 +290,9 @@ const doc = new Document({
         table(
           ["Component", "Technology", "Role", "Port"],
           [
-            ["aaa-radius-server", "RADIUS / Diameter stack", "Authentication frontend; routes Access-Requests to aaa-lookup-service; calls subscriber-profile-api on first connection", "1812 UDP"],
-            ["aaa-lookup-service", "C++17 / Drogon", "RADIUS hot-path IMSI lookup (read-only); called by aaa-radius-server on every Access-Request", "8081"],
-            ["subscriber-profile-api", "Python 3.11 / FastAPI", "Subscriber provisioning & first-connection allocation; called by aaa-radius-server when aaa-lookup-service returns 404", "8080"],
+            ["aaa-radius-server", "RADIUS / Diameter stack", "Authentication frontend; makes a single GET /lookup call to aaa-lookup-service per Access-Request; aaa-lookup-service handles first-connection internally", "1812 UDP"],
+            ["aaa-lookup-service", "C++17 / Drogon", "RADIUS hot-path IMSI lookup; called by aaa-radius-server on every Access-Request; calls subscriber-profile-api on first-connection when IMSI is not found in DB", "8081"],
+            ["subscriber-profile-api", "Python 3.11 / FastAPI", "Subscriber provisioning & first-connection allocation; called by aaa-lookup-service when IMSI is not found in the database", "8080"],
             ["PostgreSQL (CloudNativePG)", "PostgreSQL 15", "Primary + read replicas via PgBouncer", "5432"],
             ["aaa-management-ui", "React / Node.js", "Operator web dashboard", "80"],
             ["aaa-regression-tester", "Python / pytest", "End-to-end regression test suite (K8s Job)", "N/A"],
@@ -301,10 +301,10 @@ const doc = new Document({
         ),
         spacer(120),
         hdr("2.1 aaa-radius-server — RADIUS Frontend", HeadingLevel.HEADING_2),
-        para("aaa-radius-server is the RADIUS authentication gateway for the platform. It receives RADIUS Access-Request messages from network equipment (e.g., PGW, ePDG) and orchestrates the two-stage authentication flow:"),
-        bullet("Stage 1 — Hot path: On every Access-Request, aaa-radius-server sends a GET /lookup request to aaa-lookup-service with the subscriber IMSI and APN. If the lookup succeeds (HTTP 200), aaa-radius-server extracts the Framed-IP-Address from the response and issues a RADIUS Access-Accept immediately. End-to-end latency target: <15ms p99."),
-        bullet("Stage 2 — First connection: If aaa-lookup-service returns HTTP 404 (IMSI not yet provisioned), aaa-radius-server falls through to a POST /v1/first-connection call on subscriber-profile-api. The API dynamically allocates an IP address, creates the subscriber profile, and returns a sim_id and static_ip. aaa-radius-server then issues an Access-Accept with the assigned IP."),
-        bullet("Reject path: If subscriber-profile-api returns 404 (no matching range config) or the subscriber is suspended (HTTP 403), aaa-radius-server issues a RADIUS Access-Reject."),
+        para("aaa-radius-server is the RADIUS authentication gateway for the platform. It receives RADIUS Access-Request messages from network equipment (e.g., PGW, ePDG) and makes a single REST call to aaa-lookup-service per request:"),
+        bullet("Hot path: On every Access-Request, aaa-radius-server sends a GET /lookup request to aaa-lookup-service with the subscriber IMSI, APN, and IMEI. If the lookup succeeds (HTTP 200), aaa-radius-server extracts the Framed-IP-Address from the response and issues a RADIUS Access-Accept immediately. End-to-end latency target: <15ms p99."),
+        bullet("First connection (internal to aaa-lookup-service): If aaa-lookup-service returns HTTP 404 (IMSI not yet provisioned), If the IMSI is not in the database, aaa-lookup-service calls POST /v1/first-connection on subscriber-profile-api. The API dynamically allocates an IP, creates the subscriber profile, and returns the static_ip. aaa-lookup-service returns the IP to aaa-radius-server, which issues an Access-Accept."),
+        bullet("Reject path: If no range config matches the IMSI (404), the pool is exhausted (503), or the subscriber is suspended (403), aaa-lookup-service returns the appropriate status and aaa-radius-server issues a RADIUS Access-Reject."),
         spacer(80),
 
         hdr("2.2 Architecture Principles", HeadingLevel.HEADING_2),
@@ -476,7 +476,7 @@ const doc = new Document({
         spacer(120),
 
         hdr("Step-by-Step", HeadingLevel.HEADING_3),
-        numbered("aaa-radius-server sends: GET /lookup?imsi={imsi}&apn={apn} with Bearer JWT"),
+        numbered("aaa-radius-server sends: GET /lookup?imsi={imsi}&apn={apn}&imei={imei} with Bearer JWT"),
         numbered("aaa-lookup-service validates the JWT (RS256) and queries the READ_REPLICA using the core lookup SQL"),
         numbered("Resolver applies ip_resolution logic: for mode 'imsi', returns imsi_apn_ips.static_ip; for 'iccid', returns sim_apn_ips.static_ip"),
         numbered("Response 200 {\"static_ip\": \"100.65.120.5\"} is returned"),
@@ -489,7 +489,7 @@ const doc = new Document({
           [
             ["200 OK", "Access-Accept + Framed-IP-Address", "Subscriber active, IP found"],
             ["403 Forbidden", "Access-Reject (suspended)", "Subscriber or IMSI status = suspended"],
-            ["404 Not Found", "Triggers Stage 2 (first-connection)", "IMSI not in database"],
+            ["404 Not Found", "Access-Reject (no range config); first-connection returned 404", "IMSI not in database"],
             ["503 Service Unavailable", "Access-Reject (temporary)", "Database unavailable"],
           ],
           [1800, 3200, 4360]
@@ -511,19 +511,19 @@ const doc = new Document({
 
         // Flow 2
         new Paragraph({ children: [new PageBreak()] }),
-        hdr("5.2 Two-Stage First-Connection Allocation", HeadingLevel.HEADING_2),
-        para("When aaa-lookup-service returns 404, aaa-radius-server falls through to Stage 2: calling subscriber-profile-api to dynamically allocate and register the unknown IMSI. This flow is rare once the network is warm."),
+        hdr("5.2 First-Connection Allocation (Orchestrated by aaa-lookup-service)", HeadingLevel.HEADING_2),
+        para("When the DB hot-path query returns 0 rows, aaa-lookup-service calls subscriber-profile-api directly to dynamically allocate and register the unknown IMSI, then returns the IP to aaa-radius-server. This flow is rare once the network is warm."),
         spacer(80),
 
-        hdr("Stage 1 (aaa-lookup-service) -> 404", HeadingLevel.HEADING_3),
+        hdr("DB Lookup → Not Found", HeadingLevel.HEADING_3),
         numbered("aaa-radius-server sends: GET /lookup?imsi=278773000002042&apn=internet.operator.com"),
         numbered("Query returns 0 rows: IMSI not in imsi2sim"),
         numbered("aaa-lookup-service responds: 404 {\"error\": \"not_found\"}"),
         numbered("aaa-radius-server falls through to Stage 2"),
         spacer(80),
 
-        hdr("Stage 2 (subscriber-profile-api) - Single-IMSI Path", HeadingLevel.HEADING_3),
-        numbered("aaa-radius-server sends: POST /v1/first-connection {\"imsi\": \"278773000002042\", \"apn\": \"internet.operator.com\", \"imei\": \"...\"}"),
+        hdr("subscriber-profile-api — Single-IMSI Allocation Path", HeadingLevel.HEADING_3),
+        numbered("aaa-lookup-service sends: POST /v1/first-connection {\"imsi\": \"278773000002042\", \"apn\": \"internet.operator.com\", \"imei\": \"...\"}"),
         numbered("Idempotency check: SELECT from imsi2sim WHERE imsi=$1. If found, return existing IP immediately."),
         numbered("Range config lookup: SELECT from imsi_range_configs WHERE $imsi BETWEEN f_imsi AND t_imsi AND status='active'"),
         numbered("If no range config found: return 404 (IMSI not authorized for auto-provisioning)"),
@@ -533,10 +533,10 @@ const doc = new Document({
         numbered("INSERT sim_profiles, imsi2sim, imsi_apn_ips (or iccid_ips based on ip_resolution mode)"),
         numbered("COMMIT"),
         numbered("Return 200 {\"sim_id\": \"...\", \"static_ip\": \"100.65.120.5\"}"),
-        numbered("aaa-radius-server issues Access-Accept with Framed-IP-Address"),
+        numbered("subscriber-profile-api returns 201; aaa-lookup-service returns 200 {static_ip} to aaa-radius-server; aaa-radius-server issues Access-Accept"),
         spacer(80),
 
-        infoBox("Idempotency Guarantee", "If aaa-radius-server retries the POST /first-connection call (e.g., on timeout), the second call detects the already-provisioned IMSI in step 2 and returns the same sim_id and static_ip without creating duplicates.", GREEN_BG),
+        infoBox("Idempotency Guarantee", "If aaa-lookup-service retries the POST /first-connection call (e.g., on timeout), the second call detects the already-provisioned IMSI in step 2 and returns the same sim_id and static_ip without creating duplicates.", GREEN_BG),
         spacer(120),
 
         // Flow 3
@@ -557,8 +557,8 @@ const doc = new Document({
         spacer(80),
 
         hdr("Multi-IMSI Allocation Sequence", HeadingLevel.HEADING_3),
-        numbered("Stage 1: GET /lookup for slot-1 IMSI returns 404"),
-        numbered("Stage 2: POST /first-connection with slot-1 IMSI"),
+        numbered("GET /lookup for slot-1 IMSI: 0 rows in DB"),
+        numbered("aaa-lookup-service calls POST /first-connection with slot-1 IMSI"),
         numbered("Range config matched to an iccid_range_config (iccid_range_id IS NOT NULL)"),
         numbered("Compute offset and derive ICCID"),
         numbered("Lock: SELECT FROM sim_profiles WHERE iccid=$derived_iccid FOR UPDATE"),
@@ -568,7 +568,7 @@ const doc = new Document({
         sub_bullet("For each sibling slot: compute sibling IMSI (same offset), allocate IP from sibling's pool, INSERT imsi2sim + IP assignment"),
         sub_bullet("All inserts in one atomic COMMIT — thundering herd protection: sibling IMSIs are instantly ready on hot-path"),
         numbered("Return 201 with connecting IMSI's sim_id and static_ip"),
-        numbered("Next time slot 2 IMSI connects: Stage 1 returns 200 immediately (already provisioned)"),
+        numbered("Next time slot 2 IMSI connects: GET /lookup returns 200 immediately from DB hot-path (already provisioned)"),
         spacer(80),
 
         infoBox("Key Benefit", "All sibling slots are provisioned in a single atomic transaction on the first connection of any slot. For iccid/iccid_apn modes, all slots share one card-level IP. For imsi/imsi_apn modes, each slot gets its own IP from its own per-slot pool. Either way, mass IMSI failover (e.g., 10,000 SIMs switching networks simultaneously) hits the fast read-only lookup path — no allocation races.", LIGHT_BLUE),
@@ -793,6 +793,7 @@ const doc = new Document({
             ["tuning.threadCount  (Helm)", "0", "Worker threads; 0 = auto-detect (one per logical CPU)"],
             ["LOG_LEVEL / logLevel  (Helm)", "info", "Log verbosity: trace | debug | info | warn | error"],
             ["JWT_SKIP_VERIFY", "false", "Set to 'true' to bypass JWT verification in development"],
+            ["PROVISIONING_URL", "http://subscriber-profile-api:8080", "Base URL for subscriber-profile-api (first-connection allocation calls)"],
           ],
           [2800, 1600, 4960]
         ),
@@ -804,8 +805,8 @@ const doc = new Document({
           [
             ["RADIUS_PORT", "1812", "UDP port for RADIUS Access-Request messages"],
             ["RADIUS_SECRET", "(required — no default)", "Shared secret for RADIUS message authentication. Must match the NAS/client configuration. Set via Kubernetes Secret; never hard-code."],
-            ["LOOKUP_URL", "http://aaa-lookup-service:8081", "Base URL for aaa-lookup-service (Stage 1 hot-path calls)"],
-            ["PROVISIONING_URL", "http://subscriber-profile-api:8080", "Base URL for subscriber-profile-api (Stage 2 first-connection calls)"],
+            ["LOOKUP_URL", "http://aaa-lookup-service:8081", "Base URL for aaa-lookup-service (the only upstream service called by aaa-radius-server)"],
+
             ["WORKER_THREADS", "8", "Thread pool size for concurrent RADIUS request handling"],
           ],
           [2800, 1600, 4960]

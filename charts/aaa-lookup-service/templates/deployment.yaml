@@ -41,6 +41,8 @@ spec:
               value: {{ .Values.tuning.threadCount | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.logLevel | quote }}
+            - name: PROVISIONING_URL
+              value: {{ .Values.provisioningUrl | quote }}
             # Read-only replica credentials — never connects to primary
             - name: DB_HOST
               valueFrom:

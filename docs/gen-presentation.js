@@ -180,7 +180,7 @@ function sectionLine(slide, y) {
   // Arrow down-right to profile-api
   s.addShape(pres.shapes.LINE, { x: 6.85, y: 1.87, w: 0, h: 0.48, line: { color: C.amber, width: 1.5 } });
   s.addShape(pres.shapes.LINE, { x: 6.85, y: 2.35, w: 1.25, h: 0, line: { color: C.amber, width: 1.5 } });
-  s.addText("Stage 2: POST /first-connection (on 404 only)", { x: 7.0, y: 2.1, w: 2.8, h: 0.35, fontSize: 8.5, color: C.amber, italic: true, align: "center" });
+  s.addText("POST /first-connection (called by lookup pod internally, on DB miss)", { x: 7.0, y: 2.1, w: 2.8, h: 0.35, fontSize: 8.5, color: C.amber, italic: true, align: "center" });
 
   // Central separator below the top box
   s.addShape(pres.shapes.LINE, { x: W / 2, y: 2.4, w: 0, h: H - 2.7, line: { color: C.iceBlue, width: 1, dashType: "dash" } });
@@ -302,7 +302,7 @@ function sectionLine(slide, y) {
   const results = [
     { code: "200", txt: "Access-Accept + Framed-IP-Address", bg: C.green, tc: C.white },
     { code: "403", txt: "Access-Reject (suspended)", bg: C.amber, tc: C.white },
-    { code: "404", txt: "Triggers Stage 2 first-connection", bg: C.coral, tc: C.white },
+    { code: "404", txt: "Access-Reject (no range config)", bg: C.coral, tc: C.white },
   ];
   s.addText("Possible Outcomes", { x: 7.2, y: 1.05, w: 2.5, h: 0.3, fontSize: 11, bold: true, color: C.navy, margin: 0 });
   results.forEach((r, i) => {
@@ -336,14 +336,14 @@ function sectionLine(slide, y) {
   ], { x: 0.4, y: 1.78, w: 4.1, h: 0.9, fontSize: 10.5, color: C.iceBlue, fontFace: "Courier New", margin: 0 });
 
   // Arrow down
-  s.addText("▼  aaa-radius-server falls through to Stage 2", { x: 0.4, y: 2.88, w: 4.4, h: 0.3, fontSize: 10.5, bold: true, color: C.amber, align: "center", margin: 0 });
+  s.addText("▼  aaa-lookup-service calls POST /first-connection", { x: 0.4, y: 2.88, w: 4.4, h: 0.3, fontSize: 10.5, bold: true, color: C.amber, align: "center", margin: 0 });
 
   // Stage 2 box
   s.addShape(pres.shapes.RECTANGLE, { x: 0.3, y: 3.22, w: 4.4, h: 2.1, fill: { color: C.navy }, line: { color: C.navy }, shadow: { type: "outer", blur: 5, offset: 2, angle: 135, color: "000000", opacity: 0.1 } });
   pill(s, "STAGE 2", 0.4, 3.27, 1.2, C.green, C.white);
   s.addText("subscriber-profile-api", { x: 0.4, y: 3.59, w: 4.1, h: 0.32, fontSize: 13, bold: true, color: C.white, margin: 0 });
   s.addText([
-    { text: "POST /v1/first-connection {imsi, apn, imei}", options: { breakLine: true } },
+    { text: "aaa-lookup-service: POST /v1/first-connection {imsi, apn, imei}", options: { breakLine: true } },
     { text: "1. Idempotency check: IMSI already exists?", options: { breakLine: true } },
     { text: "2. Match range config (f_imsi <= $imsi <= t_imsi)", options: { breakLine: true } },
     { text: "3. Claim IP:  DELETE FROM ip_pool_available", options: { breakLine: true } },
@@ -352,10 +352,10 @@ function sectionLine(slide, y) {
   ], { x: 0.4, y: 3.95, w: 4.1, h: 1.3, fontSize: 9.5, color: C.iceBlue, fontFace: "Courier New", margin: 0 });
 
   // Right side — outcome cards (Stage 2 results from subscriber-profile-api)
-  s.addText("Stage 2 Outcomes  (subscriber-profile-api)", { x: 5.1, y: 1.05, w: 4.5, h: 0.28, fontSize: 10, bold: true, color: C.blue, margin: 0 });
+  s.addText("First-Connection Outcomes  (subscriber-profile-api)", { x: 5.1, y: 1.05, w: 4.5, h: 0.28, fontSize: 10, bold: true, color: C.blue, margin: 0 });
 
   const cards = [
-    { title: "200 OK — IP Allocated", body: "subscriber-profile-api creates sim_id\n(gen_random_uuid). static_ip returned.\naaa-radius-server issues Access-Accept.", bg: "E8F5E9", border: C.green },
+    { title: "200 OK — IP Allocated", body: "subscriber-profile-api creates sim_id\n(gen_random_uuid). static_ip returned.\naaa-lookup-service returns 200 to aaa-radius-server. Access-Accept issued.", bg: "E8F5E9", border: C.green },
     { title: "200 OK — Idempotent Return", body: "IMSI already existed in DB.\nSame sim_id & IP returned.\nSafe to retry — no duplicates.", bg: "E3F2FD", border: C.blue },
     { title: "404 — No Range Config", body: "IMSI not in any active range config.\naaa-radius-server issues Access-Reject.", bg: "FFF3E0", border: C.amber },
     { title: "503 — Pool Exhausted", body: "No available IPs remaining.\nCreate a new pool.\nAlert fires automatically.", bg: "FFEBEE", border: C.coral },
@@ -390,11 +390,11 @@ function sectionLine(slide, y) {
 
   // Steps
   const steps = [
-    { num: "1", title: "Slot 1 First Attach", detail: "GET /lookup → 404\nPOST /first-connection\n{imsi: \"278770...042\"}" },
+    { num: "1", title: "Slot 1 First Attach", detail: "GET /lookup → DB miss\nLookup calls /first-connection\n{imsi: \"278770...042\"}" },
     { num: "2", title: "Compute Offset", detail: "offset = 278770...042\n       - 278770...000\n= 42" },
     { num: "3", title: "Derive ICCID", detail: "8944...000\n+ 42\n= 8944...042" },
     { num: "4", title: "Atomic Transaction", detail: "IP per slot (imsi mode)\nor 1 IP card (iccid mode)\nAll slots INSERTed, 1 COMMIT" },
-    { num: "5", title: "Slot 2 Connects Later", detail: "GET /lookup → 200\n(pre-provisioned!)\nStage 2 never runs" },
+    { num: "5", title: "Slot 2 Connects Later", detail: "GET /lookup → 200\n(pre-provisioned!)\nfirst-conn never called" },
   ];
   steps.forEach((st, i) => {
     const x = 3.1 + i * 1.35;
@@ -746,7 +746,7 @@ function sectionLine(slide, y) {
     "test_02_range_configs.py — IMSI range CRUD",
     "test_03/04/05 — Profiles A / B / C modes",
     "test_06_imsi_ops.py — IMSI add/remove/update",
-    "test_07_dynamic_alloc.py — Two-stage flow",
+    "test_07_dynamic_alloc.py — First-connection flow",
     "test_08_bulk.py — JSON + CSV bulk upsert",
     "test_09_migration.py — MariaDB → PostgreSQL",
     "test_10_errors.py — Validation & conflicts",

@@ -37,7 +37,7 @@ radiusPCAP  ?= false# set to true to attach a tcpdump sidecar to radius-server: 
         build-cpp-bases build-lookup-base build-radius-base push-cpp-bases push-lookup-base push-radius-base \
         build-all build-api build-lookup build-radius-server build-tester push-all build-push build-ui \
         hosts bootstrap setup helm-unlock \
-        deploy deploy-dry-run deploy-migration db-init db-flush-stale \
+        package-charts deploy deploy-dry-run deploy-migration db-init db-flush-stale \
         test test-secret radius-secret pcap-get pcap-get-radius \
         port-forward-lookup port-forward-api port-forward-db port-forward-ui \
         port-forward-grafana port-forward-prometheus port-forward-pgbouncer \
@@ -107,7 +107,19 @@ nginx-install:                  ## Install nginx-ingress controller (once per cl
 	@echo "nginx-ingress controller ready."
 
 # ── Helm dependency management ────────────────────────────────
-dep-update:                     ## Resolve and vendor all sub-chart dependencies
+# Re-package every local sub-chart so that deploy always uses fresh templates.
+# External charts (kube-prometheus-stack, prometheus-pushgateway) are vendored
+# as immutable .tgz files and are never re-downloaded by this target.
+package-charts:                 ## Re-package all local sub-charts into $(CHART_DIR)/charts/
+	helm package ./charts/aaa-lookup-service     -d $(CHART_DIR)/charts/
+	helm package ./charts/aaa-radius-server      -d $(CHART_DIR)/charts/
+	helm package ./charts/subscriber-profile-api -d $(CHART_DIR)/charts/
+	helm package ./charts/aaa-management-ui      -d $(CHART_DIR)/charts/
+	helm package ./charts/aaa-regression-tester  -d $(CHART_DIR)/charts/
+	helm package ./charts/aaa-database           -d $(CHART_DIR)/charts/
+
+dep-update:                     ## Re-package local sub-charts + resolve/download external dependencies
+	$(MAKE) package-charts
 	helm dependency update $(CHART_DIR)
 
 prom-crds:                      ## Install Prometheus Operator CRDs from cached chart (run once after dep-update)
@@ -188,7 +200,7 @@ build-ui:                       ## Build just the aaa-management-ui image (dev, 
 	docker build -t aaa/aaa-management-ui:dev ./aaa-management-ui/
 
 # ── Deploy ────────────────────────────────────────────────────
-deploy: radius-secret test-secret ## Deploy/upgrade umbrella chart (creates required secrets first, then applies chart); radiusPCAP=true adds tcpdump sidecar to radius-server
+deploy: package-charts radius-secret test-secret ## Deploy/upgrade umbrella chart (re-packages local sub-charts, creates required secrets, then applies chart); radiusPCAP=true adds tcpdump sidecar to radius-server
 	helm upgrade --install $(RELEASE) $(CHART_DIR) \
 	  --namespace $(NAMESPACE) --create-namespace \
 	  -f $(CHART_DIR)/values-dev.yaml \

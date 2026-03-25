@@ -74,6 +74,7 @@ aaa-lookup-service:
     secretName: aaa-db-credentials
   jwt:
     skipVerify: "true"   # no JWT enforcement in dev
+  provisioningUrl: "http://aaa-platform-subscriber-profile-api:8080"
   autoscaling:
     enabled: false       # fixed 1 replica
   podDisruptionBudget:
@@ -167,7 +168,6 @@ aaa-radius-server:
   radiusSecret:
     secretName: "aaa-radius-secret"   # created by: make radius-secret (called automatically by make deploy)
   lookupUrl: "http://aaa-platform-aaa-lookup-service:8081"
-  provisioningUrl: "http://aaa-platform-subscriber-profile-api:8080"
   workerThreads: 4
   autoscaling:
     enabled: false

@@ -2,18 +2,17 @@
 test_12_radius.py — End-to-end RADIUS authentication server tests.
 
 Sends real UDP RADIUS Access-Request packets to aaa-radius-server and
-verifies the two-stage AAA flow:
+verifies the single-call AAA flow:
 
-  Stage 1: server calls GET /lookup?imsi=&apn=[&use_case_id=] on aaa-lookup-service
+  aaa-radius-server calls GET /lookup?imsi=&apn=[&imei=][&use_case_id=]
+  aaa-lookup-service resolves and — on DB-miss — calls first-connection internally:
     200 → Access-Accept + Framed-IP-Address
     403 → Access-Reject  (subscriber suspended)
-    404 → Stage 2 ↓
-
-  Stage 2: server calls POST /v1/first-connection {imsi, apn, imei[, use_case_id]}
-    200 → Access-Accept + Framed-IP-Address
-    404/503 → Access-Reject
+    404 → Access-Reject  (no range config / not found)
+    503 → Access-Reject  (pool exhausted / upstream error)
 
   use_case_id is sourced from 3GPP-Charging-Characteristics VSA (10415:13).
+  imei is sourced from 3GPP-IMEISV VSA (10415:20).
 
 Requires RADIUS_HOST, RADIUS_PORT, RADIUS_SECRET env vars
 (defaults: localhost, 1812; RADIUS_SECRET from env or .env file).
@@ -323,25 +322,27 @@ class TestRadiusServer:
     def test_06_first_connection_via_radius_returns_accept(
             self, lookup_http: httpx.Client, http: httpx.Client, rc: RadiusClient):
         """
-        Stage 1: GET /lookup for IMSI_FC_NEW → 404 (no profile yet).
-        Stage 2: aaa-radius-server calls POST /v1/first-connection → allocates IP.
-        Expected RADIUS response: Access-Accept with the allocated Framed-IP.
+        RADIUS Access-Request for IMSI_FC_NEW (no profile yet) →
+        aaa-radius-server calls GET /lookup → lookup service triggers first-connection
+        internally → allocates IP → Access-Accept with Framed-IP.
 
         After the test the profile is stored in cls.fc_sim_id for teardown
         and subsequent idempotency check (test_07).
         """
         # Confirm no profile exists before the test
-        r_pre = lookup_http.get("/lookup",
-                                params={"imsi": IMSI_FC_NEW, "apn": TEST_APN})
-        assert r_pre.status_code == 404, \
-            f"Pre-condition failed: IMSI_FC_NEW already has a profile ({r_pre.status_code})"
+        r_pre = http.get("/profiles", params={"imsi": IMSI_FC_NEW})
+        if r_pre.status_code == 200:
+            data = r_pre.json()
+            profiles = data if isinstance(data, list) else data.get("profiles", [])
+            assert len(profiles) == 0, \
+                f"Pre-condition failed: IMSI_FC_NEW already has a profile"
 
         resp = rc.authenticate(IMSI_FC_NEW, TEST_APN,
                                imei="35812300000000",
                                charging_chars="0800")
         assert resp.is_accept, (
             f"Expected Access-Accept via first-connection, got code={resp.code}. "
-            "Check that aaa-radius-server's PROVISIONING_URL points to subscriber-profile-api."
+            "Check that aaa-lookup-service's PROVISIONING_URL points to subscriber-profile-api."
         )
         assert resp.framed_ip is not None, \
             "Access-Accept must contain Framed-IP-Address after first-connection"
@@ -386,7 +387,7 @@ class TestRadiusServer:
     def test_08_imsi_outside_all_ranges_returns_access_reject(self, rc: RadiusClient):
         """
         IMSI not covered by any range config.
-        Stage 1 → 404 (no profile), Stage 2 → 404 (no range config).
+        GET /lookup → DB miss → first-connection → 404 (no range config) → 404.
         Expected RADIUS response: Access-Reject (code=3).
         """
         resp = rc.authenticate(IMSI_OOB, TEST_APN)
@@ -511,11 +512,11 @@ class TestRadiusServer:
         )
 
     # 12.13 ───────────────────────────────────────────────────────────────────
-    def test_13_use_case_id_forwarded_in_stage1_lookup(
+    def test_13_use_case_id_forwarded_in_lookup(
             self, rc: RadiusClient, lookup_http: httpx.Client):
         """
         3GPP-Charging-Characteristics (VSA 10415:13) must be forwarded as
-        use_case_id to the Stage 1 GET /lookup call.
+        use_case_id to GET /lookup.
 
         Approach (black-box, no HTTP intercept):
           1. Directly confirm the lookup service returns the correct IP when
@@ -545,11 +546,11 @@ class TestRadiusServer:
             f"Framed-IP-Address={resp.framed_ip!r}, expected {KNOWN_STATIC_IP!r}"
 
     # 12.14 ───────────────────────────────────────────────────────────────────
-    def test_14_use_case_id_forwarded_in_stage2_first_connection(
+    def test_14_use_case_id_forwarded_in_first_connection(
             self, rc: RadiusClient, lookup_http: httpx.Client, http: httpx.Client):
         """
         3GPP-Charging-Characteristics must be forwarded as use_case_id in the
-        Stage 2 POST /v1/first-connection JSON body.
+        first-connection POST body sent by the lookup service.
 
         A second first-connection IMSI (IMSI_FC_NEW2) is used so test_06 state
         is not affected.  charging_chars="0900" is chosen to differ from the
@@ -559,10 +560,12 @@ class TestRadiusServer:
         After the test the auto-created profile sim_id is stored for teardown.
         """
         # Confirm no profile exists before the test
-        r_pre = lookup_http.get("/lookup",
-                                params={"imsi": IMSI_FC_NEW2, "apn": TEST_APN})
-        assert r_pre.status_code == 404, \
-            f"Pre-condition failed: IMSI_FC_NEW2 already has a profile ({r_pre.status_code})"
+        r_pre = http.get("/profiles", params={"imsi": IMSI_FC_NEW2})
+        if r_pre.status_code == 200:
+            data = r_pre.json()
+            profiles = data if isinstance(data, list) else data.get("profiles", [])
+            assert len(profiles) == 0, \
+                f"Pre-condition failed: IMSI_FC_NEW2 already has a profile"
 
         resp = rc.authenticate(
             IMSI_FC_NEW2,
@@ -573,7 +576,7 @@ class TestRadiusServer:
         assert resp.is_accept, (
             f"Expected Access-Accept via first-connection with use_case_id='0900', "
             f"got code={resp.code}. "
-            "Check PROVISIONING_URL and that the range config covers IMSI_FC_NEW2."
+            "Check aaa-lookup-service PROVISIONING_URL and that the range config covers IMSI_FC_NEW2."
         )
         assert resp.framed_ip is not None, \
             "Access-Accept must contain Framed-IP-Address after first-connection"

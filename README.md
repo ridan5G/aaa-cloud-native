@@ -42,7 +42,7 @@ aaa-radius-server (C++20)
 | Database | PostgreSQL 15+, CloudNativePG, PgBouncer |
 | Orchestration | Kubernetes, Helm 3, k3d |
 | Observability | Prometheus, Grafana, kube-prometheus-stack |
-| Testing | Python/pytest, docker-compose, Kubernetes Job |
+| Testing | Python/pytest, Kubernetes Job |
 
 ## Quick Start
 

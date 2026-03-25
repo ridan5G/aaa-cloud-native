@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # run_all.sh — execute the full regression suite and push metrics.
-# Designed to run as a Kubernetes Job entrypoint or locally via docker compose.
+# Designed to run as a Kubernetes Job entrypoint.
 set -euo pipefail
 
 RESULTS_DIR="${RESULTS_DIR:-/app/results}"

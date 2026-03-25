@@ -13,6 +13,7 @@ import random
 import string
 import time
 
+import pytest
 import httpx
 
 from conftest import make_imsi, make_iccid, make_ip, poll_until, PROVISION_BASE, JWT_TOKEN, USE_CASE_ID
@@ -166,6 +167,7 @@ class TestBulk:
         TestBulk.job_id = body["job_id"]
 
     # 8.2 ─────────────────────────────────────────────────────────────────────
+    @pytest.mark.timeout(660)  # JOB_TIMEOUT=600s + 60s buffer
     def test_02_poll_job_until_completed(self, http: httpx.Client):
         """Poll GET /jobs/{job_id} until status=completed; processed=1500, failed=0."""
         assert TestBulk.job_id, "job_id not set — test 8.1 must pass first"
@@ -228,6 +230,7 @@ class TestBulk:
             assert r.json()["static_ip"] == expected
 
     # 8.5 ─────────────────────────────────────────────────────────────────────
+    @pytest.mark.timeout(180)  # poll_until timeout=120s + buffer
     def test_05_bulk_with_one_invalid_entry(self, http: httpx.Client):
         """POST /profiles/bulk with 1 valid + 1 IMSI-invalid → 202; job: failed=1, processed=1."""
         valid_imsi   = make_imsi(MODULE, 9901)
@@ -283,6 +286,7 @@ class TestBulk:
             f"Expected failed=1, got {result.get('failed')}"
 
     # 8.6 ─────────────────────────────────────────────────────────────────────
+    @pytest.mark.timeout(180)  # poll_until timeout=120s + buffer
     def test_06_job_errors_array_contains_details(self, http: httpx.Client):
         """GET /jobs/{job_id} from test 8.5 → errors array contains field=imsi detail."""
         # Reuse the partial job from 8.5 via a fresh lookup
@@ -317,6 +321,7 @@ class TestBulk:
             f"Error field 'imsi' not in errors: {errors}"
 
     # 8.7 ─────────────────────────────────────────────────────────────────────
+    @pytest.mark.timeout(300)  # two poll_until calls at 120s each + buffer
     def test_07_bulk_upsert_idempotency(self, http: httpx.Client):
         """Bulk-upsert the same profile twice → second upsert updates, total count unchanged."""
         imsi  = make_imsi(MODULE, 9950)
@@ -361,6 +366,7 @@ class TestBulk:
             f"Expected exactly 1 profile (upsert), found {len(profiles)}"
 
     # 8.8 ─────────────────────────────────────────────────────────────────────
+    @pytest.mark.timeout(180)  # poll_until timeout=120s + buffer
     def test_08_bulk_csv_upload(self, http: httpx.Client):
         """POST /profiles/bulk as multipart/form-data CSV → 202, same job flow."""
         # Build a minimal CSV with 3 rows (one per profile mode)

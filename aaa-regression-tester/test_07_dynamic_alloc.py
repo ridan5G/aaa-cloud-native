@@ -1,12 +1,15 @@
 """
-test_07_dynamic_alloc.py — First-connection two-stage allocation.
+test_07_dynamic_alloc.py — First-connection dynamic allocation.
 
-The aaa-lookup-service is STRICTLY READ-ONLY (no primary DB connection).
-aaa-radius-server follows a two-stage flow:
-  Stage 1 → GET /lookup on aaa-lookup-service
-  Stage 2 → POST /profiles/first-connection on subscriber-profile-api (only on 404)
+The aaa-lookup-service handles the full resolution path:
+  DB hit  → 200 with static IP
+  DB miss → POST /profiles/first-connection on subscriber-profile-api internally
+              200/201 → 200 with allocated IP
+              404     → 404 not_found
+              503     → 503 pool_exhausted
 
-These tests simulate both stages explicitly to verify end-to-end correctness.
+aaa-radius-server makes a single GET /lookup call; first-connection is
+orchestrated by the lookup pod, not the radius server.
 
 Test cases 7.1 – 7.9  (plan-01 §test_07_dynamic_alloc)
 """
@@ -79,11 +82,11 @@ class TestDynamicAlloc:
             if cls.pool_id:
                 delete_pool(c, cls.pool_id)
 
-    # ── Stage 2 helper ────────────────────────────────────────────────────────
+    # ── Direct first-connection helper (bypasses lookup service) ─────────────
 
     @staticmethod
     def _first_connection(http: httpx.Client, imsi: str, apn: str) -> httpx.Response:
-        """Simulate aaa-radius-server Stage 2: POST /profiles/first-connection."""
+        """Call POST /profiles/first-connection directly on subscriber-profile-api."""
         return http.post(
             "/profiles/first-connection",
             json={"imsi": imsi, "apn": apn, "use_case_id": USE_CASE_ID},
@@ -103,33 +106,34 @@ class TestDynamicAlloc:
     def test_02_first_connection_creates_profile(
             self, http: httpx.Client, lookup_http: httpx.Client):
         """
-        Stage 1: GET /lookup → 404 (profile not yet provisioned, service is read-only).
-        Stage 2: POST /profiles/first-connection → 201 (profile auto-created via range config).
-        Stage 1 again: GET /lookup → 200 with the allocated IP.
+        GET /lookup for a new IMSI → lookup service calls first-connection internally
+        → 200 with the allocated IP (profile auto-created via range config).
         """
-        # Stage 1 — lookup service has no profile → 404
-        r_s1 = lookup_http.get("/lookup",
-                                params={"imsi": IMSI_FC1,
-                                        "apn": "internet.operator.com",
-                                        "use_case_id": USE_CASE_ID})
-        assert r_s1.status_code == 404, \
-            f"Expected 404 before provisioning, got {r_s1.status_code}"
+        # Pre-condition: verify no profile exists yet
+        r_pre = http.get("/profiles", params={"imsi": IMSI_FC1})
+        if r_pre.status_code == 200:
+            data = r_pre.json()
+            profiles = data if isinstance(data, list) else data.get("profiles", [])
+            assert len(profiles) == 0, \
+                f"Pre-condition failed: IMSI_FC1 already has a profile"
 
-        # Stage 2 — subscriber-profile-api provisions via range config
-        r_s2 = self._first_connection(http, IMSI_FC1, "internet.operator.com")
-        assert r_s2.status_code == 201, \
-            f"First-connection failed: {r_s2.status_code} {r_s2.text}"
-        body = r_s2.json()
-        assert "sim_id" in body, "Response must contain sim_id"
+        # GET /lookup → lookup service triggers first-connection internally → 200
+        r = lookup_http.get("/lookup",
+                            params={"imsi": IMSI_FC1,
+                                    "apn": "internet.operator.com",
+                                    "use_case_id": USE_CASE_ID})
+        assert r.status_code == 200, \
+            f"Expected 200 after first-connection allocation, got {r.status_code}: {r.text}"
+        body = r.json()
         assert "static_ip" in body, "Response must contain static_ip"
 
-        # Stage 1 again — now the profile exists → 200
-        r_s1b = lookup_http.get("/lookup",
-                                 params={"imsi": IMSI_FC1,
-                                         "apn": "internet.operator.com",
-                                         "use_case_id": USE_CASE_ID})
-        assert r_s1b.status_code == 200
-        assert r_s1b.json()["static_ip"] == body["static_ip"]
+        # Second GET /lookup — profile now cached in DB → still 200 with same IP
+        r2 = lookup_http.get("/lookup",
+                             params={"imsi": IMSI_FC1,
+                                     "apn": "internet.operator.com",
+                                     "use_case_id": USE_CASE_ID})
+        assert r2.status_code == 200
+        assert r2.json()["static_ip"] == body["static_ip"]
 
     # 7.3 ─────────────────────────────────────────────────────────────────────
     def test_03_second_first_connection_is_idempotent(
@@ -190,8 +194,9 @@ class TestDynamicAlloc:
     def test_07_suspended_range_config_blocks_first_connection(
             self, http: httpx.Client, lookup_http: httpx.Client):
         """
-        PATCH range_config status=suspended → Stage 2 first-connection fails;
-        Stage 1 returns 404 because no profile was created.
+        PATCH range_config status=suspended → direct first-connection call fails;
+        GET /lookup also returns 404 because the lookup service calls first-connection
+        internally on DB-miss and propagates the 404 (no active range config).
         """
         # Suspend the range config
         r_susp = http.patch(

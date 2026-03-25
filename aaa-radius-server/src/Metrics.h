@@ -16,18 +16,14 @@
 //     radius_access_requests_total              — valid Access-Request packets processed
 //     radius_packets_dropped_total              — malformed / non-AccessRequest packets
 //     radius_responses_total{result}            — accept | reject
-//     radius_requests_total{result,stage}       — accept|reject × stage1|stage2
+//     radius_requests_total{result}             — accept | reject
 //     radius_request_duration_ms (histogram)    — end-to-end RADIUS request latency
 //     radius_upstream_errors_total{upstream,status_code}
-//                                               — unexpected errors from lookup/first-connection
+//                                               — unexpected errors from lookup service
 //
-//   Lookup layer (Stage 1 — GET /lookup):
+//   Lookup layer (GET /lookup — lookup service handles first-connection internally):
 //     lookup_requests_total                     — HTTP requests sent
-//     lookup_responses_total{status}            — 200 | 403 | 404 | error
-//
-//   First-connection layer (Stage 2 — POST /v1/first-connection):
-//     first_connection_requests_total           — HTTP requests sent
-//     first_connection_responses_total{status}  — 200 | 404 | 503 | error
+//     lookup_responses_total{status}            — 200 | 403 | 404 | 503 | error
 //
 // Thread-safety: prometheus-cpp Counter::Increment() and Histogram::Observe()
 // are lock-free/atomic. Call init() once from main before spawning workers.
@@ -49,24 +45,19 @@ public:
     void incResponseAccepts() { if (responseAccepts_) responseAccepts_->Increment(); }
     void incResponseRejects() { if (responseRejects_) responseRejects_->Increment(); }
 
-    // result: "accept" | "reject"   stage: "1" (lookup hit) | "2" (first-connection used)
-    void incRadiusRequest(const std::string& result, const std::string& stage);
+    // result: "accept" | "reject"
+    void incRadiusRequest(const std::string& result);
 
     // Record end-to-end RADIUS request duration in milliseconds.
     void recordRequestDuration(double ms) { if (durationHist_) durationHist_->Observe(ms); }
 
-    // upstream: "lookup" | "first_connection"   statusCode: HTTP status as string or "curl_error"
+    // upstream: "lookup"   statusCode: HTTP status as string or "curl_error"
     void incUpstreamError(const std::string& upstream, const std::string& statusCode);
 
     // ── Lookup layer ──────────────────────────────────────────────────────────
     void incLookupRequests() { if (lookupRequests_) lookupRequests_->Increment(); }
-    // statusCode: 200 | 403 | 404 | anything-else (incl. -1 for curl error) → "error"
+    // statusCode: 200 | 403 | 404 | 503 | anything-else (incl. -1 for curl error) → "error"
     void incLookupResponse(int statusCode);
-
-    // ── First-connection layer ────────────────────────────────────────────────
-    void incFirstConnRequests() { if (firstConnRequests_) firstConnRequests_->Increment(); }
-    // statusCode: 200 | 404 | 503 | anything-else → "error"
-    void incFirstConnResponse(int statusCode);
 
 private:
     Metrics() = default;
@@ -80,11 +71,9 @@ private:
     prometheus::Counter* responseAccepts_{};
     prometheus::Counter* responseRejects_{};
 
-    // radius_requests_total{result, stage} — pre-created label combinations
-    prometheus::Counter* radiusReqAcceptStage1_{};
-    prometheus::Counter* radiusReqAcceptStage2_{};
-    prometheus::Counter* radiusReqRejectStage1_{};
-    prometheus::Counter* radiusReqRejectStage2_{};
+    // radius_requests_total{result} — pre-created label combinations
+    prometheus::Counter* radiusReqAccept_{};
+    prometheus::Counter* radiusReqReject_{};
 
     // radius_request_duration_ms histogram
     prometheus::Histogram* durationHist_{};
@@ -97,12 +86,6 @@ private:
     prometheus::Counter* lookupResp200_{};
     prometheus::Counter* lookupResp403_{};
     prometheus::Counter* lookupResp404_{};
+    prometheus::Counter* lookupResp503_{};
     prometheus::Counter* lookupRespError_{};
-
-    // First-connection
-    prometheus::Counter* firstConnRequests_{};
-    prometheus::Counter* firstConnResp200_{};
-    prometheus::Counter* firstConnResp404_{};
-    prometheus::Counter* firstConnResp503_{};
-    prometheus::Counter* firstConnRespError_{};
 };

@@ -463,24 +463,6 @@ when running the suite without the RADIUS server.
 | `IMSI_OOB` | `278771209999001` | Outside all range configs; always rejects |
 | `TEST_APN` | `internet.operator.com` | APN used in all requests |
 
-### Running locally (docker-compose)
-
-```bash
-# Start full stack including aaa-radius-server
-docker compose -f aaa-regression-tester/docker-compose.test.yml up -d
-
-# Run only RADIUS tests
-docker compose -f aaa-regression-tester/docker-compose.test.yml run --rm tester \
-    pytest test_12_radius.py -v
-
-# Run full suite (RADIUS tests auto-skip if server unreachable)
-docker compose -f aaa-regression-tester/docker-compose.test.yml run --rm tester
-
-# Skip RADIUS tests explicitly
-docker compose -f aaa-regression-tester/docker-compose.test.yml run --rm tester \
-    pytest -m "not radius"
-```
-
 ---
 
 ## Multi-Region Notes

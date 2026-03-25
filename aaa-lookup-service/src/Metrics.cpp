@@ -54,6 +54,22 @@ void Metrics::init(uint16_t metricsPort) {
 
     cntDbErrors_ = &dbErrorFamily_->Add({});
 
+    // ── first_connection_requests_total ───────────────────────────────────
+    auto& fcReqFamily = prometheus::BuildCounter()
+        .Name("first_connection_requests_total")
+        .Help("Total POST /v1/first-connection requests sent by the lookup service")
+        .Register(*registry_);
+    firstConnRequests_ = &fcReqFamily.Add({});
+
+    auto& fcRespFamily = prometheus::BuildCounter()
+        .Name("first_connection_responses_total")
+        .Help("first-connection responses by HTTP status code")
+        .Register(*registry_);
+    firstConnResp200_   = &fcRespFamily.Add({{"status", "200"}});
+    firstConnResp404_   = &fcRespFamily.Add({{"status", "404"}});
+    firstConnResp503_   = &fcRespFamily.Add({{"status", "503"}});
+    firstConnRespError_ = &fcRespFamily.Add({{"status", "error"}});
+
     // ── Prometheus pull endpoint on metricsPort ────────────────────────────
     // Runs its own CivetWeb HTTP server — separate from the Drogon API port.
     auto* exposer = new prometheus::Exposer{
@@ -79,3 +95,14 @@ void Metrics::recordLookup(const std::string& result, double latencySeconds) {
 void Metrics::incrementInFlight() { gaugeInFlight_->Increment(); }
 void Metrics::decrementInFlight() { gaugeInFlight_->Decrement(); }
 void Metrics::recordDbError()     { cntDbErrors_->Increment(); }
+
+void Metrics::incFirstConnRequests() {
+    if (firstConnRequests_) firstConnRequests_->Increment();
+}
+
+void Metrics::incFirstConnResponse(int statusCode) {
+    if      (statusCode == 200 || statusCode == 201) { if (firstConnResp200_)   firstConnResp200_->Increment(); }
+    else if (statusCode == 404)                       { if (firstConnResp404_)   firstConnResp404_->Increment(); }
+    else if (statusCode == 503)                       { if (firstConnResp503_)   firstConnResp503_->Increment(); }
+    else                                              { if (firstConnRespError_) firstConnRespError_->Increment(); }
+}
