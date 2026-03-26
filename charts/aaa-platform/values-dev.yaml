@@ -44,9 +44,9 @@ aaa-database:
       enabled: true
       instances: 1
       parameters:
-        max_client_conn: "100"
-        default_pool_size: "10"
-        reserve_pool_size: "5"
+        max_client_conn: "300"
+        default_pool_size: "30"    # was 10 — at 600 RPS × 5ms/query = 3 needed; 30 gives 6× headroom
+        reserve_pool_size: "10"
         # Disable client→PgBouncer TLS in dev: traffic is internal-only and
         # the C++ lookup service (Drogon/libpq) cannot verify CNPG's self-signed
         # cert, causing the SSL handshake to hang and health-check timeouts.
@@ -72,6 +72,8 @@ aaa-lookup-service:
     pullPolicy: Never
   db:
     secretName: aaa-db-credentials
+    poolSize: 25          # was 8 — at 600 RPS × 5ms/query = 3 needed; 25 gives headroom for bursts
+    timeoutSec: "2.0"     # slightly more generous under load
   jwt:
     skipVerify: "true"   # no JWT enforcement in dev
   provisioningUrl: "http://aaa-platform-subscriber-profile-api:8080"
@@ -83,10 +85,10 @@ aaa-lookup-service:
     enabled: true
   resources:
     requests:
-      cpu: "100m"
+      cpu: "500m"
       memory: "128Mi"
     limits:
-      cpu: "500m"
+      cpu: "2"           # was 500m — Drogon is async/multi-threaded; needs headroom for 600 RPS
       memory: "256Mi"
 
 # ── Provisioning API ─────────────────────────────────────────────
@@ -168,17 +170,17 @@ aaa-radius-server:
   radiusSecret:
     secretName: "aaa-radius-secret"   # created by: make radius-secret (called automatically by make deploy)
   lookupUrl: "http://aaa-platform-aaa-lookup-service:8081"
-  workerThreads: 4
+  workerThreads: 64    # was 16 — at 600 RPS × 10ms expected RTT = 6 in-flight; 64 gives 10× headroom
   autoscaling:
     enabled: false
   monitoring:
     enabled: true
   resources:
     requests:
-      cpu: "100m"
+      cpu: "250m"
       memory: "64Mi"
     limits:
-      cpu: "300m"
+      cpu: "1"           # was 300m — 4 workers on 0.3 cores was the primary saturation point
       memory: "128Mi"
 
 # ── Prometheus + Grafana (kube-prometheus-stack) ──────────────────
@@ -187,6 +189,9 @@ kube-prometheus-stack:
   grafana:
     enabled: true
     adminPassword: "dev-grafana"
+    grafana.ini:
+      dashboards:
+        default_home_dashboard_path: /tmp/dashboards/AAA Platform/aaa-platform-dashboard.json
     ingress:
       enabled: true
       ingressClassName: nginx

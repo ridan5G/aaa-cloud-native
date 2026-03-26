@@ -96,6 +96,14 @@ kube-prometheus-stack:
     #     passwordKey: admin-password
     adminPassword: ""
 
+    # ── Home dashboard ────────────────────────────────────────────────────
+    # The sidecar writes provisioned dashboards to /tmp/dashboards/<folder>/.
+    # Setting default_home_dashboard_path makes Grafana open the AAA Platform
+    # dashboard instead of the built-in Grafana home page after every redeploy.
+    grafana.ini:
+      dashboards:
+        default_home_dashboard_path: /tmp/dashboards/AAA Platform/aaa-platform-dashboard.json
+
     # ── Sidecar ──────────────────────────────────────────────────────────
     # Dashboard sidecar: watches ConfigMaps labelled grafana_dashboard=1 and
     # hot-loads them.  The umbrella chart creates grafana-dashboard-cm.yaml

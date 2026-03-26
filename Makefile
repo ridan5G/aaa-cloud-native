@@ -447,35 +447,74 @@ load-test-logs-k8s:             ## Print logs from the last load test K8s Job
 build-radius-load-tester:       ## Build RADIUS load-test image (aaa/aaa-radius-load-tester:dev)
 	docker build -t aaa/aaa-radius-load-tester:dev ./load-testing/radius/
 
-radius-load-test:               ## RADIUS load test — 300/400/500/600 RPS + first-connect 2 RPS (requires: make port-forward-radius)
-	docker run --rm \
-	  -e RADIUS_HOST=host.docker.internal \
-	  -e RADIUS_SECRET=$(RADIUS_SECRET) \
-	  -e PROMETHEUS_URL=http://host.docker.internal:9090 \
-	  -v "$$(pwd)/load-test-results:/app/results" \
-	  aaa/aaa-radius-load-tester:dev
+## ── internal helper: wait for the job pod and stream its logs ──────────────
+## Usage: $(MAKE) _radius-load-test-follow  (called by both smoke and full targets)
+_radius-load-test-follow:
+	@echo "Waiting for Job pod to appear..."
+	@until kubectl get pods -n $(NAMESPACE) \
+	    -l job-name=aaa-radius-load-test \
+	    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null | grep -q .; do \
+	  sleep 1; \
+	done
+	@POD=$$(kubectl get pods -n $(NAMESPACE) -l job-name=aaa-radius-load-test \
+	    -o jsonpath='{.items[0].metadata.name}'); \
+	echo "Streaming logs from pod: $$POD"; \
+	kubectl wait pod/$$POD -n $(NAMESPACE) --for=condition=Ready --timeout=120s; \
+	kubectl logs -f -n $(NAMESPACE) $$POD
 
-radius-load-test-smoke:         ## RADIUS load test — quick smoke (30 s per tier)
-	docker run --rm \
-	  -e RADIUS_HOST=host.docker.internal \
-	  -e RADIUS_SECRET=$(RADIUS_SECRET) \
-	  -e PROMETHEUS_URL=http://host.docker.internal:9090 \
-	  -e TIER_DURATION_S=30 \
-	  -v "$$(pwd)/load-test-results:/app/results" \
-	  aaa/aaa-radius-load-tester:dev
+radius-load-test:               ## RADIUS load test — 300/500/600 RPS + 2 RPS first-connect (in-cluster K8s Job)
+	$(MAKE) build-radius-load-tester
+	$(MAKE) radius-secret
+	@echo "Waiting for all deployments to be fully rolled out..."
+	kubectl rollout status deployment/aaa-platform-aaa-lookup-service   -n $(NAMESPACE) --timeout=120s
+	kubectl rollout status deployment/aaa-platform-aaa-radius-server    -n $(NAMESPACE) --timeout=120s
+	kubectl rollout status deployment/aaa-platform-subscriber-profile-api -n $(NAMESPACE) --timeout=120s
+	@echo "Removing any previous RADIUS load test Job and pods..."
+	kubectl delete jobs -n $(NAMESPACE) \
+	  -l app.kubernetes.io/name=aaa-radius-load-test \
+	  --ignore-not-found --wait=true
+	helm upgrade --install aaa-radius-load-test ./charts/aaa-radius-load-test \
+	  --namespace $(NAMESPACE) \
+	  --set "image.repository=aaa/aaa-radius-load-tester" \
+	  --set "image.tag=dev" \
+	  --set "image.pullPolicy=Never" \
+	  --set "radius.host=aaa-platform-aaa-radius-server" \
+	  --set "radius.secretName=aaa-radius-secret" \
+	  --set "api.url=http://aaa-platform-subscriber-profile-api:8080" \
+	  --timeout 30m
+	$(MAKE) _radius-load-test-follow
 
-radius-load-test-k8s:           ## Run RADIUS load test as K8s Job
-	kubectl delete job aaa-radius-load-test -n $(NAMESPACE) --ignore-not-found
-	kubectl apply -f load-testing/k8s/radius-load-job.yaml -n $(NAMESPACE)
-	@echo "Waiting for RADIUS load test Job to complete..."
-	kubectl wait --for=condition=complete \
-	  job/aaa-radius-load-test -n $(NAMESPACE) --timeout=3600s
-	$(MAKE) radius-load-test-logs-k8s
+radius-load-test-smoke:         ## RADIUS smoke — 30 s per tier (~4 min total)
+	$(MAKE) build-radius-load-tester
+	$(MAKE) radius-secret
+	@echo "Waiting for all deployments to be fully rolled out..."
+	kubectl rollout status deployment/aaa-platform-aaa-lookup-service   -n $(NAMESPACE) --timeout=120s
+	kubectl rollout status deployment/aaa-platform-aaa-radius-server    -n $(NAMESPACE) --timeout=120s
+	kubectl rollout status deployment/aaa-platform-subscriber-profile-api -n $(NAMESPACE) --timeout=120s
+	@echo "Removing any previous RADIUS load test Job and pods..."
+	kubectl delete jobs -n $(NAMESPACE) \
+	  -l app.kubernetes.io/name=aaa-radius-load-test \
+	  --ignore-not-found --wait=true
+	helm upgrade --install aaa-radius-load-test ./charts/aaa-radius-load-test \
+	  --namespace $(NAMESPACE) \
+	  --set "image.repository=aaa/aaa-radius-load-tester" \
+	  --set "image.tag=dev" \
+	  --set "image.pullPolicy=Never" \
+	  --set "radius.host=aaa-platform-aaa-radius-server" \
+	  --set "radius.secretName=aaa-radius-secret" \
+	  --set "api.url=http://aaa-platform-subscriber-profile-api:8080" \
+	  --set "load.tierDurationS=30" \
+	  --timeout 10m
+	$(MAKE) _radius-load-test-follow
 
-radius-load-test-logs-k8s:     ## Print logs from the last RADIUS load test K8s Job
-	kubectl logs -n $(NAMESPACE) \
+radius-load-test-k8s:           ## Run RADIUS load test as K8s Job (alias for radius-load-test)
+	$(MAKE) radius-load-test
+
+radius-load-test-logs-k8s:     ## Stream logs from the running RADIUS load test K8s Job
+	kubectl logs -f -n $(NAMESPACE) \
 	  $$(kubectl get pods -n $(NAMESPACE) -l job-name=aaa-radius-load-test \
-	    -o jsonpath='{.items[0].metadata.name}')
+	    --sort-by=.metadata.creationTimestamp \
+	    -o jsonpath='{.items[-1].metadata.name}')
 
 # ── Teardown ──────────────────────────────────────────────────
 uninstall:                      ## Uninstall Helm release + delete CNPG cluster and PVCs (full DB wipe)

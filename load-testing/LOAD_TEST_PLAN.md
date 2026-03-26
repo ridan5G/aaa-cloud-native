@@ -226,39 +226,32 @@ Pods tracked: `aaa-radius-server-*`, `aaa-lookup-service-*`,
 
 ### Running the RADIUS load test
 
-#### Option A — Local (against port-forwarded RADIUS)
+The script is self-contained: on first run it creates the pools and range configs via
+subscriber-profile-api, then warms up all 10K fast-path subscribers via RADIUS before
+starting the timed tiers.  No separate seed step required.
+
+#### Option A — In-cluster Kubernetes Job (recommended)
+
+Note: `kubectl port-forward` does not support UDP, so the RADIUS load test always
+runs as an in-cluster K8s Job.
 
 ```bash
-# 1. Forward RADIUS service
-kubectl port-forward -n aaa-platform svc/aaa-radius-server 1812:1812/UDP &
+# Build image (once)
+make build-radius-load-tester
 
-# 2. Seed data (includes first-connect pool)
-make load-test-seed
+# Quick smoke — 30 s per tier (~4 min total)
+make radius-load-test-smoke
 
-# 3. Quick smoke (30 s per tier)
-cd load-testing/radius
-TIER_DURATION_S=30 RADIUS_HOST=localhost PROMETHEUS_URL=http://localhost:9090 \
-  python radius_load.py
+# Full run — 5 min per tier (~20 min total)
+make radius-load-test
 
-# 4. Full run (5 min per tier)
-RADIUS_HOST=localhost PROMETHEUS_URL=http://localhost:9090 python radius_load.py
-```
+# Stream logs while running
+make radius-load-test-logs-k8s
 
-#### Option B — In-cluster Kubernetes Job
-
-```bash
-# Build image
-docker build -t aaa/aaa-radius-load-tester:dev load-testing/radius/
-
-# Apply job (edit TIER_DURATION_S in the YAML for a quick run)
-kubectl apply -f load-testing/k8s/radius-load-job.yaml -n aaa-platform
-
-# Stream logs
-kubectl logs -f -n aaa-platform job/aaa-radius-load-test
-
-# Fetch results (copy from pod before TTL expires)
+# Fetch results (before the Job's 10-min TTL expires)
 kubectl cp -n aaa-platform \
-  $(kubectl get pod -n aaa-platform -l job-name=aaa-radius-load-test -o jsonpath='{.items[0].metadata.name}'):/app/results \
+  $(kubectl get pod -n aaa-platform -l job-name=aaa-radius-load-test \
+    -o jsonpath='{.items[0].metadata.name}'):/app/results \
   ./load-test-results
 ```
 

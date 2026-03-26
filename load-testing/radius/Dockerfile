@@ -10,4 +10,7 @@ COPY radius_client.py radius_load.py ./
 # Results volume — mount an emptyDir here in K8s to persist outputs
 VOLUME ["/app/results"]
 
-CMD ["python", "radius_load.py"]
+# Force unbuffered stdout so kubectl logs sees output immediately
+ENV PYTHONUNBUFFERED=1
+
+CMD ["python", "-u", "radius_load.py"]
