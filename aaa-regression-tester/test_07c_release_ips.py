@@ -142,15 +142,56 @@ class TestReleaseIps:
     # 7c.4 ────────────────────────────────────────────────────────────────────
     def test_04_first_connection_after_release_allocates_fresh_ip(
             self, http: httpx.Client):
-        """After release-ips, first-connection on the same IMSI allocates a new IP."""
+        """After release-ips, first-connection on the same IMSI must return a non-null IP."""
         r_fc = self._first_connection(http, IMSI_REL1)
         assert r_fc.status_code in (200, 201), \
             f"Expected 200/201 after re-connect, got {r_fc.status_code}: {r_fc.text}"
-        assert "static_ip" in r_fc.json()
+        body = r_fc.json()
+        # Key regression assertion: static_ip must NOT be null.
+        # A null here means first-connection found the existing profile but skipped
+        # re-allocation — the core bug this test guards against.
+        assert body.get("static_ip") is not None, \
+            f"Re-connect returned static_ip=null — IP was not re-allocated after release: {body}"
 
         # Verify pool allocated count went back up
         stats = http.get(f"/pools/{TestReleaseIps.pool_id}/stats").json()
         assert stats["allocated"] >= 1
+
+    # 7c.4b ───────────────────────────────────────────────────────────────────
+    def test_04b_release_then_reconnect_end_to_end(self, http: httpx.Client):
+        """
+        Regression: full release → reconnect cycle on a fresh IMSI.
+        Proves first-connection re-allocates rather than returning null after release.
+        """
+        # Step 1: allocate via first-connection
+        r1 = self._first_connection(http, IMSI_REL2)
+        assert r1.status_code == 201, f"initial first-connection failed: {r1.text}"
+        sim_id = r1.json()["sim_id"]
+        ip1 = r1.json()["static_ip"]
+        assert ip1 is not None, "first-connection returned null IP on fresh IMSI"
+
+        stats_a = http.get(f"/pools/{TestReleaseIps.pool_id}/stats").json()
+
+        # Step 2: release IPs
+        r_rel = http.post(f"/profiles/{sim_id}/release-ips")
+        assert r_rel.status_code == 200
+        assert r_rel.json()["released_count"] == 1
+
+        stats_b = http.get(f"/pools/{TestReleaseIps.pool_id}/stats").json()
+        assert stats_b["available"] == stats_a["available"] + 1, \
+            "released IP was not returned to pool"
+
+        # Step 3: reconnect — must get a fresh (non-null) IP
+        r2 = self._first_connection(http, IMSI_REL2)
+        assert r2.status_code in (200, 201), \
+            f"re-connect after release failed: {r2.status_code}: {r2.text}"
+        ip2 = r2.json().get("static_ip")
+        assert ip2 is not None, \
+            f"Re-connect returned static_ip=null — first-connection did not re-allocate after release"
+
+        stats_c = http.get(f"/pools/{TestReleaseIps.pool_id}/stats").json()
+        assert stats_c["allocated"] >= stats_b["allocated"] + 1, \
+            f"Pool allocated count did not increase after re-connect: {stats_c}"
 
     # 7c.5 ────────────────────────────────────────────────────────────────────
     def test_05_release_ips_not_found(self, http: httpx.Client):

@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aaa-radius-load-test
+  namespace: aaa-platform
+  labels:
+    app.kubernetes.io/name: aaa-radius-load-test
+    app.kubernetes.io/component: load-testing
+spec:
+  # Auto-delete 10 min after completion so logs are still accessible
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aaa-radius-load-test
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: radius-load
+          # Build: make build-all REGISTRY=<reg> TAG=dev
+          image: aaa/aaa-radius-load-tester:dev
+          imagePullPolicy: Never   # local dev image; change for CI
+          env:
+            - name: RADIUS_HOST
+              value: "aaa-radius-server"
+            - name: RADIUS_PORT
+              value: "1812"
+            - name: RADIUS_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: aaa-radius-secret
+                  key: radius-secret
+            - name: PROMETHEUS_URL
+              value: "http://prometheus-kube-prometheus-prometheus.monitoring.svc:9090"
+            - name: IMSI_COUNT
+              value: "10000"
+            - name: FIRSTCONN_RPS
+              value: "2"
+            - name: TIER_DURATION_S
+              value: "300"   # 5 min per tier; set to 30 for a quick smoke run
+            - name: FIRSTCONN_IMSI_START
+              value: "1010000011001"
+          volumeMounts:
+            - name: results
+              mountPath: /app/results
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+      volumes:
+        - name: results
+          emptyDir: {}

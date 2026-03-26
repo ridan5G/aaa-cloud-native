@@ -130,10 +130,11 @@ void LookupController::callFirstConnection(
     fcReq->setMethod(drogon::Post);
 
     Metrics::instance().incFirstConnRequests();
+    const auto fcStart = std::chrono::steady_clock::now();
 
     firstConnClient_->sendRequest(fcReq,
-        [sharedCb, imsi, apn](drogon::ReqResult res,
-                               const drogon::HttpResponsePtr& fcResp) {
+        [sharedCb, imsi, apn, fcStart](drogon::ReqResult res,
+                                        const drogon::HttpResponsePtr& fcResp) {
             auto& cb = *sharedCb;
 
             if (res != drogon::ReqResult::Ok) {
@@ -141,6 +142,9 @@ void LookupController::callFirstConnection(
                     R"({{"imsi":"{}","apn":"{}","result":"first_conn_error","error":"network"}})",
                     imsi, apn);
                 Metrics::instance().incFirstConnResponse(-1);
+                const double fcLatency = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - fcStart).count();
+                Metrics::instance().observeFirstConnDuration(fcLatency);
                 cb(LookupController::errorResponse(
                     drogon::k503ServiceUnavailable, "upstream_error"));
                 return;
@@ -148,6 +152,9 @@ void LookupController::callFirstConnection(
 
             const int code = static_cast<int>(fcResp->getStatusCode());
             Metrics::instance().incFirstConnResponse(code);
+            const double fcLatency = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - fcStart).count();
+            Metrics::instance().observeFirstConnDuration(fcLatency);
 
             if (code == 200 || code == 201) {
                 auto j = fcResp->getJsonObject();

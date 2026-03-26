@@ -132,6 +132,40 @@ spec:
               there is truly no RADIUS traffic (unlikely in production).
               Check pod status and RADIUS_LOOKUP_URL configuration.
 
+        - alert: LookupProvisioningUpstreamErrors
+          expr: sum(rate(first_connection_responses_total{status=~"503|error"}[2m])) > 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Lookup service cannot reach subscriber-profile-api"
+            description: >
+              first_connection_responses_total{status=~"503|error"} is increasing —
+              the lookup service is failing to call POST /v1/first-connection on
+              subscriber-profile-api. All new-SIM connections will return 503 until
+              this is resolved. Check PROVISIONING_URL env var on the lookup pod and
+              verify subscriber-profile-api is running.
+              kubectl -n {{ .Release.Namespace }} exec deploy/{{ .Release.Name }}-aaa-lookup-service
+              -- env | grep PROVISIONING
+
+        - alert: LookupFirstConnHighRate
+          expr: >
+            rate(first_connection_requests_total[10m])
+            /
+            rate(aaa_lookup_requests_total[10m]) > 0.25
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "First-connection allocation rate > 25% of lookups"
+            description: >
+              More than 25% of lookup requests are triggering first-connection
+              allocation. At steady state this should be near zero. A sustained
+              high rate indicates a large batch of new SIMs connecting, a range
+              config gap, or stale provisioning data. Replaces the retired
+              RadiusStage2RateHigh alert — now correctly sourced from the lookup
+              service's first_connection_requests_total metric.
+
     # ── RADIUS Server ────────────────────────────────────────────────────────
     - name: aaa.radius
       rules:
@@ -144,10 +178,12 @@ spec:
             summary: "RADIUS server upstream errors"
             description: >
               aaa-radius-server is receiving unexpected HTTP errors or curl
-              failures from its upstreams ({{ "{{ $labels.upstream }}" }},
-              status {{ "{{ $labels.status_code }}" }}). RADIUS authentications
-              may be failing. Check aaa-lookup-service and subscriber-profile-api
-              availability.
+              failures from its upstream ({{ "{{ $labels.upstream }}" }},
+              status {{ "{{ $labels.status_code }}" }}). RADIUS now has a single
+              upstream (aaa-lookup-service); the lookup service internally calls
+              subscriber-profile-api. Check aaa-lookup-service availability and
+              the LookupProvisioningUpstreamErrors alert for provisioning-tier
+              failures.
 
         - alert: RadiusLatencyHigh
           expr: >
@@ -179,23 +215,6 @@ spec:
               indicate suspended subscribers, range config gaps, or pool
               exhaustion. Current reject rate:
               {{ "{{ $value | humanizePercentage }}" }}.
-
-        - alert: RadiusStage2RateHigh
-          expr: >
-            sum(rate(radius_requests_total{stage="2"}[10m]))
-            /
-            sum(rate(radius_requests_total[10m])) > 0.25
-          for: 10m
-          labels:
-            severity: warning
-          annotations:
-            summary: "RADIUS Stage 2 (first-connection) rate > 25%"
-            description: >
-              More than 25% of RADIUS requests are falling through to
-              first-connection allocation (Stage 2). At steady state this
-              should be near zero. A sustained high rate may indicate a
-              misconfigured range or a large batch of new SIMs connecting
-              simultaneously.
 
     # ── Management UI ────────────────────────────────────────────────────────
     - name: aaa.ui

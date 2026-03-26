@@ -378,10 +378,16 @@ function ProfileDetail() {
     try {
       const r = await apiClient.post('/first-connection', { imsi, apn })
       const { static_ip } = r.data
-      const label = r.status === 201 ? 'IP allocated' : 'Already provisioned'
-      show('success', static_ip ? `${label}: ${static_ip}` : `${label} (no IP returned)`)
+      if (static_ip) {
+        show('success', r.status === 201 ? `IP allocated: ${static_ip}` : `Already provisioned: ${static_ip}`)
+      } else {
+        show('info', 'SIM has no range config — IP cannot be auto-allocated')
+      }
       load()
-    } catch (e) { show('error', String(e)) }
+    } catch (e: any) {
+      const msg = e?.response?.data?.detail?.error ?? e?.response?.data?.error ?? String(e)
+      show('error', msg === 'not_found' ? 'IMSI not found in any range config' : msg)
+    }
     finally { setConnecting(false) }
   }
 

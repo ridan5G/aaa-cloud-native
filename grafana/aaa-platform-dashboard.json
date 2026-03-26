@@ -371,7 +371,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "### Two-stage RADIUS authentication flow\n`aaa-radius-server` receives UDP Access-Requests on port 1812 and resolves them in two stages:\n\n```\nAccess-Request (IMSI + APN)\n  │\n  ├─▶ Stage 1: GET aaa-lookup-service/lookup?imsi=…&apn=…\n  │     ├─ 200 → Access-Accept (static IP)              ✅  stage=1\n  │     ├─ 403 → Access-Reject (suspended)              🚫  stage=1\n  │     └─ 404 → Stage 2 ▼\n  │\n  └─▶ Stage 2: POST subscriber-profile-api/v1/first-connection\n        ├─ 200/201 → Access-Accept (newly allocated IP)  ✅  stage=2\n        ├─ 404/503 → Access-Reject (no pool/config)      🚫  stage=2\n        └─ error   → Access-Reject                       🔴  upstream_error\n```\n\n**SLAs:** p99 end-to-end < 500 ms · Accept rate ≥ 95% · Stage 2 rate < 25% (steady state ≈ 0%)",
+        "content": "### Single-call RADIUS authentication flow\n`aaa-radius-server` receives UDP Access-Requests on port 1812 and resolves them via a **single HTTP call** to `aaa-lookup-service`. The lookup service handles first-connection allocation internally on DB miss.\n\n```\nAccess-Request (IMSI + APN)\n  │\n  └─▶ GET aaa-lookup-service/lookup?imsi=…&apn=…\n        ├─ 200 → Access-Accept (static IP — DB hit, subscriber already provisioned)  ✅\n        ├─ 200 → Access-Accept (newly allocated IP — first-conn triggered internally) ✅\n        ├─ 404 → Access-Reject (no range config / not_found)                         🚫\n        ├─ 403 → Access-Reject (subscriber suspended)                                🚫\n        └─ 503 → Access-Reject (pool exhausted or provisioning upstream unreachable)  🔴\n```\n\n**Architecture note:** When a DB miss occurs, the lookup service internally calls `POST subscriber-profile-api/v1/first-connection`. RADIUS no longer makes a second HTTP call — all staging is internal to the lookup pod.\n\n**SLAs:** p99 end-to-end < 500 ms · Accept rate ≥ 95% · First-conn trigger rate < 25% (steady state ≈ 0%)",
         "code": {
           "language": "plaintext",
           "showLineNumbers": false,
@@ -522,8 +522,8 @@
     {
       "id": 32,
       "type": "stat",
-      "title": "RADIUS Stage 2 Rate",
-      "description": "Fraction of requests that required first-connection allocation (Stage 2). High values indicate many new SIMs or range misconfigurations. NOTE: numerator now sourced from lookup pod first_connection_total counter (stage info is internal to lookup service).",
+      "title": "First-Conn Trigger Rate",
+      "description": "Fraction of RADIUS requests that triggered first-connection allocation. Sourced from the lookup service's first_connection_requests_total counter (not RADIUS). At steady state this should be near 0%. High values indicate many new SIMs or range config gaps.",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -540,8 +540,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(first_connection_total[$__rate_interval])) / sum(rate(radius_requests_total[$__rate_interval])) * 100",
-          "legendFormat": "Stage 2 %",
+          "expr": "sum(rate(first_connection_requests_total[$__rate_interval])) / sum(rate(radius_requests_total[$__rate_interval])) * 100",
+          "legendFormat": "FC trigger %",
           "refId": "A",
           "instant": true
         }
@@ -591,7 +591,7 @@
       "id": 33,
       "type": "stat",
       "title": "RADIUS Upstream Errors (1h)",
-      "description": "Unexpected HTTP errors or curl failures from aaa-lookup-service or subscriber-profile-api. Any value > 0 requires investigation. NOTE: first_connection_responses_total is now emitted by the lookup pod (not the radius pod).",
+      "description": "Unexpected HTTP errors or curl failures from aaa-lookup-service (RADIUS's only upstream). Any value > 0 requires investigation. For provisioning-tier errors (lookup → subscriber-profile-api), see the First-Connection row below.",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -608,7 +608,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(increase(lookup_responses_total{status!=\"200\"}[1h])) + sum(increase(first_connection_responses_total{status!=\"200\"}[1h]))",
+          "expr": "sum(increase(lookup_responses_total{status!=\"200\"}[1h]))",
           "legendFormat": "errors (1h)",
           "refId": "A",
           "instant": true
@@ -652,8 +652,8 @@
     {
       "id": 21,
       "type": "timeseries",
-      "title": "RADIUS Request Rate by Result & Stage",
-      "description": "Access-Accept / Access-Reject broken down by stage (1 = lookup hit, 2 = first-connection allocation). NOTE: After refactor, stage=2 is no longer emitted by the radius server; staging is now internal to the lookup service.",
+      "title": "RADIUS Request Rate by Result",
+      "description": "Access-Accept / Access-Reject rate over time. The stage dimension is no longer emitted by the RADIUS server — first-connection staging is now internal to the lookup pod. See the First-Connection row for allocation breakdown.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -670,8 +670,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (result, stage) (rate(radius_requests_total[$__rate_interval]))",
-          "legendFormat": "{{result}} stage{{stage}}",
+          "expr": "sum by (result) (rate(radius_requests_total[$__rate_interval]))",
+          "legendFormat": "{{result}}",
           "refId": "A"
         }
       ],
@@ -709,7 +709,7 @@
       "id": 22,
       "type": "timeseries",
       "title": "RADIUS Upstream Errors",
-      "description": "Non-200 response rates from upstream services called by the RADIUS server. lookup = aaa-lookup-service; first-conn = subscriber-profile-api /v1/first-connection. NOTE: first_connection_responses_total is now emitted by the lookup pod (not the radius pod).",
+      "description": "Non-200 response rates from aaa-lookup-service (RADIUS's only upstream). For first-connection errors (lookup → subscriber-profile-api), see the First-Connection row below.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -729,20 +729,11 @@
           "expr": "sum by (status) (rate(lookup_responses_total{status!=\"200\",namespace=~\"$namespace\"}[$__rate_interval]))",
           "legendFormat": "lookup {{status}}",
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "sum by (status) (rate(first_connection_responses_total{status!=\"200\",namespace=~\"$namespace\"}[$__rate_interval]))",
-          "legendFormat": "first-conn {{status}}",
-          "refId": "B"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "reqps",
           "color": {
             "mode": "palette-classic"
           },

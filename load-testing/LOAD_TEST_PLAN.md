@@ -161,6 +161,130 @@ Scrape endpoint: `http://<pod>:9090/metrics`
 
 ---
 
+---
+
+## RADIUS Load Test
+
+Tests the full RADIUS hot-path (UDP/1812) at realistic telecom traffic levels,
+combining a stepped fast-path load with a constant first-connection background.
+
+### Two concurrent senders
+
+| Sender | Protocol | Rate | IMSI pool | Expected response |
+|--------|----------|------|-----------|-------------------|
+| Fast-path | RADIUS UDP/1812 | 300 → 400 → 500 → 600 RPS (stepped) | 10 K known IMSIs (in `imsi2sim`) | Access-Accept (IP from `imsi_apn_ips`) |
+| First-connect | RADIUS UDP/1812 | 2 RPS constant | Sequential new IMSIs (in range, not in `imsi2sim`) | Access-Accept (triggers subscriber-profile-api `/first-connection`) |
+
+### Load tiers (fast-path)
+
+| Tier | Target RPS | Duration | Purpose |
+|------|-----------|----------|---------|
+| tier-300 | 300 | 5 min | Low baseline |
+| tier-400 | 400 | 5 min | Mid baseline |
+| tier-500 | 500 | 5 min | Normal ops |
+| tier-600 | 600 | 5 min | Capacity ceiling |
+
+Total duration: **~20 minutes** (plus first-connect runs throughout).
+
+### Pass criteria
+
+| Path | p99 latency | Error rate |
+|------|------------|------------|
+| Fast-path | < 20 ms | < 1 % |
+| First-connect | < 500 ms | < 2 % |
+
+### Test data
+
+Fast-path seed: same 10 K subscribers created by `make load-test-seed`
+(IMSI `001010000001001` – `001010000011000`, IPs pre-assigned in `imsi_apn_ips`).
+
+First-connect seed (added to `seed_load_test.sql`):
+- New `ip_pools` entry: `100.65.0.0/20` (`load-test-firstconn`) — 4 094 free IPs
+- New `imsi_range_configs` entry covering `001010000011001` – `001010000013600`
+- These IMSIs are **not** in `imsi2sim` — each hit triggers a real first-connection
+
+### Prometheus pod metrics
+
+Queried from Prometheus after each tier (`/api/v1/query_range`, step=15s):
+
+```promql
+# CPU utilisation per pod (cores)
+avg by (pod) (
+  rate(container_cpu_usage_seconds_total
+    {namespace="aaa-platform",container!="POD",container!=""}[1m])
+)
+
+# RAM working-set per pod (bytes → convert to MB in output)
+avg by (pod) (
+  container_memory_working_set_bytes
+    {namespace="aaa-platform",container!="POD",container!=""}
+)
+```
+
+Pods tracked: `aaa-radius-server-*`, `aaa-lookup-service-*`,
+`subscriber-profile-api-*`, `aaa-db-*` (PostgreSQL), `aaa-db-*-pooler-*` (PgBouncer).
+
+### Running the RADIUS load test
+
+#### Option A — Local (against port-forwarded RADIUS)
+
+```bash
+# 1. Forward RADIUS service
+kubectl port-forward -n aaa-platform svc/aaa-radius-server 1812:1812/UDP &
+
+# 2. Seed data (includes first-connect pool)
+make load-test-seed
+
+# 3. Quick smoke (30 s per tier)
+cd load-testing/radius
+TIER_DURATION_S=30 RADIUS_HOST=localhost PROMETHEUS_URL=http://localhost:9090 \
+  python radius_load.py
+
+# 4. Full run (5 min per tier)
+RADIUS_HOST=localhost PROMETHEUS_URL=http://localhost:9090 python radius_load.py
+```
+
+#### Option B — In-cluster Kubernetes Job
+
+```bash
+# Build image
+docker build -t aaa/aaa-radius-load-tester:dev load-testing/radius/
+
+# Apply job (edit TIER_DURATION_S in the YAML for a quick run)
+kubectl apply -f load-testing/k8s/radius-load-job.yaml -n aaa-platform
+
+# Stream logs
+kubectl logs -f -n aaa-platform job/aaa-radius-load-test
+
+# Fetch results (copy from pod before TTL expires)
+kubectl cp -n aaa-platform \
+  $(kubectl get pod -n aaa-platform -l job-name=aaa-radius-load-test -o jsonpath='{.items[0].metadata.name}'):/app/results \
+  ./load-test-results
+```
+
+### Configurable environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RADIUS_HOST` | `aaa-radius-server` | RADIUS server hostname |
+| `RADIUS_PORT` | `1812` | UDP port |
+| `RADIUS_SECRET` | `testing123` | Shared secret |
+| `PROMETHEUS_URL` | `http://prometheus-kube-prometheus-prometheus.monitoring.svc:9090` | Prometheus base URL |
+| `IMSI_COUNT` | `10000` | Fast-path IMSI pool size |
+| `FIRSTCONN_RPS` | `2` | First-connect rate (RPS) |
+| `FIRSTCONN_IMSI_START` | `1010000011001` | First-connect IMSI base (integer) |
+| `TIER_DURATION_S` | `300` | Seconds per tier (set to 30 for quick smoke) |
+
+### Output files
+
+| File | Contents |
+|------|---------|
+| `results/summary.json` | Per-tier latency percentiles + error counts |
+| `results/pod-metrics.json` | CPU/RAM avg+max per pod per tier |
+| `results/report.md` | Human-readable Markdown tables |
+
+---
+
 ## Expected Capacity Estimates
 
 | Replicas | Expected Sustainable RPS | p99 Latency |

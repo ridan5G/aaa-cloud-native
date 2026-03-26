@@ -10,6 +10,7 @@ Test cases cover the full operator workflow:
   1d.4  Patch allowed_prefixes gates suggest-cidr: no prefixes → 422; add prefix → suggest → pool → 201
   1d.5  suggest-cidr size → prefix_len mapping: size=6→/29, size=14→/28, size=254→/24
   1d.6  Create pool via routing_domain_id (UUID); GET confirms routing_domain_id and name
+  1d.7  Large pool at start of prefix is skipped: pool covering first /17 → suggest finds /25 in second /17
 """
 import ipaddress
 
@@ -292,4 +293,61 @@ class TestFreeCidrFinderWorkflow:
         finally:
             if pool_id:
                 delete_pool(http, pool_id)
+            delete_domain(http, did)
+
+    # 1d.7 ────────────────────────────────────────────────────────────────────
+    def test_01d_7_large_pool_at_start_skipped(self, http: httpx.Client):
+        """
+        Regression: a large pool covering the first half of the allowed prefix
+        must not prevent suggest-cidr from finding a free block in the second half.
+
+        10.88.0.0/16 split into two /17s:
+          - 10.88.0.0/17  — occupied (one pool covering 32,768 addresses = 256 /25 blocks)
+          - 10.88.128.0/17 — free
+
+        With the old 10,000-candidate cap the algorithm would exhaust all tries inside
+        the first /17 and falsely return 404. The interval-based scan jumps past it.
+        """
+        # TD_PREFIX = "10.88.0.0/16"
+        first_half  = "10.88.0.0/17"    # blocks all 256 /25s in the first half
+        second_half = ipaddress.ip_network("10.88.128.0/17", strict=False)
+
+        domain = create_domain(http, TD_NAME, allowed_prefixes=[TD_PREFIX])
+        did = domain["id"]
+        blocking_pool_id: str | None = None
+        try:
+            # Create a single pool that covers the entire first /17
+            blocking_pool = create_pool(
+                http,
+                subnet=first_half,
+                pool_name="rd-1d-blocker",
+                account_name="TestAccount",
+                routing_domain=TD_NAME,
+            )
+            blocking_pool_id = blocking_pool["pool_id"]
+
+            # suggest-cidr must find a free /25 — somewhere in the second /17
+            resp = http.get(f"/routing-domains/{did}/suggest-cidr", params={"size": 50})
+            assert resp.status_code == 200, \
+                f"Expected 200 (interval scan should skip the /17 blocker), " \
+                f"got {resp.status_code}: {resp.text}"
+
+            data = resp.json()
+            suggested_cidr = data["suggested_cidr"]
+            suggested_net   = ipaddress.ip_network(suggested_cidr, strict=False)
+
+            # Must NOT overlap the blocking pool
+            assert not suggested_net.overlaps(ipaddress.ip_network(first_half, strict=False)), \
+                f"Suggestion {suggested_cidr} overlaps the blocking pool {first_half}"
+
+            # Must still be within the allowed prefix
+            assert suggested_net.subnet_of(ipaddress.ip_network(TD_PREFIX, strict=False)), \
+                f"Suggestion {suggested_cidr} is outside allowed prefix {TD_PREFIX}"
+
+            # Must fall in the free second half
+            assert suggested_net.subnet_of(second_half), \
+                f"Suggestion {suggested_cidr} is not in the free second half {second_half}"
+        finally:
+            if blocking_pool_id:
+                delete_pool(http, blocking_pool_id)
             delete_domain(http, did)

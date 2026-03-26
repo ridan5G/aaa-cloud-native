@@ -70,6 +70,21 @@ void Metrics::init(uint16_t metricsPort) {
     firstConnResp503_   = &fcRespFamily.Add({{"status", "503"}});
     firstConnRespError_ = &fcRespFamily.Add({{"status", "error"}});
 
+    // ── first_connection_duration_seconds ─────────────────────────────────────
+    // Measures only the HTTP round-trip from lookup → subscriber-profile-api.
+    // Buckets span 5 ms → 2.5 s; values above 500 ms will push RADIUS p99 past SLA.
+    firstConnDurationFamily_ = &prometheus::BuildHistogram()
+        .Name("first_connection_duration_seconds")
+        .Help("Time the lookup service waits for POST /v1/first-connection response")
+        .Register(*registry_);
+
+    histFirstConnDuration_ = &firstConnDurationFamily_->Add(
+        {},
+        prometheus::Histogram::BucketBoundaries{
+            0.005, 0.010, 0.025, 0.050, 0.100,
+            0.250, 0.500, 1.0, 2.5
+        });
+
     // ── Prometheus pull endpoint on metricsPort ────────────────────────────
     // Runs its own CivetWeb HTTP server — separate from the Drogon API port.
     auto* exposer = new prometheus::Exposer{
@@ -105,4 +120,8 @@ void Metrics::incFirstConnResponse(int statusCode) {
     else if (statusCode == 404)                       { if (firstConnResp404_)   firstConnResp404_->Increment(); }
     else if (statusCode == 503)                       { if (firstConnResp503_)   firstConnResp503_->Increment(); }
     else                                              { if (firstConnRespError_) firstConnRespError_->Increment(); }
+}
+
+void Metrics::observeFirstConnDuration(double seconds) {
+    if (histFirstConnDuration_) histFirstConnDuration_->Observe(seconds);
 }

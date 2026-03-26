@@ -178,6 +178,19 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
     )
 
     if not range_row:
+        if _realloc_sim_id:
+            # IMSI is provisioned but has no range config — nothing to re-allocate from.
+            # Return 200 + null IP (same graceful response as before the re-alloc change).
+            first_connection_total.labels(result="reused").inc()
+            logger.info(
+                '{"path":"/first-connection","imsi":"%s","result":"reused_no_range","use_case_id":"%s"}',
+                body.imsi,
+                body.use_case_id or "",
+            )
+            return JSONResponse(
+                status_code=200,
+                content={"sim_id": _realloc_sim_id, "static_ip": None},
+            )
         first_connection_total.labels(result="not_found").inc()
         logger.info(
             '{"path":"/first-connection","imsi":"%s","result":"not_found","use_case_id":"%s"}',
@@ -316,6 +329,30 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
                     "SELECT host(static_ip) FROM sim_apn_ips WHERE sim_id = $1::uuid AND apn IS NOT DISTINCT FROM $2 LIMIT 1",
                     sim_id, apn_val,
                 )
+                if not allocated_ip:
+                    # IPs were released — re-allocate for this card-level profile.
+                    apn_pools = await _load_apn_pools(conn, range_config_id, pool_id, ip_resolution, body.apn)
+                    for pv, pp in apn_pools:
+                        ip = await _allocate_ip(conn, pp)
+                        if not ip:
+                            first_connection_total.labels(result="pool_exhausted").inc()
+                            pool_exhausted_total.labels(pool_id=pp).inc()
+                            db_rollbacks_total.labels(reason="pool_exhausted").inc()
+                            logger.warning(
+                                '{"path":"/first-connection","imsi":"%s","result":"pool_exhausted","pool_id":"%s","use_case_id":"%s","multi_imsi":true,"realloc":true}',
+                                body.imsi, pp, body.use_case_id or "",
+                            )
+                            raise HTTPException(
+                                status_code=503,
+                                detail={"error": "pool_exhausted", "pool_id": pp},
+                            )
+                        await conn.execute(
+                            "INSERT INTO sim_apn_ips (sim_id, apn, static_ip, pool_id) "
+                            "VALUES ($1::uuid, $2, $3::inet, $4::uuid) ON CONFLICT DO NOTHING",
+                            sim_id, pv, ip, pp,
+                        )
+                        if pv == apn_val:
+                            allocated_ip = ip
 
             first_connection_total.labels(result="reused").inc()
             logger.info(

@@ -269,8 +269,13 @@ Login
         │     ├── Profile Detail
         │     │     ├── Edit Profile
         │     │     ├── IMSI Manager (add / remove / suspend / set priority)
-        │     │     ├── Simulate 1st Connect (single-click IP allocation)
-        │     │     └── Release IPs (return pool IPs, re-allocated on next connect)
+        │     │     ├── Simulate 1st Connect (single-click; POST /first-connection; diagram updates live)
+        │     │     │     • 201 → toast "IP allocated: x.x.x.x"
+        │     │     │     • 200 + IP → toast "Already provisioned: x.x.x.x"
+        │     │     │     • 200 + null → info "SIM has no range config — IP cannot be auto-allocated"
+        │     │     ├── Release IPs (POST /profiles/{id}/release-ips; diagram shows Auto nodes)
+        │     │     │     • IPs returned to pool; re-allocated on next first-connection
+        │     │     └── IP Resolution Diagram (auto-refreshes after any action; empty IPs show Auto)
         │     ├── New SIM Profile (form)
         │     └── Bulk Import (CSV upload)
         ├── IP Pools

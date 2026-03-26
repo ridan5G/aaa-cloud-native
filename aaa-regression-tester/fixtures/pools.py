@@ -25,11 +25,22 @@ def _force_clear_pool_ips(pool_id: str) -> None:
     async def _run():
         conn = await asyncpg.connect(_DB_URL)
         try:
+            # Clear allocated IP rows first (FK dependents of ip_pools)
             await conn.execute(
                 "DELETE FROM imsi_apn_ips WHERE pool_id = $1::uuid", pool_id
             )
             await conn.execute(
                 "DELETE FROM sim_apn_ips WHERE pool_id = $1::uuid", pool_id
+            )
+            # Clear range configs that reference this pool so DELETE /pools succeeds.
+            # iccid_range_configs.pool_id is nullable — only delete rows that match.
+            # Deleting iccid_range_configs cascades to imsi slots (imsi_range_configs).
+            await conn.execute(
+                "DELETE FROM iccid_range_configs WHERE pool_id = $1::uuid", pool_id
+            )
+            # Standalone imsi_range_configs (pool_id NOT NULL, no cascade from above)
+            await conn.execute(
+                "DELETE FROM imsi_range_configs WHERE pool_id = $1::uuid", pool_id
             )
         finally:
             await conn.close()

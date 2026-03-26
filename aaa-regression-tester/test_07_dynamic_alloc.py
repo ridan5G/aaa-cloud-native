@@ -264,7 +264,8 @@ class TestDynamicAlloc:
                        headers={"Authorization": f"Bearer {jwt}"},
                        timeout=30.0) as c:
             p2 = create_pool(c, subnet=POOL_SUBNET2,
-                             pool_name="pool-dyn-07-conc", account_name="TestAccount")
+                             pool_name="pool-dyn-07-conc", account_name="TestAccount",
+                             replace_on_conflict=True)
             pool2_id = p2["pool_id"]
             rc2 = create_range_config(
                 c,

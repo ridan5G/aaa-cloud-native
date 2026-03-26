@@ -46,7 +46,8 @@ radiusPCAP  ?= false# set to true to attach a tcpdump sidecar to radius-server: 
         status uninstall clean \
         build-load-tester load-test-seed \
         load-test-smoke load-test-load load-test-stress load-test-spike load-test-soak \
-        load-test-k8s load-test-logs-k8s
+        load-test-k8s load-test-logs-k8s \
+        build-radius-load-tester radius-load-test radius-load-test-smoke radius-load-test-k8s radius-load-test-logs-k8s
 
 help:                           ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' Makefile | \
@@ -440,6 +441,40 @@ load-test-k8s:                  ## Run load test as K8s Job (SCRIPT=load.js)
 load-test-logs-k8s:             ## Print logs from the last load test K8s Job
 	kubectl logs -n $(NAMESPACE) \
 	  $$(kubectl get pods -n $(NAMESPACE) -l job-name=aaa-load-test \
+	    -o jsonpath='{.items[0].metadata.name}')
+
+# ── RADIUS load testing ────────────────────────────────────────
+build-radius-load-tester:       ## Build RADIUS load-test image (aaa/aaa-radius-load-tester:dev)
+	docker build -t aaa/aaa-radius-load-tester:dev ./load-testing/radius/
+
+radius-load-test:               ## RADIUS load test — 300/400/500/600 RPS + first-connect 2 RPS (requires: make port-forward-radius)
+	docker run --rm \
+	  -e RADIUS_HOST=host.docker.internal \
+	  -e RADIUS_SECRET=$(RADIUS_SECRET) \
+	  -e PROMETHEUS_URL=http://host.docker.internal:9090 \
+	  -v "$$(pwd)/load-test-results:/app/results" \
+	  aaa/aaa-radius-load-tester:dev
+
+radius-load-test-smoke:         ## RADIUS load test — quick smoke (30 s per tier)
+	docker run --rm \
+	  -e RADIUS_HOST=host.docker.internal \
+	  -e RADIUS_SECRET=$(RADIUS_SECRET) \
+	  -e PROMETHEUS_URL=http://host.docker.internal:9090 \
+	  -e TIER_DURATION_S=30 \
+	  -v "$$(pwd)/load-test-results:/app/results" \
+	  aaa/aaa-radius-load-tester:dev
+
+radius-load-test-k8s:           ## Run RADIUS load test as K8s Job
+	kubectl delete job aaa-radius-load-test -n $(NAMESPACE) --ignore-not-found
+	kubectl apply -f load-testing/k8s/radius-load-job.yaml -n $(NAMESPACE)
+	@echo "Waiting for RADIUS load test Job to complete..."
+	kubectl wait --for=condition=complete \
+	  job/aaa-radius-load-test -n $(NAMESPACE) --timeout=3600s
+	$(MAKE) radius-load-test-logs-k8s
+
+radius-load-test-logs-k8s:     ## Print logs from the last RADIUS load test K8s Job
+	kubectl logs -n $(NAMESPACE) \
+	  $$(kubectl get pods -n $(NAMESPACE) -l job-name=aaa-radius-load-test \
 	    -o jsonpath='{.items[0].metadata.name}')
 
 # ── Teardown ──────────────────────────────────────────────────

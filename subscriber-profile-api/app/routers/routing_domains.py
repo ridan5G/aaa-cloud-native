@@ -66,29 +66,50 @@ def _find_free_cidr(
     overlap any existing subnet and falls within one of the allowed_prefixes.
 
     Usable hosts for a /P = 2^(32-P) - 2.
-    Returns the CIDR string or None if no free block is found within 10,000 candidates.
+
+    Uses an interval-based scan: instead of iterating candidates one-by-one,
+    it jumps past blocking pools directly. This handles the case where a large
+    existing pool covers the beginning of the allowed prefix — previously the
+    one-at-a-time loop would exhaust a 10,000-candidate safety cap and return
+    None even when free space exists beyond the large pool.
     """
     # Smallest prefix_len (largest block) where usable hosts >= size
     prefix_len = math.floor(32 - math.log2(size + 2))
     prefix_len = max(0, min(30, prefix_len))  # clamp: /30 is the smallest useful
+    block_size = 2 ** (32 - prefix_len)       # number of addresses per candidate block
 
-    existing_networks = [
-        ipaddress.ip_network(s, strict=False) for s in existing_subnets
-    ]
+    # Pre-compute existing pool intervals as integer pairs, sorted by start address.
+    intervals = sorted(
+        (int(ipaddress.ip_network(s, strict=False).network_address),
+         int(ipaddress.ip_network(s, strict=False).broadcast_address))
+        for s in existing_subnets
+    )
 
     for prefix_str in allowed_prefixes:
         allowed_net = ipaddress.ip_network(prefix_str, strict=False)
         if prefix_len < allowed_net.prefixlen:
-            # Requested block would be larger than the allowed prefix — skip
+            # Requested block is larger than the allowed prefix — skip
             continue
 
-        count = 0
-        for candidate in allowed_net.subnets(new_prefix=prefix_len):
-            count += 1
-            if count > 10_000:
-                break  # safety cap — avoids timeout on huge address spaces
-            if not any(candidate.overlaps(en) for en in existing_networks):
-                return str(candidate)
+        end = int(allowed_net.broadcast_address)
+        start = int(allowed_net.network_address)
+        # Align start up to the nearest block_size boundary if needed
+        if start % block_size != 0:
+            start = (start // block_size + 1) * block_size
+
+        while start + block_size - 1 <= end:
+            c_end = start + block_size - 1
+            # Scan sorted intervals for any overlap with [start, c_end]
+            blocked_until = None
+            for lo, hi in intervals:
+                if lo > c_end:
+                    break                    # sorted — no further overlap possible
+                if hi >= start:             # intervals [lo,hi] and [start,c_end] overlap
+                    blocked_until = max(blocked_until or hi, hi)
+            if blocked_until is None:
+                return str(ipaddress.ip_network((start, prefix_len)))
+            # Jump past the last blocking pool and align to the next block boundary
+            start = ((blocked_until + 1 + block_size - 1) // block_size) * block_size
 
     return None
 

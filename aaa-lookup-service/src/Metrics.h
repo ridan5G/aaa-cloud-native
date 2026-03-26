@@ -48,6 +48,10 @@ public:
     // statusCode: 200 | 404 | 503 | -1 (network error) | anything-else → "error"
     void incFirstConnResponse(int statusCode);
 
+    /// Observe time the lookup service spent waiting for POST /v1/first-connection.
+    /// @param seconds  wall-clock duration from sendRequest() to callback entry
+    void observeFirstConnDuration(double seconds);
+
 private:
     Metrics() = default;
 
@@ -82,4 +86,8 @@ private:
     prometheus::Counter* firstConnResp404_{nullptr};
     prometheus::Counter* firstConnResp503_{nullptr};
     prometheus::Counter* firstConnRespError_{nullptr};
+
+    // first_connection_duration_seconds histogram
+    prometheus::Family<prometheus::Histogram>* firstConnDurationFamily_{nullptr};
+    prometheus::Histogram*                    histFirstConnDuration_{nullptr};
 };

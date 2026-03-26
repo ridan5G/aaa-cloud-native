@@ -23,6 +23,7 @@ Test cases cover:
 import httpx
 import pytest
 
+from conftest import PROVISION_BASE, JWT_TOKEN
 from fixtures.pools import create_pool, delete_pool
 
 
@@ -68,6 +69,28 @@ TD_OUTSIDE = "192.168.55.0/24"        # outside TD_PREFIX
 
 class TestRoutingDomainCRUD:
     """Routing domain CRUD — tests 1c.1 – 1c.8."""
+
+    # Names used across all tests in this class — purged before the suite runs
+    # so a previous crashed run cannot leave stale domains behind.
+    _CLEANUP_NAMES = (TD_NAME, TD_NAME_B, TD_NAME + "-renamed")
+
+    @classmethod
+    def setup_class(cls):
+        """Delete any routing domains left over from a previous interrupted run."""
+        with httpx.Client(
+            base_url=PROVISION_BASE,
+            headers={"Authorization": f"Bearer {JWT_TOKEN}"},
+            timeout=15.0,
+        ) as c:
+            r = c.get("/routing-domains")
+            if r.status_code != 200:
+                return  # can't list — skip cleanup, individual tests will surface errors
+            items = r.json()
+            if isinstance(items, dict):
+                items = items.get("items", [])
+            for d in items:
+                if d.get("name") in cls._CLEANUP_NAMES:
+                    c.delete(f"/routing-domains/{d['id']}")
 
     # 1c.1 ────────────────────────────────────────────────────────────────────
     def test_01c_01_create_domain(self, http: httpx.Client):
