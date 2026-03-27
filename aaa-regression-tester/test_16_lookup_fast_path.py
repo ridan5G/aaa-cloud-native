@@ -104,7 +104,10 @@ class TestLookupParamValidation:
 
     # 16.2 ────────────────────────────────────────────────────────────────────
     def test_02_imsi_16_digits(self, lookup_http: httpx.Client):
-        """IMSI with 16 digits → 400."""
+        """IMSI with 16 digits → 400.
+
+        isValidImsi() checks size == 15 before the DB is ever touched.
+        """
         r = lookup_http.get("/lookup",
                             params={"imsi": "2787716000000001",  # 16 digits
                                     "apn": APN_INTERNET})
@@ -125,7 +128,12 @@ class TestLookupParamValidation:
 
     # 16.4 ────────────────────────────────────────────────────────────────────
     def test_04_empty_imsi(self, lookup_http: httpx.Client):
-        """Empty IMSI string → 400."""
+        """Empty IMSI string → 400.
+
+        An empty string has length 0, which fails the size == 15 check in
+        isValidImsi().  Ensures the controller treats an empty query param the
+        same as a missing one rather than passing it to the DB.
+        """
         r = lookup_http.get("/lookup",
                             params={"imsi": "", "apn": APN_INTERNET})
         assert r.status_code == 400, \
@@ -196,7 +204,10 @@ class TestSimSuspendImsiMode:
 
     # 16.6 ────────────────────────────────────────────────────────────────────
     def test_06_both_imsis_resolve_when_active(self, lookup_http: httpx.Client):
-        """Both IMSIs return their correct IPs when SIM is active."""
+        """Baseline: both IMSIs return their correct per-IMSI IPs when SIM is active.
+
+        Establishes a known-good state before the suspend tests.
+        """
         for imsi, ip in [(IMSI_IMSI_A, IP_A), (IMSI_IMSI_B, IP_B)]:
             r = lookup_http.get("/lookup",
                                 params={"imsi": imsi, "apn": APN_INTERNET,
@@ -228,7 +239,11 @@ class TestSimSuspendImsiMode:
     # 16.8 ────────────────────────────────────────────────────────────────────
     def test_08_reactivate_sim_restores_both_imsis(
             self, http: httpx.Client, lookup_http: httpx.Client):
-        """PATCH SIM status=active → both IMSIs resolve again with original IPs."""
+        """PATCH SIM status=active → both IMSIs resolve again with original IPs.
+
+        Verifies the suspend/reactivate cycle is fully reversible — IPs are
+        unchanged and both IMSIs are unblocked immediately.
+        """
         r = http.patch(f"/profiles/{TestSimSuspendImsiMode.sim_id}",
                        json={"status": "active"})
         assert r.status_code == 200
@@ -302,7 +317,10 @@ class TestSimSuspendImsiApnMode:
 
     # 16.9 ────────────────────────────────────────────────────────────────────
     def test_09_all_apns_resolve_when_active(self, lookup_http: httpx.Client):
-        """All IMSI+APN combinations return correct IPs when SIM is active."""
+        """Baseline: all four IMSI+APN combinations return correct IPs when SIM is active.
+
+        Both IMSIs × both APNs verified before any suspend is applied.
+        """
         cases = [
             (IMSI_IAPN_A, APN_INTERNET, IP_C),
             (IMSI_IAPN_A, APN_IMS,      IP_D),
@@ -344,7 +362,11 @@ class TestSimSuspendImsiApnMode:
     # 16.11 ───────────────────────────────────────────────────────────────────
     def test_11_reactivate_sim_restores_all_apns(
             self, http: httpx.Client, lookup_http: httpx.Client):
-        """PATCH SIM status=active → all IMSI+APN combinations resolve again."""
+        """PATCH SIM status=active → all IMSI+APN combinations resolve again.
+
+        Verifies full recovery: all four IMSI+APN combos return original IPs,
+        no partial unblock (e.g. only the first IMSI or first APN restored).
+        """
         r = http.patch(f"/profiles/{TestSimSuspendImsiApnMode.sim_id}",
                        json={"status": "active"})
         assert r.status_code == 200
