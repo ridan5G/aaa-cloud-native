@@ -18,6 +18,15 @@ spec:
         prometheus.io/port: {{ .Values.service.metricsPort | quote }}
         prometheus.io/path: "/metrics"
     spec:
+      {{- if .Values.affinity.podAntiAffinity.enabled }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                {{- include "aaa-radius-server.selectorLabels" . | nindent 16 }}
+            topologyKey: kubernetes.io/hostname
+      {{- end }}
       {{- if not .Values.pcap.enabled }}
       securityContext:
         runAsNonRoot: true
@@ -49,6 +58,10 @@ spec:
                   key: radius-secret
             - name: LOOKUP_URL
               value: {{ .Values.lookupUrl | quote }}
+            {{- if .Values.lookupUrlSecondary }}
+            - name: LOOKUP_URL_SECONDARY
+              value: {{ .Values.lookupUrlSecondary | quote }}
+            {{- end }}
             - name: WORKER_THREADS
               value: {{ .Values.workerThreads | quote }}
             - name: LOG_LEVEL

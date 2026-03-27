@@ -45,3 +45,19 @@ spec:
           resources:
             {{- toYaml .Values.pgbouncer.rw.resources | nindent 12 }}
 {{- end }}
+{{- if and .Values.pgbouncer.rw.enabled .Values.pgbouncer.rw.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "aaa-database.poolerRWName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aaa-database.labels" . | nindent 4 }}
+    app.kubernetes.io/component: pgbouncer-rw
+spec:
+  minAvailable: {{ .Values.pgbouncer.rw.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      cnpg.io/poolerName: {{ include "aaa-database.poolerRWName" . }}
+{{- end }}

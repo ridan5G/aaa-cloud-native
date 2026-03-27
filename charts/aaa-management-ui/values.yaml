@@ -53,6 +53,15 @@ monitoring:
 nodeSelector: {}
 tolerations: []
 
+# ── Affinity ────────────────────────────────────────────────────
+affinity:
+  podAntiAffinity:
+    enabled: false   # set true in values-ha.yaml to spread pods across nodes
+
+# ── Pod Disruption Budget ───────────────────────────────────────
+podDisruptionBudget:
+  minAvailable: 1
+
 # ── Helm name overrides ─────────────────────────────────────────
 nameOverride: ""
 fullnameOverride: ""

@@ -68,6 +68,9 @@ pgbouncer:
   rw:
     enabled: true
     instances: 2
+    pdb:
+      enabled: false   # set true in values-ha.yaml
+      minAvailable: 1
     poolMode: transaction
     parameters:
       max_client_conn: "1000"
@@ -89,6 +92,9 @@ pgbouncer:
   ro:
     enabled: true
     instances: 2
+    pdb:
+      enabled: false   # set true in values-ha.yaml
+      minAvailable: 1
     poolMode: transaction
     parameters:
       max_client_conn: "2000"

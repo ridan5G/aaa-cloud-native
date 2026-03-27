@@ -1,12 +1,16 @@
 # ══════════════════════════════════════════════════════════════════
-# values-dev.yaml — local / testing environment overrides
+# values-ha.yaml — HA (high-availability) environment overrides
 #
 # Deploy with:
-#   helm upgrade --install aaa-platform ./charts/aaa-platform \
-#     -f ./charts/aaa-platform/values-dev.yaml \
-#     -n aaa-platform --create-namespace
+#   make deploy-ha
 #
-# Or simply: make deploy
+# Layers on top of values.yaml (prod defaults).
+# Every service gets:
+#   - Pod anti-affinity: pods of the same service are forced onto
+#     different nodes so a single node failure cannot take down all
+#     replicas.
+#   - PodDisruptionBudget: voluntary evictions (node drain,
+#     rolling upgrades) cannot remove the last available pod.
 # ══════════════════════════════════════════════════════════════════
 
 createNamespace: false
@@ -14,13 +18,13 @@ createNamespace: false
 # ── Database ─────────────────────────────────────────────────────
 aaa-database:
   enabled: true
-  clusterNameOverride: aaa-postgres      # pods: aaa-postgres-1
+  clusterNameOverride: aaa-postgres
   postgresql:
-    instances: 1                          # no HA in dev/test
+    instances: 3
     imageName: ghcr.io/cloudnative-pg/postgresql:15.6
     storage:
       size: 5Gi
-      storageClass: hostpath              # docker desktop default
+      storageClass: hostpath
     parameters:
       max_connections: "50"
       shared_buffers: "128MB"
@@ -28,7 +32,7 @@ aaa-database:
       maintenance_work_mem: "64MB"
       effective_cache_size: "256MB"
       wal_level: logical
-    appPassword: devpassword              # dev only — never commit prod passwords
+    appPassword: devpassword
     appCredentialsSecretName: aaa-db-credentials
     resources:
       requests:
@@ -38,20 +42,19 @@ aaa-database:
         cpu: "1"
         memory: "1Gi"
     monitoring:
-      enabled: true   # enables CNPG PodMonitor + built-in metrics exporter on port 9187
+      enabled: true
   pgbouncer:
     rw:
       enabled: true
-      instances: 1
+      instances: 3          # up from 2 — tolerate one pooler pod loss
       parameters:
         max_client_conn: "300"
-        default_pool_size: "30"    # was 10 — at 600 RPS × 5ms/query = 3 needed; 30 gives 6× headroom
+        default_pool_size: "30"
         reserve_pool_size: "10"
-        # Disable client→PgBouncer TLS in dev: traffic is internal-only and
-        # the C++ lookup service (Drogon/libpq) cannot verify CNPG's self-signed
-        # cert, causing the SSL handshake to hang and health-check timeouts.
-        # PgBouncer→PostgreSQL server TLS remains active (managed by CNPG).
         client_tls_sslmode: "disable"
+      pdb:
+        enabled: true
+        minAvailable: 1
       resources:
         requests:
           cpu: "50m"
@@ -60,27 +63,46 @@ aaa-database:
           cpu: "200m"
           memory: "64Mi"
     ro:
-      enabled: false          # single-instance dev — no read replicas
+      enabled: true
+      instances: 3          # up from 2 — tolerate one pooler pod loss
+      parameters:
+        max_client_conn: "300"
+        default_pool_size: "30"
+        reserve_pool_size: "10"
+        client_tls_sslmode: "disable"
+      pdb:
+        enabled: true
+        minAvailable: 1
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "32Mi"
+        limits:
+          cpu: "200m"
+          memory: "64Mi"
 
 # ── AAA Lookup Service ────────────────────────────────────────────
 aaa-lookup-service:
   enabled: true
-  replicaCount: 1
+  replicaCount: 3
   image:
     repository: aaa/aaa-lookup-service
     tag: "dev"
     pullPolicy: Never
   db:
     secretName: aaa-db-credentials
-    poolSize: 25          # was 8 — at 600 RPS × 5ms/query = 3 needed; 25 gives headroom for bursts
-    timeoutSec: "2.0"     # slightly more generous under load
+    poolSize: 25
+    timeoutSec: "2.0"
   jwt:
-    skipVerify: "true"   # no JWT enforcement in dev
+    skipVerify: "true"
   provisioningUrl: "http://aaa-platform-subscriber-profile-api:8080"
   autoscaling:
-    enabled: false       # fixed 1 replica
+    enabled: false
   podDisruptionBudget:
-    minAvailable: 0      # allow full eviction on single replica
+    minAvailable: 2
+  affinity:
+    podAntiAffinity:
+      enabled: true         # spread pods across nodes
   monitoring:
     enabled: true
   resources:
@@ -88,13 +110,13 @@ aaa-lookup-service:
       cpu: "500m"
       memory: "128Mi"
     limits:
-      cpu: "2"           # was 500m — Drogon is async/multi-threaded; needs headroom for 600 RPS
+      cpu: "2"
       memory: "256Mi"
 
 # ── Provisioning API ─────────────────────────────────────────────
 subscriber-profile-api:
   enabled: true
-  replicaCount: 1
+  replicaCount: 2
   image:
     repository: aaa/subscriber-profile-api
     tag: "dev"
@@ -108,7 +130,7 @@ subscriber-profile-api:
   db:
     secretName: aaa-db-credentials
   cors:
-    origins: "http://ui.aaa.localhost"   # allow direct browser→API in dev (e.g. Swagger UI, Postman)
+    origins: "http://ui.aaa.localhost"
   jwt:
     skipVerify: "true"
   bulkJob:
@@ -117,7 +139,10 @@ subscriber-profile-api:
   autoscaling:
     enabled: false
   podDisruptionBudget:
-    minAvailable: 0
+    minAvailable: 1
+  affinity:
+    podAntiAffinity:
+      enabled: true         # spread pods across nodes
   monitoring:
     enabled: true
   resources:
@@ -128,12 +153,10 @@ subscriber-profile-api:
       cpu: "1"
       memory: "512Mi"
 
-# ── Management UI ────────────────────────────────────────────
+# ── Management UI ─────────────────────────────────────────────────
 aaa-management-ui:
   enabled: true
-  replicaCount: 1
-  podDisruptionBudget:
-    minAvailable: 0      # allow full eviction on single replica
+  replicaCount: 2
   image:
     repository: aaa/aaa-management-ui
     tag: "dev"
@@ -145,12 +168,17 @@ aaa-management-ui:
     tls:
       enabled: false
   appConfig:
-    apiBaseUrl: "/v1"   # relative → same-origin; UI nginx proxies /v1/ to the API ClusterIP
+    apiBaseUrl: "/v1"
     oidcAuthority: "http://auth.aaa.localhost/realms/aaa"
     oidcClientId: "aaa-management-ui"
     pushgatewayUrl: "http://pushgateway.aaa.localhost"
   apiServiceName: "aaa-platform-subscriber-profile-api"
   apiServicePort: 8080
+  podDisruptionBudget:
+    minAvailable: 1
+  affinity:
+    podAntiAffinity:
+      enabled: true         # spread pods across nodes
   monitoring:
     enabled: true
   resources:
@@ -161,23 +189,25 @@ aaa-management-ui:
       cpu: "200m"
       memory: "128Mi"
 
-# ── RADIUS Server ────────────────────────────────────────────────
+# ── RADIUS Server ─────────────────────────────────────────────────
 aaa-radius-server:
   enabled: true
-  replicaCount: 1
-  podDisruptionBudget:
-    minAvailable: 0      # allow full eviction on single replica
+  replicaCount: 2
   image:
     repository: aaa/aaa-radius-server
     tag: "dev"
     pullPolicy: Never
   radiusSecret:
-    secretName: "aaa-radius-secret"   # created by: make radius-secret (called automatically by make deploy)
+    secretName: "aaa-radius-secret"
   lookupUrl: "http://aaa-platform-aaa-lookup-service:8081"
-  # lookupUrlSecondary: ""   # set to secondary-region URL to enable failover
-  workerThreads: 64    # was 16 — at 600 RPS × 10ms expected RTT = 6 in-flight; 64 gives 10× headroom
+  workerThreads: 64
   autoscaling:
     enabled: false
+  podDisruptionBudget:
+    minAvailable: 1
+  affinity:
+    podAntiAffinity:
+      enabled: true         # spread pods across nodes
   monitoring:
     enabled: true
   resources:
@@ -185,7 +215,7 @@ aaa-radius-server:
       cpu: "250m"
       memory: "64Mi"
     limits:
-      cpu: "1"           # was 300m — 4 workers on 0.3 cores was the primary saturation point
+      cpu: "1"
       memory: "128Mi"
 
 # ── Prometheus + Grafana (kube-prometheus-stack) ──────────────────
@@ -215,15 +245,13 @@ kube-prometheus-stack:
     sidecar:
       dashboards:
         enabled: true
-        label: grafana_dashboard       # must match ConfigMap label in grafana-dashboard-cm.yaml
-        labelValue: "1"               # must match ConfigMap label value
-        searchNamespace: aaa-platform # only watch our namespace in dev
+        label: grafana_dashboard
+        labelValue: "1"
+        searchNamespace: aaa-platform
         folderAnnotation: grafana_folder
         provider:
           foldersFromFilesStructure: true
       datasources:
-        # Suppress kube-prometheus-stack's built-in Prometheus datasource ConfigMap
-        # — its URL uses the Helm release name and resolves to a non-existent host.
         defaultDatasourceEnabled: false
     datasources:
       datasources.yaml:
@@ -238,7 +266,6 @@ kube-prometheus-stack:
             jsonData:
               timeInterval: 15s
               httpMethod: POST
-          # Alertmanager datasource omitted in dev (alertmanager.enabled: false)
   prometheus:
     ingress:
       enabled: true
@@ -267,7 +294,7 @@ kube-prometheus-stack:
   alertmanager:
     enabled: false
   nodeExporter:
-    enabled: false        # Docker Desktop restricts /proc and /sys host paths
+    enabled: false
   kubeStateMetrics:
     enabled: true
 
@@ -276,7 +303,7 @@ prometheus-pushgateway:
   enabled: true
   serviceMonitor:
     enabled: true
-    namespace: ""   # default is "monitoring" — empty → Release.Namespace (aaa-platform)
+    namespace: ""
   ingress:
     enabled: true
     className: nginx
@@ -304,7 +331,7 @@ aaa-migration:
 
 # ── Regression Tester ────────────────────────────────────────────
 aaa-regression-tester:
-  enabled: false        # enabled transiently by: wsl make test
+  enabled: false
   image:
     repository: aaa/aaa-regression-tester
     tag: "dev"
@@ -317,4 +344,4 @@ aaa-regression-tester:
   radius:
     host:       "aaa-platform-aaa-radius-server"
     port:       1812
-    secretName: "aaa-radius-secret"   # created by: wsl make radius-secret
+    secretName: "aaa-radius-secret"

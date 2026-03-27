@@ -39,8 +39,18 @@ private:
     // Returns the static_ip on success, empty string on 404/503 (reject).
     // Throws on 403 (suspended) or other HTTP errors.
     // imei and useCaseId are forwarded as query params; omitted when empty.
+    // Tries the primary lookup URL first; on transport failure (curl error)
+    // retries on the secondary URL when one is configured.
     std::string lookup(const std::string& imsi,
                        const std::string& apn,
                        const std::string& imei,
                        const std::string& useCaseId);
+
+    // Single attempt against baseUrl — returns the HttpResponse directly so
+    // the caller can decide whether to failover.
+    HttpResponse lookupOnce(const std::string& baseUrl,
+                            const std::string& imsi,
+                            const std::string& apn,
+                            const std::string& imei,
+                            const std::string& useCaseId);
 };

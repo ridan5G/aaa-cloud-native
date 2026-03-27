@@ -81,19 +81,44 @@ std::vector<uint8_t> Handler::handle(const RadiusRequest& req) {
 }
 
 // ---------------------------------------------------------------------------
+// lookupOnce — build URL and fire a single GET against baseUrl
+// ---------------------------------------------------------------------------
+HttpResponse Handler::lookupOnce(const std::string& baseUrl,
+                                  const std::string& imsi,
+                                  const std::string& apn,
+                                  const std::string& imei,
+                                  const std::string& useCaseId) {
+    std::string url = baseUrl + "/lookup?imsi=" + imsi + "&apn=" + apn;
+    if (!imei.empty())       url += "&imei="        + imei;
+    if (!useCaseId.empty())  url += "&use_case_id=" + useCaseId;
+    return http_.get(url);
+}
+
+// ---------------------------------------------------------------------------
 // lookup — GET /lookup with imsi, apn, imei, use_case_id
+//
+// Tries the primary region first.  On transport failure (statusCode == -1)
+// and when a secondary URL is configured, retries against the secondary region.
+// Business-logic responses (200, 403, 404, 503) from either region are final.
 // ---------------------------------------------------------------------------
 std::string Handler::lookup(const std::string& imsi,
                              const std::string& apn,
                              const std::string& imei,
                              const std::string& useCaseId) {
-    std::string url = cfg_.lookupUrl + "/lookup?imsi=" + imsi + "&apn=" + apn;
-    if (!imei.empty())       url += "&imei="        + imei;
-    if (!useCaseId.empty())  url += "&use_case_id=" + useCaseId;
-
     Metrics::instance().incLookupRequests();
-    auto resp = http_.get(url);
 
+    // ── Primary attempt ──────────────────────────────────────────────────────
+    auto resp = lookupOnce(cfg_.lookupUrl, imsi, apn, imei, useCaseId);
+
+    // Transport failure → try secondary region when configured
+    if (resp.statusCode == -1 && !cfg_.lookupUrlSecondary.empty()) {
+        spdlog::warn("lookup primary failed ({}), retrying on secondary region",
+                     resp.body);
+        Metrics::instance().incUpstreamError("lookup_primary", "curl_error");
+        resp = lookupOnce(cfg_.lookupUrlSecondary, imsi, apn, imei, useCaseId);
+    }
+
+    // ── Interpret final response ─────────────────────────────────────────────
     if (resp.statusCode == 200) {
         Metrics::instance().incLookupResponse(200);
         auto j = nlohmann::json::parse(resp.body);

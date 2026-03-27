@@ -49,6 +49,11 @@ def pytest_sessionstart(session):
             await conn.execute(
                 "TRUNCATE imsi_apn_ips, sim_apn_ips, imsi2sim, sim_profiles CASCADE"
             )
+            # Reset default routing domain to unrestricted so tests using
+            # 100.65.x.x (CGNAT) subnets are not blocked by stale allowed_prefixes.
+            await conn.execute(
+                "UPDATE routing_domains SET allowed_prefixes = '{}' WHERE name = 'default'"
+            )
         finally:
             await conn.close()
 

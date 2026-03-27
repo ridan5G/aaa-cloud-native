@@ -73,6 +73,11 @@ podDisruptionBudget:
 monitoring:
   enabled: true
 
+# ── Affinity ────────────────────────────────────────────────────
+affinity:
+  podAntiAffinity:
+    enabled: false   # set true in values-ha.yaml to spread pods across nodes
+
 # ── Helm name overrides ─────────────────────────────────────────
 nameOverride: ""
 fullnameOverride: ""

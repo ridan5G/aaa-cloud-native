@@ -37,7 +37,8 @@ from fixtures.range_configs import (
 # ── Module constants ──────────────────────────────────────────────────────────
 
 MODULE = 79   # distinct from: 75=test_07c, 76=test_08b, 77=test_08c etc.
-APN = "internet.operator.com"
+APN  = "internet.operator.com"
+APN2 = "ims.operator.com"         # second APN for multi-APN idempotency test
 
 # ── IMSI / ICCID ranges ───────────────────────────────────────────────────────
 # Each mode MUST have a non-overlapping IMSI range — first-connection picks
@@ -50,9 +51,10 @@ T_IMSI_IMSI    = f"27877{MODULE:02d}00000009"
 IMSI_IMSI      = f"27877{MODULE:02d}00000001"
 
 # imsi_apn mode: slots 011–019
-F_IMSI_IMSI_APN = f"27877{MODULE:02d}00000011"
-T_IMSI_IMSI_APN = f"27877{MODULE:02d}00000019"
-IMSI_IMSI_APN   = f"27877{MODULE:02d}00000011"
+F_IMSI_IMSI_APN  = f"27877{MODULE:02d}00000011"
+T_IMSI_IMSI_APN  = f"27877{MODULE:02d}00000019"
+IMSI_IMSI_APN    = f"27877{MODULE:02d}00000011"   # test_02 single-APN cycle
+IMSI_IMSI_APN2   = f"27877{MODULE:02d}00000012"   # test_05 multi-APN recovery
 
 # iccid mode: slots 021–029 (multi-IMSI via iccid_range_config)
 F_IMSI_ICCID     = f"27877{MODULE:02d}00000021"
@@ -72,6 +74,7 @@ T_ICCID_ICCID_APN = "8944501790000000039"  # 19 digits
 for _name, _imsi in [
     ("IMSI_IMSI",          IMSI_IMSI),
     ("IMSI_IMSI_APN",      IMSI_IMSI_APN),
+    ("IMSI_IMSI_APN2",     IMSI_IMSI_APN2),
     ("IMSI_ICCID",         IMSI_ICCID),
     ("IMSI_ICCID_APN",     IMSI_ICCID_APN),
     ("F_IMSI_IMSI",        F_IMSI_IMSI),
@@ -134,6 +137,8 @@ class TestReleaseReconnectAllModes:
             cls.rc_ids["imsi"] = rc_imsi["id"]
 
             # ── imsi_apn mode: standalone range config (slots 011–019) ────────
+            # Two APNs pre-configured so first-connection allocates both in one
+            # transaction — enables full idempotency and multi-APN recovery after release.
             rc_imsi_apn = create_range_config(
                 c,
                 f_imsi=F_IMSI_IMSI_APN,
@@ -141,6 +146,10 @@ class TestReleaseReconnectAllModes:
                 pool_id=cls.pool_ids["imsi_apn"],
                 ip_resolution="imsi_apn",
                 account_name="TestAccount",
+                apns=[
+                    {"apn": APN},   # "internet.operator.com"
+                    {"apn": APN2},  # "ims.operator.com"
+                ],
             )
             cls.rc_ids["imsi_apn"] = rc_imsi_apn["id"]
 
@@ -333,4 +342,81 @@ class TestReleaseReconnectAllModes:
         assert ip is not None, (
             "[iccid_apn mode] Re-allocation after release returned null IP — "
             "first-connection did not re-allocate"
+        )
+
+    # ── test_05 ───────────────────────────────────────────────────────────────
+
+    def test_05_imsi_apn_multi_apn_idempotent_recovery(self, http: httpx.Client):
+        """
+        Range-catalog idempotency: connecting with ONE APN allocates ALL configured APNs.
+        After release-ips, reconnecting with the primary APN must restore ALL APNs.
+
+        Guards against the bug where only the connecting APN was re-allocated after release,
+        leaving other configured APNs without IPs.
+
+        Range has two APNs in range_config_apn_pools:
+          • APN  = "internet.operator.com"
+          • APN2 = "ims.operator.com"
+        """
+        pool_id = TestReleaseReconnectAllModes.pool_ids["imsi_apn"]
+
+        def fc(imsi: str, apn: str) -> httpx.Response:
+            return http.post(
+                "/profiles/first-connection",
+                json={"imsi": imsi, "apn": apn, "use_case_id": USE_CASE_ID},
+            )
+
+        def profile_apn_ips(sim_id: str) -> list:
+            r = http.get(f"/profiles/{sim_id}")
+            assert r.status_code == 200
+            imsis = r.json().get("imsis", [])
+            return imsis[0]["apn_ips"] if imsis else []
+
+        # Step 1: first-connection with primary APN — must allocate BOTH APNs in one shot.
+        r1 = fc(IMSI_IMSI_APN2, APN)
+        assert r1.status_code == 201, f"initial first-connection failed: {r1.text}"
+        sim_id = r1.json()["sim_id"]
+        assert r1.json().get("static_ip") is not None, \
+            "first-connection returned null IP for primary APN"
+
+        # Step 2: first-connection with secondary APN — must be idempotent (200 + IP).
+        r2 = fc(IMSI_IMSI_APN2, APN2)
+        assert r2.status_code == 200, \
+            f"second APN connect should be idempotent 200, got {r2.status_code}: {r2.text}"
+        assert r2.json().get("static_ip") is not None, \
+            "second APN idempotent connect returned null IP"
+
+        # Step 3: both APNs must be present in the profile.
+        apn_ips = profile_apn_ips(sim_id)
+        assert len(apn_ips) == 2, \
+            f"expected 2 apn_ips after initial allocation, got {len(apn_ips)}: {apn_ips}"
+        assert all(e["static_ip"] for e in apn_ips), \
+            f"some APNs have null IPs after initial allocation: {apn_ips}"
+
+        # Step 4: release IPs — both must be returned to the pool.
+        stats_before = http.get(f"/pools/{pool_id}/stats").json()
+        r_rel = http.post(f"/profiles/{sim_id}/release-ips")
+        assert r_rel.status_code == 200, f"release-ips failed: {r_rel.text}"
+        assert r_rel.json()["released_count"] == 2, \
+            f"expected released_count=2, got: {r_rel.json()}"
+        stats_after_rel = http.get(f"/pools/{pool_id}/stats").json()
+        assert stats_after_rel["available"] == stats_before["available"] + 2, \
+            f"pool available did not increase by 2: before={stats_before}, after={stats_after_rel}"
+
+        # Step 5: reconnect with primary APN — _load_apn_pools reads range_config_apn_pools
+        # and re-allocates ALL configured APNs, not just the connecting one.
+        r3 = fc(IMSI_IMSI_APN2, APN)
+        assert r3.status_code in (200, 201), \
+            f"reconnect after release failed ({r3.status_code}): {r3.text}"
+        assert r3.json().get("static_ip") is not None, \
+            "reconnect returned null IP for primary APN after release"
+
+        # Step 6 — KEY regression assertion: BOTH APNs must have non-null IPs.
+        apn_ips_recovered = profile_apn_ips(sim_id)
+        assert len(apn_ips_recovered) == 2, \
+            f"expected 2 apn_ips after recovery, got {len(apn_ips_recovered)}: {apn_ips_recovered}"
+        null_apns = [e for e in apn_ips_recovered if not e.get("static_ip")]
+        assert not null_apns, (
+            f"After release + reconnect, some APNs still have no IP — "
+            f"only the connecting APN was re-allocated: {apn_ips_recovered}"
         )

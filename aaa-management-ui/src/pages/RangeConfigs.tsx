@@ -397,7 +397,7 @@ function NewConfigModal({
               </div>
             </div>
             <div className="field">
-              <label className="label">Default Pool</label>
+              <label className="label">Default Pool *</label>
               <select className="select text-sm" value={form.pool_id}
                 onChange={e => setF('pool_id', e.target.value)}>
                 <option value="">— none —</option>
@@ -413,7 +413,7 @@ function NewConfigModal({
               <button onClick={onClose} className="btn-ghost">Cancel</button>
               <button
                 onClick={() => onSave(form)}
-                disabled={!form.f_imsi || !form.t_imsi}
+                disabled={!form.f_imsi || !form.t_imsi || !form.pool_id}
                 className="btn-primary ml-auto">
                 Create Config
               </button>

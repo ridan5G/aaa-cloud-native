@@ -14,8 +14,15 @@ def create_range_config(
     account_name: str = "TestAccount",
     description: str = "regression-test range",
     status: str = "active",
+    apns: list[dict] | None = None,
 ) -> dict:
-    """POST /range-configs and return the response body including id."""
+    """POST /range-configs and return the response body including id.
+
+    ``apns`` (optional): list of APN entries for imsi_apn / iccid_apn ranges.
+    Each entry is ``{"apn": "<apn-string>"}`` or ``{"apn": "...", "pool_id": "..."}``.
+    When ``pool_id`` is omitted the range's default pool is used.
+    Entries are registered via POST /range-configs/{id}/apn-pools immediately after creation.
+    """
     body = {
         "account_name":  account_name,
         "f_imsi":        f_imsi,
@@ -29,7 +36,16 @@ def create_range_config(
     assert resp.status_code == 201, (
         f"create_range_config failed: {resp.status_code} {resp.text}"
     )
-    return resp.json()
+    rc = resp.json()
+    if apns:
+        for entry in apns:
+            add_apn_pool(
+                http,
+                range_config_id=rc["id"],
+                apn=entry["apn"],
+                pool_id=entry.get("pool_id") or pool_id,
+            )
+    return rc
 
 
 def delete_range_config(http: httpx.Client, config_id: int | str) -> None:

@@ -209,6 +209,14 @@ deploy: package-charts radius-secret test-secret ## Deploy/upgrade umbrella char
 	  --timeout 10m
 	$(MAKE) db-init
 
+deploy-ha: package-charts radius-secret test-secret ## Deploy/upgrade with HA (anti-affinity, PDBs, 3 pooler replicas); radiusPCAP=true adds tcpdump sidecar
+	helm upgrade --install $(RELEASE) $(CHART_DIR) \
+	  --namespace $(NAMESPACE) --create-namespace \
+	  -f $(CHART_DIR)/values-ha.yaml \
+	  --set "aaa-radius-server.pcap.enabled=$(radiusPCAP)" \
+	  --timeout 10m
+	$(MAKE) db-init
+
 helm-unlock:                    ## Clear a stuck Helm lock (run if deploy fails with 'another operation in progress')
 	@echo "Rolling back to last successful release to clear lock..."
 	helm rollback $(RELEASE) -n $(NAMESPACE) 2>/dev/null || \

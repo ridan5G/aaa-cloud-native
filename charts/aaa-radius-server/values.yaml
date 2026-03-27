@@ -17,8 +17,12 @@ radiusSecret:
   value: "testing123"     # plaintext — use secretRef in production
   secretName: ""          # if set, overrides value; secret must have key: radius-secret
 
-# aaa-lookup-service base URL (in-cluster)
+# aaa-lookup-service URLs — primary (required) and secondary (optional).
+# When lookupUrlSecondary is set, the radius server retries on it if the
+# primary is unreachable (transport/curl error).  Business-logic responses
+# (200/403/404/503) from the primary are always treated as final.
 lookupUrl: "http://aaa-lookup-service:8081/v1"
+lookupUrlSecondary: ""   # e.g. "http://aaa-lookup-service-secondary:8081/v1"
 
 # Worker thread count — tune based on expected request rate and HTTP call latency
 workerThreads: 8
@@ -41,6 +45,15 @@ autoscaling:
 
 nameOverride: ""
 fullnameOverride: ""
+
+# ── Affinity ────────────────────────────────────────────────────
+affinity:
+  podAntiAffinity:
+    enabled: false   # set true in values-ha.yaml to spread pods across nodes
+
+# ── Pod Disruption Budget ───────────────────────────────────────
+podDisruptionBudget:
+  minAvailable: 1
 
 # ── Prometheus monitoring ────────────────────────────────────────
 monitoring:

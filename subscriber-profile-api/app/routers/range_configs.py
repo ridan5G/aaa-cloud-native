@@ -48,6 +48,8 @@ async def create_range_config(body: RangeConfigCreate, conn=Depends(get_conn)):
     if body.status not in ("active", "suspended"):
         _val_err("status", "must be active or suspended")
 
+    if not body.pool_id:
+        _val_err("pool_id", "pool_id is required")
     pool_exists = await conn.fetchval(
         "SELECT 1 FROM ip_pools WHERE pool_id = $1::uuid", body.pool_id
     )

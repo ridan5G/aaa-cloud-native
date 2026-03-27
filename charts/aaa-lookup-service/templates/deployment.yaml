@@ -21,6 +21,15 @@ spec:
         prometheus.io/port: {{ .Values.service.metricsPort | quote }}
         prometheus.io/path: "/metrics"
     spec:
+      {{- if .Values.affinity.podAntiAffinity.enabled }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                {{- include "aaa-lookup-service.selectorLabels" . | nindent 16 }}
+            topologyKey: kubernetes.io/hostname
+      {{- end }}
       containers:
         - name: aaa-lookup-service
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
