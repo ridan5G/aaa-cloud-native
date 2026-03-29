@@ -1,25 +1,25 @@
 # aaa-radius-server
 
-Lightweight C++ RADIUS authentication server. Receives `Access-Request` packets on UDP/1812, performs two-stage AAA, and returns `Access-Accept` (with `Framed-IP-Address`) or `Access-Reject`.
+Lightweight C++ RADIUS authentication server. Receives `Access-Request` packets on UDP/1812, performs a single HTTP lookup, and returns `Access-Accept` (with `Framed-IP-Address`) or `Access-Reject`.
 
 ## Role & SLA
 
 The `aaa-radius-server` is the RADIUS protocol termination point. It receives
 `Access-Request` packets from NAS/PGW/SMF/GGSN nodes over UDP/1812, performs
-the two-stage AAA flow against existing HTTP services, and returns
+a **single HTTP call** to `aaa-lookup-service`, and returns
 `Access-Accept` (with `Framed-IP-Address`) or `Access-Reject`.
 
-It is a **thin protocol-translation layer** — all business logic (subscriber
-lookup, IP allocation) lives in `aaa-lookup-service` and `subscriber-profile-api`.
-This service only speaks RADIUS and routes between them.
+It is a **thin protocol-translation layer** — subscriber lookup and IP allocation
+live in `aaa-lookup-service` (which internally calls `subscriber-profile-api` on
+first connection). This service only speaks RADIUS and maps the lookup result to
+an Accept or Reject.
 
 | Property | Value |
 |---|---|
 | Protocol | RADIUS over UDP/1812 (RFC 2865) |
 | Callers | NAS, PGW, SMF, GGSN (any RADIUS-compliant AAA client) |
-| Upstream (Stage 1) | `aaa-lookup-service` — `GET /lookup?imsi=&apn=` |
-| Upstream (Stage 2) | `subscriber-profile-api` — `POST /v1/first-connection` |
-| Response time SLA | Bounded by upstream p99: ~15 ms Stage 1 + network |
+| Upstream | `aaa-lookup-service` — `GET /lookup?imsi=&apn=` (single call) |
+| Response time SLA | Bounded by lookup p99 (~15 ms DB hit; ~50–500 ms on first connection) |
 | Replicas | 2 per region (recommended) |
 | Language | C++20 |
 | Dependencies | libcurl, OpenSSL (MD5), spdlog, nlohmann/json |
@@ -36,20 +36,16 @@ aaa-radius-server
   ├── recvfrom loop  (main thread — receive only, no blocking HTTP)
   └── thread pool   (WORKER_THREADS workers, each owns a CURL handle)
         │
-        ├─ Stage 1 ─► GET /lookup?imsi={imsi}&apn={apn}    (aaa-lookup-service)
-        │                200 → Access-Accept + Framed-IP-Address
-        │                403 → Access-Reject  (subscriber suspended)
-        │                404 → Stage 2 ↓
-        │
-        └─ Stage 2 ─► POST /v1/first-connection             (subscriber-profile-api)
-                         {imsi, apn, imei}
-                         200     → Access-Accept + Framed-IP-Address
-                         404/503 → Access-Reject  (no range config / pool exhausted)
+        └─► GET /lookup?imsi={imsi}&apn={apn}    (aaa-lookup-service)
+                200 → Access-Accept + Framed-IP-Address
+                403 → Access-Reject  (subscriber suspended)
+                404 → Access-Reject  (unknown SIM — no range config)
+                503 → Access-Reject  (pool exhausted / provisioning error)
 ```
 
-**Stage 2 is rare.** It fires only on the very first connection for an IMSI
-that has no provisioned profile yet. All subsequent connections hit Stage 1
-with a 200 and Stage 2 is never reached again for that IMSI.
+`aaa-lookup-service` calls `subscriber-profile-api` internally on a DB miss
+(IMSI absent from the read replica). `aaa-radius-server` is not involved in
+that exchange — it always receives a single response.
 
 ---
 
@@ -62,7 +58,7 @@ with a 200 and Stage 2 is never reached again for that IMSI.
 | User-Name | attr 1 | Access-Request | Fallback IMSI (if VSA absent) |
 | Framed-IP-Address | attr 8 | — | Not in request; only in Accept |
 | Vendor-Specific (3GPP-IMSI) | attr 26, vendor=10415, type=1 | Access-Request | **Preferred IMSI** source |
-| Vendor-Specific (3GPP-IMEISV) | attr 26, vendor=10415, type=20 | Access-Request | IMEI for Stage 2 |
+| Vendor-Specific (3GPP-IMEISV) | attr 26, vendor=10415, type=20 | Access-Request | IMEI — forwarded as `GET /lookup?imei=`; lookup passes it to first-connection internally |
 | Vendor-Specific (3GPP-Charging-Characteristics) | attr 26, vendor=10415, type=13 | Access-Request | **use_case_id** — forwarded to both upstreams |
 | Called-Station-Id | attr 30 | Access-Request | APN |
 | Calling-Station-Id | attr 31 | Access-Request | MSISDN (logged only) |
@@ -70,7 +66,8 @@ with a 200 and Stage 2 is never reached again for that IMSI.
 IMSI resolution priority: `3GPP-IMSI VSA` → `User-Name` fallback.
 
 IMEI: `3GPP-IMEISV` is a 16-digit string (14 TAC+SNR + 2 SVN). Only the
-first 14 digits (IMEI base) are forwarded in the `POST /v1/first-connection` body.
+first 14 digits (IMEI base) are forwarded as the `imei` query param in `GET /lookup`.
+The lookup service passes it to `POST /v1/first-connection` internally.
 
 **use_case_id** (`3GPP-Charging-Characteristics`, VSA 10415:13): forwarded to
 both upstream services as `use_case_id` so they can apply per-use-case routing,
@@ -107,7 +104,7 @@ verifies this before trusting the response.
 
 ---
 
-## Two-Stage AAA Flow (detailed)
+## AAA Flow (single call)
 
 ```
 Receive Access-Request
@@ -120,35 +117,31 @@ Extract IMSI (VSA 10415:1 or User-Name), APN (attr 30),
         │       YES → Access-Reject
         │
         ▼
-Stage 1: GET {LOOKUP_URL}/lookup?imsi={imsi}&apn={apn}[&use_case_id={use_case_id}]
+GET {LOOKUP_URL}/lookup?imsi={imsi}&apn={apn}[&imei={imei}][&use_case_id={use_case_id}]
         │
         ├─ 200 OK:  parse {"static_ip": "x.x.x.x"}
         │            → Access-Accept + Framed-IP-Address
+        │            (subscriber was already provisioned, or first-connection
+        │             was triggered internally and allocated a fresh IP)
         │
         ├─ 403:     subscriber suspended
         │            → Access-Reject
         │
-        ├─ 404:     profile not found → proceed to Stage 2
+        ├─ 404:     IMSI not in any range config
+        │            (lookup service already attempted first-connection internally)
+        │            → Access-Reject
+        │
+        ├─ 503:     IP pool exhausted or subscriber-profile-api unreachable
+        │            (handled inside lookup pod — not visible here)
+        │            → Access-Reject
         │
         └─ other:   HTTP/network error
                      → Access-Reject
-
-Stage 2: POST {PROVISIONING_URL}/v1/first-connection
-         body: {"imsi": "...", "apn": "...", "imei": "...", "use_case_id": "..."}
-               (use_case_id omitted when 3GPP-Charging-Characteristics was absent)
-        │
-        ├─ 200 OK:  parse {"static_ip": "x.x.x.x"}
-        │            → Access-Accept + Framed-IP-Address
-        │
-        ├─ 404:     no range config covers this IMSI
-        │            → Access-Reject
-        │
-        ├─ 503:     IP pool exhausted
-        │            → Access-Reject
-        │
-        └─ other:   unexpected error
-                     → Access-Reject
 ```
+
+`aaa-lookup-service` calls `POST /v1/first-connection` on `subscriber-profile-api`
+internally when the IMSI is absent from its read replica. This is transparent to
+`aaa-radius-server` — it always receives a single HTTP response.
 
 ---
 
@@ -164,7 +157,7 @@ aaa-radius-server/
     ├── Config.h            Singleton loaded from env vars
     ├── Radius.h / .cpp     RADIUS packet parse + build (RFC 2865)
     ├── HttpClient.h / .cpp libcurl wrapper (per-thread CURL* handle)
-    ├── Handler.h / .cpp    Two-stage AAA business logic
+    ├── Handler.h / .cpp    Single-call AAA business logic
     └── main.cpp            UDP socket + WorkQueue + thread pool
 ```
 
@@ -175,7 +168,7 @@ aaa-radius-server/
 | `Config.h` | Singleton; reads all env vars; validates at startup |
 | `Radius.cpp` | `parseAccessRequest()` — walks attribute TLVs, decodes VSAs; `buildAccessAccept()` / `buildAccessReject()` — assembles RFC 2865 packets with correct authenticator |
 | `HttpClient.cpp` | One `CURL*` per instance; `get()` / `post()` with 5 s / 10 s timeouts; `CURLOPT_NOSIGNAL=1` (thread safe) |
-| `Handler.cpp` | Calls `lookup()` then optionally `firstConnection()`; maps HTTP status codes to Accept/Reject |
+| `Handler.cpp` | Calls `lookup()`; maps HTTP status codes (200/403/404/503) to Accept/Reject. No fallback call. |
 | `main.cpp` | `recvfrom` loop; `WorkQueue` (MPMC with mutex+condvar); thread pool; `SIGTERM`/`SIGINT` closes socket to unblock `recvfrom` |
 
 ### Thread model
@@ -186,7 +179,6 @@ main thread:   recvfrom() → push WorkItem{data, src_addr} → WorkQueue
 worker thread N:  pop() → parseAccessRequest()                  │
                         → Handler::handle()                     │
                             → HttpClient::get()  (blocking)     │
-                            → HttpClient::post() (blocking)     │
                         → sendto()                              │
 ```
 
@@ -205,7 +197,6 @@ All configuration is via environment variables, read at startup by `Config::load
 | `RADIUS_PORT` | `1812` | No | UDP port to listen on |
 | `RADIUS_SECRET` | `testing123` | **Yes (non-empty)** | Shared secret with NAS clients; used for response authenticator |
 | `LOOKUP_URL` | `http://aaa-lookup-service:8081` | No | aaa-lookup-service base URL (no `/v1` suffix) |
-| `PROVISIONING_URL` | `http://subscriber-profile-api:8080` | No | subscriber-profile-api base URL (no `/v1` suffix) |
 | `WORKER_THREADS` | `8` | No | Thread pool size (1–256); tune for throughput (see Capacity) |
 | `LOG_LEVEL` | `info` | No | `trace` \| `debug` \| `info` \| `warn` \| `error` |
 
@@ -336,7 +327,7 @@ resources:
 | Attribute mapping | Requires rlm_rest template files | Compiled into Handler.cpp |
 | Operational complexity | Large daemon with many unneeded modules | Single-purpose binary |
 | Debugging | Opaque rlm_rest logs | Structured spdlog output |
-| First-connection fallback | Two separate REST module stanzas | Single `if (status==404)` in Handler.cpp |
+| Single upstream | N/A (two REST module stanzas needed) | One HTTP call, four outcomes (200/403/404/503). No fallback. |
 
 ---
 
@@ -367,11 +358,15 @@ externally managed Secret (Vault, SOPS, etc.).
 Every request logs at `info` level:
 
 ```
-[aaa-radius] IMSI=123456789012345 APN=internet.operator.com result=accept framed_ip=100.65.120.5 stage=1 latency_ms=3.2
-[aaa-radius] IMSI=234567890123456 APN=internet.operator.com result=reject reason=suspended stage=1 latency_ms=2.8
-[aaa-radius] IMSI=345678901234567 APN=internet.operator.com result=accept framed_ip=100.65.120.9 stage=2 latency_ms=52.1
-[aaa-radius] IMSI=456789012345678 APN=internet.operator.com result=reject reason=no_range_config stage=2 latency_ms=48.3
+[aaa-radius] IMSI=123456789012345 APN=internet.operator.com result=accept framed_ip=100.65.120.5 latency_ms=3.2
+[aaa-radius] IMSI=234567890123456 APN=internet.operator.com result=reject reason=suspended latency_ms=2.8
+[aaa-radius] IMSI=345678901234567 APN=internet.operator.com result=accept framed_ip=100.65.120.9 latency_ms=52.1
+[aaa-radius] IMSI=456789012345678 APN=internet.operator.com result=reject reason=no_range_config latency_ms=48.3
 ```
+
+High `latency_ms` on an `accept` line (e.g. 52 ms) indicates a first-connection was triggered
+internally by `aaa-lookup-service` — the lookup pod called `subscriber-profile-api` before
+responding. This is normal for a first-seen IMSI.
 
 **IMSI is logged as the full 15-digit number** for operator readability and ease of debugging.
 All log lines in all services (lookup, API, RADIUS) use the plain IMSI.
@@ -398,7 +393,7 @@ All metrics are exposed at `GET /metrics` (Prometheus text format) on the config
 | `radius_access_requests_total` | — | Valid Access-Request packets received |
 | `radius_packets_dropped_total` | — | Malformed / non-AccessRequest packets |
 | `radius_responses_total` | `result` (accept\|reject) | RADIUS responses sent |
-| `radius_requests_total` | `result` (accept\|reject), `stage` (1\|2) | Completed requests broken down by outcome and stage — stage 1 = lookup hit, stage 2 = first-connection used |
+| `radius_requests_total` | `result` (accept\|reject) | Completed requests broken down by outcome |
 | `radius_request_duration_ms` | — (histogram) | End-to-end RADIUS request latency; buckets: 1 5 10 25 50 100 250 500 1000 ms |
 | `radius_upstream_errors_total` | `upstream` (lookup\|first_connection), `status_code` | Unexpected upstream failures (curl errors, non-business HTTP status codes) |
 
@@ -407,9 +402,10 @@ All metrics are exposed at `GET /metrics` (Prometheus text format) on the config
 | Metric | Labels | Description |
 |---|---|---|
 | `lookup_requests_total` | — | HTTP GET requests sent to aaa-lookup-service |
-| `lookup_responses_total` | `status` (200\|403\|404\|error) | Lookup service responses |
-| `first_connection_requests_total` | — | HTTP POST requests sent to subscriber-profile-api |
-| `first_connection_responses_total` | `status` (200\|404\|503\|error) | First-connection responses |
+| `lookup_responses_total` | `status` (200\|403\|404\|503\|error) | Lookup service responses — 503 means pool exhausted or provisioning error inside lookup |
+
+First-connection metrics (`first_connection_requests_total`, `first_connection_responses_total`)
+are emitted by `aaa-lookup-service`, not by this service.
 
 The Grafana dashboard (`charts/aaa-platform/files/aaa-platform-dashboard.json`) has panels
 for all metrics listed above.
@@ -443,13 +439,13 @@ when running the suite without the RADIUS server.
 | Test | Description |
 |---|---|
 | `test_01` | Pre-condition: lookup returns 200 for pre-provisioned IMSI before any RADIUS test |
-| `test_02` | Known IMSI → Stage 1 hit → `Access-Accept` (code=2) |
+| `test_02` | Known IMSI → lookup returns 200 from DB → `Access-Accept` (code=2) |
 | `test_03` | `Framed-IP-Address` in Accept equals the provisioned `static_ip` |
 | `test_04` | Suspend subscriber via PATCH → RADIUS returns `Access-Reject` (code=3) |
 | `test_05` | Reactivate via PATCH → RADIUS returns `Access-Accept` with original IP |
-| `test_06` | Unknown IMSI in a configured range → Stage 2 first-connection → `Access-Accept` with allocated IP |
-| `test_07` | Same IMSI again (now has profile) → Stage 1 hit → same `Framed-IP-Address` (idempotency) |
-| `test_08` | IMSI outside all range configs → Stage 1 404 + Stage 2 404 → `Access-Reject` |
+| `test_06` | Unknown IMSI in a configured range → lookup triggers first-connection internally → `Access-Accept` with allocated IP |
+| `test_07` | Same IMSI again (now has profile) → lookup returns 200 from DB → same `Framed-IP-Address` (idempotency) |
+| `test_08` | IMSI outside all range configs → lookup returns 404 (no range config) → `Access-Reject` |
 | `test_09` | Raw socket test: RFC 2865 response authenticator verifies correctly |
 | `test_10` | `Access-Reject` packet contains no `Framed-IP-Address` attribute (attr 8) |
 
@@ -469,17 +465,16 @@ when running the suite without the RADIUS server.
 
 Unlike `aaa-lookup-service` (which is co-located with read replicas per region),
 `aaa-radius-server` is co-located with the **NAS/PGW nodes** per region. Its
-upstream calls go to the regional `aaa-lookup-service` (Stage 1, fast, local)
-and to the central `subscriber-profile-api` (Stage 2 only, infrequent, accepts
-~50–100 ms cross-region latency).
+single upstream call goes to the regional `aaa-lookup-service` (fast, local).
+The first-connection write to `subscriber-profile-api` is handled inside the lookup
+pod and accepts ~50–100 ms cross-region latency (fires once per IMSI lifetime).
 
 ```
 Region EU                               Central
 ────────────────────────────────────────────────────────────
 NAS/PGW → aaa-radius-server (EU)
-                │ Stage 1 (local, ~5 ms)
+                │ single call (local, ~5 ms DB hit)
                 └─► aaa-lookup-service (EU) → EU read replica
-                │
-                │ Stage 2 only, ~once per IMSI lifetime
-                └─► subscriber-profile-api ──► PostgreSQL Primary
+                          │ DB miss only, ~once per IMSI lifetime
+                          └─► subscriber-profile-api ──► PostgreSQL Primary
 ```

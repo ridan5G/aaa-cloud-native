@@ -3,7 +3,7 @@ import { Routes, Route, useNavigate, useParams } from 'react-router-dom'
 import { apiClient } from '../apiClient'
 import StatusBadge from '../components/StatusBadge'
 import { useToasts } from '../stores/toast'
-import type { RangeConfig, ApnPool, Pool, IpResolution } from '../types'
+import type { RangeConfig, ApnPool, Pool, IpResolution, ProvisioningMode } from '../types'
 
 const IP_RES_LABELS: Record<IpResolution, string> = {
   imsi:     'IMSI',
@@ -49,9 +49,15 @@ function RangeConfigList() {
 
   async function createConfig(form: NewConfigForm) {
     try {
-      await apiClient.post('/range-configs', form)
-      show('success', 'Range config created')
-      setShowNew(false); load()
+      const res = await apiClient.post('/range-configs', form)
+      if (res.status === 202) {
+        show('success', `Range created — provisioning job ${res.data.job_id} started`)
+        setShowNew(false)
+        navigate('/bulk-jobs')
+      } else {
+        show('success', 'Range config created')
+        setShowNew(false); load()
+      }
     } catch (e) { show('error', String(e)) }
   }
 
@@ -78,7 +84,7 @@ function RangeConfigList() {
             <thead><tr>
               <th>ID</th><th>Account</th><th>IMSI Range</th><th>Pool</th>
               <th>IP Resolution</th><th className="text-center">APN Pools</th>
-              <th>Status</th><th />
+              <th>Mode</th><th>Status</th><th />
             </tr></thead>
             <tbody>
               {configs.map(c => (
@@ -102,6 +108,11 @@ function RangeConfigList() {
                     {(c.ip_resolution === 'imsi_apn' || c.ip_resolution === 'iccid_apn')
                       ? (apnCounts[c.id] ?? '—')
                       : <span className="text-gray-300">N/A</span>}
+                  </td>
+                  <td className="px-4 py-3">
+                    {c.provisioning_mode === 'immediate'
+                      ? <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-medium">Immediate</span>
+                      : <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full font-medium">First Connect</span>}
                   </td>
                   <td className="px-4 py-3"><StatusBadge status={c.status} /></td>
                   <td className="px-4 py-3 text-right"><span className="text-xs text-primary">View →</span></td>
@@ -262,6 +273,7 @@ function RangeConfigDetail() {
             { l: 'To IMSI',    v: config.t_imsi },
             { l: 'Pool',       v: config.pool_name ?? config.pool_id ?? '—' },
             { l: 'IP Resolution', v: IP_RES_LABELS[config.ip_resolution] },
+            { l: 'Mode',       v: config.provisioning_mode === 'immediate' ? 'Immediate' : 'First Connect' },
           ].map(f => (
             <div key={f.l}>
               <p className="text-xs text-gray-400 uppercase tracking-wide font-medium mb-0.5">{f.l}</p>
@@ -336,19 +348,21 @@ function RangeConfigDetail() {
 
 // ─── New Config Modal ─────────────────────────────────────────────────────────
 type NewConfigForm = {
-  account_name:  string
-  f_imsi:        string
-  t_imsi:        string
-  pool_id:       string
-  ip_resolution: IpResolution
-  description:   string
+  account_name:      string
+  f_imsi:            string
+  t_imsi:            string
+  pool_id:           string
+  ip_resolution:     IpResolution
+  description:       string
+  provisioning_mode: ProvisioningMode
 }
 
 function NewConfigModal({
   onClose, onSave,
 }: { onClose: () => void; onSave: (f: NewConfigForm) => void }) {
   const [form, setForm] = useState<NewConfigForm>({
-    account_name: '', f_imsi: '', t_imsi: '', pool_id: '', ip_resolution: 'imsi', description: '',
+    account_name: '', f_imsi: '', t_imsi: '', pool_id: '', ip_resolution: 'imsi',
+    description: '', provisioning_mode: 'first_connect',
   })
   const [pools, setPools] = useState<Pool[]>([])
   const setF = <K extends keyof NewConfigForm>(k: K, v: NewConfigForm[K]) =>
@@ -404,6 +418,20 @@ function NewConfigModal({
                 {pools.map(p => <option key={p.pool_id} value={p.pool_id}>{p.name}</option>)}
               </select>
             </div>
+            <div className="field">
+              <label className="label">Provisioning Mode</label>
+              <select className="select text-sm" value={form.provisioning_mode}
+                onChange={e => setF('provisioning_mode', e.target.value as ProvisioningMode)}>
+                <option value="first_connect">First Connect (lazy)</option>
+                <option value="immediate">Immediate (pre-provision all SIMs)</option>
+              </select>
+            </div>
+            {form.provisioning_mode === 'immediate' && (
+              <p className="text-xs text-blue-600 bg-blue-50 px-3 py-2 rounded">
+                All SIMs in this range will be provisioned in the background. The pool must have enough free IPs.
+                Monitor progress in <strong>Bulk Jobs</strong>.
+              </p>
+            )}
             <div className="field">
               <label className="label">Description</label>
               <input className="input text-sm" placeholder="Optional note"

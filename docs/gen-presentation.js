@@ -701,7 +701,167 @@ function sectionLine(slide, y) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// SLIDE 13 — DEVELOPER WORKFLOW
+// SLIDE 13 — POD ARCHITECTURE — DEPLOYMENT TOPOLOGY
+// ══════════════════════════════════════════════════════════════════════════════
+{
+  const s = pres.addSlide();
+  lightSlide(s);
+
+  // Compact title bar (matches slide proportions: 0.612" header + 0.251" subtitle)
+  s.addShape(pres.shapes.RECTANGLE, { x: 0, y: 0, w: W, h: 0.612, fill: { color: C.navy }, line: { color: C.navy } });
+  s.addText("Pod Architecture \u2014 Deployment Topology", {
+    x: 0.4, y: 0, w: W - 0.8, h: 0.612, fontSize: 22, bold: true, color: C.white, valign: "middle", margin: 0 });
+  s.addText("Request path: SMF \u2192 Radius-to-Rest \u2192 Lookup Service \u2194 1st Connection & Provisioning \u2194 PostgreSQL (HA cluster)", {
+    x: 0.4, y: 0.612, w: W - 0.8, h: 0.251, fontSize: 9, italic: true, color: C.blue, valign: "middle", margin: 0 });
+
+  // EMU → inches helper
+  const em = v => +(v / 914400).toFixed(4);
+
+  // ── Layout constants (all positions match the PPTX XML directly) ──────────
+  const DB_Y = em(830000), DB_H = em(370000), DB_W = em(1900000), DB3_W = em(2050000);
+  const DB1_X = em(350000),  DB2_X = em(3672000), DB3_X = em(6980000);
+  const DB1_CX = DB1_X + DB_W / 2, DB2_CX = DB2_X + DB_W / 2, DB3_CX = DB3_X + DB3_W / 2;
+  const DB_BOT = DB_Y + DB_H;
+
+  const CONN_Y = em(1330000), CONN_H = em(460000), CONN_X = em(5050000), CONN_W = em(2900000);
+  const CONN_CX = CONN_X + CONN_W / 2, CONN_BOT = CONN_Y + CONN_H;
+
+  const LU_Y = em(1960000),  LU_H = em(560000);
+  const LU1_X = em(100000),  LU1_W = em(4100000), LU1_CX = LU1_X + LU1_W / 2;
+  const LU2_X = em(4750000), LU2_W = em(4150000), LU2_CX = LU2_X + LU2_W / 2;
+  const LU_BOT = LU_Y + LU_H;
+
+  const R2R_Y = em(2730000), R2R_H = em(440000), R2R_W = em(1700000);
+  const R2R1_X = em(100000),  R2R2_X = em(2230000), R2R3_X = em(4760000), R2R4_X = em(7200000);
+  const R2R1_CX = R2R1_X + R2R_W / 2, R2R2_CX = R2R2_X + R2R_W / 2;
+  const R2R3_CX = R2R3_X + R2R_W / 2, R2R4_CX = R2R4_X + R2R_W / 2;
+  const R2R_BOT = R2R_Y + R2R_H;
+
+  const SMF_Y = em(3400000), SMF_W = em(310000), SMF_H = em(280000), SMF_GAP = em(90000);
+  const QA_Y = em(4430000),  QA_H = em(380000);
+  const QAA_X = em(5700000), QAA_W = em(1700000);
+  const QAL_X = em(7550000), QAL_W = em(1550000);
+
+  // ── PostgreSQL boxes (top row) ─────────────────────────────────────────────
+  const dbBoxes = [
+    [DB1_X, DB_W,  "PostgreSQL (Read)"],
+    [DB2_X, DB_W,  "PostgreSQL (Read)"],
+    [DB3_X, DB3_W, "PostgreSQL (Read/Write)"],
+  ];
+  dbBoxes.forEach(([x, w, label]) => {
+    s.addShape(pres.shapes.RECTANGLE, { x, y: DB_Y, w, h: DB_H, fill: { color: C.navy }, line: { color: C.blue, width: 2 } });
+    s.addText(label, { x, y: DB_Y, w, h: DB_H, fontSize: 9, bold: true, color: C.white, align: "center", valign: "middle", margin: 0 });
+  });
+
+  // DB horizontal arrows
+  // DB2 ← DB1 (one arrowhead, left-pointing at DB1 end)
+  s.addShape(pres.shapes.LINE, { x: DB1_X + DB_W, y: DB_Y + DB_H / 2, w: DB2_X - DB1_X - DB_W, h: 0,
+    line: { color: C.blue, width: 1.5, beginArrowType: "arrow" } });
+  // DB2 ↔ DB3
+  s.addShape(pres.shapes.LINE, { x: DB2_X + DB_W, y: DB_Y + DB_H / 2, w: DB3_X - DB2_X - DB_W, h: 0,
+    line: { color: C.blue, width: 1.5, beginArrowType: "arrow", endArrowType: "arrow" } });
+
+  // ── Vertical arrows from DB row down ──────────────────────────────────────
+  // DB1 ↕ Lookup1
+  s.addShape(pres.shapes.LINE, { x: DB1_CX, y: DB_BOT, w: 0, h: LU_Y - DB_BOT - em(20000),
+    line: { color: C.blue, width: 1.5, beginArrowType: "arrow", endArrowType: "arrow" } });
+  // DB2 → Lookup1 (diagonal down-left: flipH so line goes from top-right to bottom-left)
+  s.addShape(pres.shapes.LINE, {
+    x: LU1_CX, y: DB_BOT, w: DB2_CX - LU1_CX, h: LU_Y - DB_BOT - em(20000),
+    flipH: true,
+    line: { color: C.blue, width: 1.5, beginArrowType: "arrow" } });
+  // DB2 → Lookup2 (diagonal down-right)
+  s.addShape(pres.shapes.LINE, { x: DB2_CX, y: DB_BOT, w: LU2_CX - DB2_CX, h: LU_Y - DB_BOT - em(20000),
+    line: { color: C.blue, width: 1.5, endArrowType: "arrow" } });
+  // DB3 ↕ 1st Connection
+  s.addShape(pres.shapes.LINE, { x: DB3_CX, y: DB_BOT, w: 0, h: CONN_Y - DB_BOT - em(20000),
+    line: { color: C.blue, width: 1.5, beginArrowType: "arrow", endArrowType: "arrow" } });
+
+  // ── 1st Connection & Provisioning (light ice-blue ellipse) ────────────────
+  s.addShape(pres.shapes.OVAL, { x: CONN_X, y: CONN_Y, w: CONN_W, h: CONN_H,
+    fill: { color: C.iceBlue }, line: { color: C.iceBlue, width: 2.5 } });
+  s.addText("1st Connection & Provisioning", { x: CONN_X, y: CONN_Y, w: CONN_W, h: CONN_H,
+    fontSize: 12, bold: true, color: C.navy, align: "center", valign: "middle", margin: 0 });
+
+  // 1st Connection ↕ Lookup2
+  s.addShape(pres.shapes.LINE, { x: CONN_CX, y: CONN_BOT, w: 0, h: LU_Y - CONN_BOT,
+    line: { color: C.blue, width: 2.5, beginArrowType: "arrow", endArrowType: "arrow" } });
+
+  // UI ellipse (right of 1st Connection)
+  const UI_W = em(950000), UI_H = em(380000), UI_X = em(8060000);
+  const UI_Y = CONN_Y + CONN_H / 2 - UI_H / 2;
+  s.addShape(pres.shapes.OVAL, { x: UI_X, y: UI_Y, w: UI_W, h: UI_H,
+    fill: { color: C.iceBlue }, line: { color: C.iceBlue, width: 1.5 } });
+  s.addText("UI", { x: UI_X, y: UI_Y, w: UI_W, h: UI_H,
+    fontSize: 11, bold: true, color: C.navy, align: "center", valign: "middle", margin: 0 });
+  // Arrow: UI → 1st Connection (pointing left)
+  s.addShape(pres.shapes.LINE, { x: CONN_X + CONN_W, y: CONN_Y + CONN_H / 2, w: UI_X - CONN_X - CONN_W, h: 0,
+    line: { color: C.blue, width: 1.5, endArrowType: "arrow" } });
+
+  // ── Two Lookup Service ellipses (amber/orange with navy drop-shadow) ───────
+  [[LU1_X, LU1_W], [LU2_X, LU2_W]].forEach(([lx, lw]) => {
+    s.addShape(pres.shapes.OVAL, { x: lx + em(60000), y: LU_Y + em(60000), w: lw, h: LU_H,
+      fill: { color: C.navy }, line: { color: C.blue, width: 2 } });                    // shadow
+    s.addShape(pres.shapes.OVAL, { x: lx, y: LU_Y, w: lw, h: LU_H,
+      fill: { color: C.amber }, line: { color: C.amber, width: 2.5 } });                 // main
+    s.addText("Lookup Service", { x: lx, y: LU_Y, w: lw, h: LU_H,
+      fontSize: 14, bold: true, color: C.white, align: "center", valign: "middle", margin: 0 });
+  });
+  // Lookup1 ↔ Lookup2 bidirectional arrow
+  s.addShape(pres.shapes.LINE, { x: LU1_X + LU1_W, y: LU_Y + LU_H / 2, w: LU2_X - LU1_X - LU1_W, h: 0,
+    line: { color: C.blue, width: 2.5, beginArrowType: "arrow", endArrowType: "arrow" } });
+
+  // ── Vertical arrows Lookup → Radius-to-Rest ───────────────────────────────
+  [R2R1_CX, R2R2_CX, R2R3_CX, R2R4_CX].forEach(cx => {
+    s.addShape(pres.shapes.LINE, { x: cx, y: LU_BOT, w: 0, h: R2R_Y - LU_BOT - em(20000),
+      line: { color: C.blue, width: 1.5, beginArrowType: "arrow", endArrowType: "arrow" } });
+  });
+
+  // ── Four Radius-to-Rest ellipses (amber/orange with navy drop-shadow) ─────
+  [R2R1_X, R2R2_X, R2R3_X, R2R4_X].forEach(rx => {
+    s.addShape(pres.shapes.OVAL, { x: rx + em(60000), y: R2R_Y + em(60000), w: R2R_W, h: R2R_H,
+      fill: { color: C.navy }, line: { color: C.blue, width: 2 } });                    // shadow
+    s.addShape(pres.shapes.OVAL, { x: rx, y: R2R_Y, w: R2R_W, h: R2R_H,
+      fill: { color: C.amber }, line: { color: C.amber, width: 2.5 } });                 // main
+    s.addText("Radius to Rest", { x: rx, y: R2R_Y, w: R2R_W, h: R2R_H,
+      fontSize: 9, bold: true, color: C.white, align: "center", valign: "middle", margin: 0 });
+  });
+
+  // ── Vertical arrows R2R → SMF groups ──────────────────────────────────────
+  [R2R1_CX, R2R2_CX, R2R3_CX, R2R4_CX].forEach(cx => {
+    s.addShape(pres.shapes.LINE, { x: cx, y: R2R_BOT, w: 0, h: SMF_Y - R2R_BOT - em(20000),
+      line: { color: C.blue, width: 1.5, beginArrowType: "arrow", endArrowType: "arrow" } });
+  });
+
+  // ── SMF boxes (4+4+4+3 = 15 total) ───────────────────────────────────────
+  [{ cx: R2R1_CX, n: 4 }, { cx: R2R2_CX, n: 4 }, { cx: R2R3_CX, n: 4 }, { cx: R2R4_CX, n: 3 }]
+    .forEach(({ cx, n }) => {
+      const totalW = n * SMF_W + (n - 1) * SMF_GAP;
+      const startX = cx - totalW / 2;
+      for (let j = 0; j < n; j++) {
+        const sx = startX + j * (SMF_W + SMF_GAP);
+        s.addShape(pres.shapes.ROUNDED_RECTANGLE, { x: sx, y: SMF_Y, w: SMF_W, h: SMF_H,
+          fill: { color: C.blue }, line: { color: C.navy, width: 2 }, rectRadius: 0.05 });
+        s.addText("SMF", { x: sx, y: SMF_Y, w: SMF_W, h: SMF_H,
+          fontSize: 9, bold: true, color: C.white, align: "center", valign: "middle", margin: 0 });
+      }
+    });
+
+  // ── Arrow R2R4 → QA area ──────────────────────────────────────────────────
+  s.addShape(pres.shapes.LINE, { x: R2R4_CX, y: SMF_Y + SMF_H, w: 0, h: QA_Y - SMF_Y - SMF_H - em(30000),
+    line: { color: C.blue, width: 1.5, endArrowType: "arrow" } });
+
+  // ── QA Automation & QA Load test (green boxes, bottom-right) ─────────────
+  [[QAA_X, QAA_W, "QA Automation"], [QAL_X, QAL_W, "QA Load test"]].forEach(([qx, qw, label]) => {
+    s.addShape(pres.shapes.RECTANGLE, { x: qx, y: QA_Y, w: qw, h: QA_H,
+      fill: { color: "00B050" }, line: { color: C.white, width: 2 } });
+    s.addText(label, { x: qx, y: QA_Y, w: qw, h: QA_H,
+      fontSize: 9, bold: true, color: C.white, align: "center", valign: "middle", margin: 0 });
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SLIDE 14 — DEVELOPER WORKFLOW
 // ══════════════════════════════════════════════════════════════════════════════
 {
   const s = pres.addSlide();
@@ -759,7 +919,7 @@ function sectionLine(slide, y) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// SLIDE 14 — AUTO-ALLOCATION SCENARIOS
+// SLIDE 15 — AUTO-ALLOCATION SCENARIOS
 // ══════════════════════════════════════════════════════════════════════════════
 {
   const s = pres.addSlide();
@@ -815,7 +975,7 @@ function sectionLine(slide, y) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// SLIDE 15 — SUMMARY / KEY TAKEAWAYS
+// SLIDE 16 — SUMMARY / KEY TAKEAWAYS
 // ══════════════════════════════════════════════════════════════════════════════
 {
   const s = pres.addSlide();

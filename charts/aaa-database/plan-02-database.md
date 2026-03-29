@@ -434,6 +434,30 @@ only creates the database and `aaa_app` owner — it does not run any SQL.
 
 ## AAA Hot-Path Lookup Query
 
+### Fast Path for IP Lookup
+
+Every RADIUS/Diameter Access-Request follows this resolution chain:
+
+```
+IMSI (from Access-Request)
+  ↓
+imsi2sim          — B-tree PK lookup → yields sim_id + imsi_status
+  ↓
+sim_profiles      — PK join → yields ip_resolution + sim_status
+  ↓
+[ip_resolution]
+   │
+   ├── imsi / imsi_apn  →  imsi_apn_ips   (keyed by IMSI + optional APN)
+   │
+   └── iccid / iccid_apn → sim_apn_ips   (keyed by sim_id/ICCID + optional APN)
+```
+
+- The lookup always enters via **IMSI** — it is the sole AAA entry point.
+- `imsi2sim` resolves IMSI → `sim_id`; `sim_profiles.ip_resolution` then selects which IP table to read.
+- `imsi_apn_ips` is used when the profile is bound to the **IMSI** identity (`imsi` / `imsi_apn` modes): one IP row per IMSI, optionally further qualified by APN.
+- `sim_apn_ips` (aliased "iccid" tables) is used when the profile is bound to the **physical card** identity (`iccid` / `iccid_apn` modes): one IP row per `sim_id`, shared by all IMSIs on that card.
+- Both IP tables are left-joined in a single query so the application layer can pick the right column without a second round-trip.
+
 Executed on every RADIUS/Diameter Access-Request. Covers all three production profiles
 in a single query — the application layer selects the correct row from the result set.
 

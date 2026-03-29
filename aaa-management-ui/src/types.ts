@@ -1,6 +1,7 @@
-export type ProfileStatus  = 'active' | 'suspended' | 'terminated'
-export type JobStatus      = 'queued' | 'running' | 'completed' | 'failed'
-export type IpResolution   = 'imsi' | 'imsi_apn' | 'iccid' | 'iccid_apn'
+export type ProfileStatus    = 'active' | 'suspended' | 'terminated'
+export type JobStatus        = 'queued' | 'running' | 'completed' | 'failed'
+export type IpResolution     = 'imsi' | 'imsi_apn' | 'iccid' | 'iccid_apn'
+export type ProvisioningMode = 'first_connect' | 'immediate'
 
 export interface ApnIp {
   id?:       number
@@ -75,16 +76,17 @@ export interface PoolStats {
 }
 
 export interface RangeConfig {
-  id:            number
-  account_name:  string | null
-  f_imsi:        string
-  t_imsi:        string
-  pool_id:       string | null
-  pool_name?:    string
-  ip_resolution: IpResolution
-  description:   string | null
-  status:        'active' | 'suspended'
-  iccid_range_id: number | null
+  id:               number
+  account_name:     string | null
+  f_imsi:           string
+  t_imsi:           string
+  pool_id:          string | null
+  pool_name?:       string
+  ip_resolution:    IpResolution
+  description:      string | null
+  status:           'active' | 'suspended'
+  iccid_range_id:   number | null
+  provisioning_mode: ProvisioningMode
 }
 
 export interface ApnPool {
@@ -95,17 +97,18 @@ export interface ApnPool {
 }
 
 export interface IccidRangeConfig {
-  id:            number
-  account_name:  string | null
-  f_iccid:       string
-  t_iccid:       string
-  pool_id:       string | null
-  pool_name?:    string
-  ip_resolution: IpResolution
-  imsi_count:    number
-  description:   string | null
-  status:        'active' | 'suspended'
-  imsi_ranges?:  ImsiSlot[]
+  id:               number
+  account_name:     string | null
+  f_iccid:          string
+  t_iccid:          string
+  pool_id:          string | null
+  pool_name?:       string
+  ip_resolution:    IpResolution
+  imsi_count:       number
+  description:      string | null
+  status:           'active' | 'suspended'
+  imsi_ranges?:     ImsiSlot[]
+  provisioning_mode: ProvisioningMode
 }
 
 export interface ImsiSlot {

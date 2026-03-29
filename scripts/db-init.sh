@@ -240,6 +240,32 @@ $$;
 SQL
 echo "Column migrations done."
 
+# ── Gen-4: provisioning_mode column on range config tables ───────────────────
+# New columns added for the provisioning_mode feature (first_connect / immediate).
+# Uses ADD COLUMN IF NOT EXISTS so it is safe to run on any schema generation.
+echo "Applying Gen-4 migration (provisioning_mode columns)..."
+kubectl exec -i "${PRIMARY_POD}" \
+  -n "${NAMESPACE}" \
+  -- psql -U postgres -d "${DB_NAME}" <<'SQL'
+ALTER TABLE imsi_range_configs
+    ADD COLUMN IF NOT EXISTS provisioning_mode TEXT NOT NULL DEFAULT 'first_connect';
+ALTER TABLE iccid_range_configs
+    ADD COLUMN IF NOT EXISTS provisioning_mode TEXT NOT NULL DEFAULT 'first_connect';
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='chk_imsi_range_prov_mode') THEN
+        ALTER TABLE imsi_range_configs ADD CONSTRAINT chk_imsi_range_prov_mode
+            CHECK (provisioning_mode IN ('first_connect', 'immediate'));
+    END IF;
+END $$;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='chk_iccid_range_prov_mode') THEN
+        ALTER TABLE iccid_range_configs ADD CONSTRAINT chk_iccid_range_prov_mode
+            CHECK (provisioning_mode IN ('first_connect', 'immediate'));
+    END IF;
+END $$;
+SQL
+echo "Gen-4 migration done."
+
 # ── Apply schema SQL from ConfigMap ───────────────────────────────────────────
 echo "Applying schema SQL from ConfigMap '${CONFIGMAP}'..."
 kubectl get configmap "${CONFIGMAP}" \

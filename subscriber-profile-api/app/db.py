@@ -35,6 +35,10 @@ INSERT INTO routing_domains (name, description)
 VALUES ('default', 'Default routing domain')
 ON CONFLICT (name) DO NOTHING;
 
+-- NOTE: provisioning_mode columns for imsi_range_configs / iccid_range_configs are
+-- added by scripts/db-init.sh (Gen-4 migration block) which runs as the postgres
+-- superuser.  aaa_app is not the table owner and cannot ALTER those tables here.
+
 """
 
 

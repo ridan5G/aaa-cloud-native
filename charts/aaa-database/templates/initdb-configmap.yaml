@@ -287,7 +287,10 @@ data:
         CONSTRAINT chk_iccid_range_order
             CHECK (f_iccid <= t_iccid),
         CONSTRAINT chk_imsi_count
-            CHECK (imsi_count BETWEEN 1 AND 10)
+            CHECK (imsi_count BETWEEN 1 AND 10),
+        provisioning_mode TEXT        NOT NULL DEFAULT 'first_connect',
+        CONSTRAINT chk_iccid_range_prov_mode
+            CHECK (provisioning_mode IN ('first_connect', 'immediate'))
     );
 
     CREATE INDEX IF NOT EXISTS idx_iccid_rc_account
@@ -344,7 +347,10 @@ data:
             CHECK (imsi_slot BETWEEN 1 AND 10),
         -- Within a multi-IMSI group each slot number must be unique
         CONSTRAINT uq_iccid_range_slot
-            UNIQUE (iccid_range_id, imsi_slot)
+            UNIQUE (iccid_range_id, imsi_slot),
+        provisioning_mode TEXT        NOT NULL DEFAULT 'first_connect',
+        CONSTRAINT chk_imsi_range_prov_mode
+            CHECK (provisioning_mode IN ('first_connect', 'immediate'))
     );
 
     CREATE INDEX IF NOT EXISTS idx_irc_account

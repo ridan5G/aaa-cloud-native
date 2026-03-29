@@ -12,7 +12,7 @@ JWT_PUBLIC_KEY = os.getenv("JWT_PUBLIC_KEY", "")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "RS256")
 
 BULK_WORKER_THREADS = int(os.getenv("BULK_WORKER_THREADS", "4"))
-BULK_BATCH_SIZE = int(os.getenv("BULK_BATCH_SIZE", "1000"))
+BULK_BATCH_SIZE = int(os.getenv("BULK_BATCH_SIZE", "500"))
 
 # Comma-separated allowed CORS origins, e.g. "http://ui.aaa.localhost,https://ui.aaa.example.com"
 # Empty string disables CORS headers (safe when the UI proxies /v1/ via nginx).

@@ -15,6 +15,7 @@ def create_range_config(
     description: str = "regression-test range",
     status: str = "active",
     apns: list[dict] | None = None,
+    provisioning_mode: str | None = None,
 ) -> dict:
     """POST /range-configs and return the response body including id.
 
@@ -32,8 +33,10 @@ def create_range_config(
         "description":   description,
         "status":        status,
     }
+    if provisioning_mode is not None:
+        body["provisioning_mode"] = provisioning_mode
     resp = http.post("/range-configs", json=body)
-    assert resp.status_code == 201, (
+    assert resp.status_code in (201, 202), (
         f"create_range_config failed: {resp.status_code} {resp.text}"
     )
     rc = resp.json()
@@ -69,6 +72,7 @@ def create_iccid_range_config(
     imsi_count: int = 2,
     pool_id: str | None = None,
     description: str = "regression-test iccid range",
+    provisioning_mode: str | None = None,
 ) -> dict:
     """POST /iccid-range-configs and return the response body including id."""
     body = {
@@ -81,6 +85,8 @@ def create_iccid_range_config(
     }
     if pool_id is not None:
         body["pool_id"] = pool_id
+    if provisioning_mode is not None:
+        body["provisioning_mode"] = provisioning_mode
     resp = http.post("/iccid-range-configs", json=body)
     assert resp.status_code == 201, (
         f"create_iccid_range_config failed: {resp.status_code} {resp.text}"

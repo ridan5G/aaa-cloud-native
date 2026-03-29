@@ -73,7 +73,8 @@ async def _allocate_ip(conn, pool_id: str) -> Optional[str]:
 
 
 async def _load_apn_pools(
-    conn, range_config_id: int, default_pool: str, ip_resolution: str, request_apn: str
+    conn, range_config_id: int, default_pool: str, ip_resolution: str,
+    request_apn: Optional[str] = None,
 ) -> list[tuple[Optional[str], str]]:
     """Return (apn, pool_id) pairs to allocate in a single transaction.
 
@@ -81,6 +82,8 @@ async def _load_apn_pools(
     - imsi_apn / iccid_apn: all APNs from range_config_apn_pools, ensuring
       request_apn is included (using default_pool if not explicitly mapped).
       Falls back to [(request_apn, default_pool)] when no entries are defined.
+      When request_apn is None (immediate provisioning), only configured APNs
+      are returned; if none are configured, [(None, default_pool)] is returned.
     """
     if ip_resolution not in ("imsi_apn", "iccid_apn"):
         return [(None, default_pool)]
@@ -92,10 +95,12 @@ async def _load_apn_pools(
     )
 
     if not rows:
+        if request_apn is None:
+            return [(None, default_pool)]
         return [(request_apn, default_pool)]
 
     pairs: dict[str, str] = {row["apn"]: row["pool_id"] for row in rows}
-    if request_apn not in pairs:
+    if request_apn is not None and request_apn not in pairs:
         pairs[request_apn] = default_pool
     return list(pairs.items())
 
@@ -167,7 +172,8 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
                COALESCE(irc.pool_id, ir.pool_id)::text AS pool_id,
                COALESCE(ir.ip_resolution, irc.ip_resolution) AS ip_resolution,
                COALESCE(ir.account_name, irc.account_name) AS account_name,
-               ir.f_iccid, ir.id AS iccid_range_id_val
+               ir.f_iccid, ir.id AS iccid_range_id_val,
+               ir.provisioning_mode AS parent_provisioning_mode
         FROM imsi_range_configs irc
         LEFT JOIN iccid_range_configs ir ON ir.id = irc.iccid_range_id
         WHERE irc.f_imsi <= $1 AND irc.t_imsi >= $1 AND irc.status = 'active'
@@ -282,6 +288,14 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
             "SELECT sim_id::text FROM sim_profiles WHERE iccid = $1 FOR UPDATE",
             derived_iccid,
         )
+
+        if not existing and range_row["parent_provisioning_mode"] == "immediate":
+            # Immediate mode: provisioning is driven by the background job (fired when
+            # all IMSI slots are registered). If the profile doesn't exist yet the job
+            # hasn't run (or not all slots are added). Return 404 to signal "not yet
+            # provisioned" rather than creating the profile here.
+            first_connection_total.labels(result="not_found").inc()
+            raise HTTPException(status_code=404, detail={"error": "not_found"})
 
         if existing:
             # Card already exists — sibling slot connected first and pre-provisioned
