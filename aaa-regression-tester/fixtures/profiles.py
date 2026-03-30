@@ -14,7 +14,7 @@ def create_profile_iccid(
     pool_id: str,
     pool_name: str = "test-pool",
 ) -> dict:
-    """POST /profiles with ip_resolution=iccid (Profile A).
+    """POST /profiles with ip_resolution=iccid (iccid profile).
 
     All IMSIs on the card share one card-level IP entry (no apn field).
     """
@@ -53,7 +53,7 @@ def create_profile_imsi(
     imsis: list[dict],   # [{"imsi": str, "static_ip": str, "pool_id": str}]
     pool_name: str = "test-pool",
 ) -> dict:
-    """POST /profiles with ip_resolution=imsi (Profile B).
+    """POST /profiles with ip_resolution=imsi (imsi profile).
 
     Each IMSI gets its own APN-agnostic IP (apn=null in DB).
     """
@@ -93,7 +93,7 @@ def create_profile_imsi_apn(
     imsis: list[dict],
     pool_name: str = "test-pool",
 ) -> dict:
-    """POST /profiles with ip_resolution=imsi_apn (Profile C)."""
+    """POST /profiles with ip_resolution=imsi_apn (imsi_apn profile)."""
     body = {
         "iccid":         iccid,
         "account_name":  account_name,
@@ -131,7 +131,7 @@ def create_profile_iccid_apn(
     apn_ips: list[dict],   # [{"apn": str, "static_ip": str, "pool_id": str}]
     pool_name: str = "test-pool",
 ) -> dict:
-    """POST /profiles with ip_resolution=iccid_apn (Profile D / S4).
+    """POST /profiles with ip_resolution=iccid_apn (iccid_apn profile).
 
     All IMSIs on the card share card-level IPs, one per APN.
     """

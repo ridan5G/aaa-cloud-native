@@ -491,6 +491,93 @@ near 100% cache-hit rate at steady state.
 
 ---
 
+## Resolution Scenarios — ICCID Dual-IMSI (16 outcomes)
+
+The two LEFT JOINs in the hot-path query produce a Cartesian product:
+`|imsi_apn_ips rows for this IMSI| × |sim_apn_ips rows for this sim_id|` result rows.
+If one side has no matching rows the LEFT JOIN still emits one result row with NULLs for
+that side's columns. The application layer iterates all rows and inspects only the columns
+relevant to `ip_resolution`.
+
+### DB layout for this scenario
+
+```
+sim_profiles:  sim_id = 42,  ip_resolution = <see per-mode table below>,  status = active
+
+imsi2sim:
+  IMSI-A  →  sim_id = 42
+  IMSI-B  →  sim_id = 42
+
+─── imsi_apn_ips (only populated for imsi / imsi_apn modes) ─────────────────────────────
+
+  mode = imsi:
+    IMSI-A │ apn = NULL    │ 100.65.1.10      ← single wildcard row, APN ignored
+    IMSI-B │ apn = NULL    │ 100.65.2.10
+
+  mode = imsi_apn:
+    IMSI-A │ apn = apn1.net │ 100.65.1.11     ← per-APN rows, no wildcard
+    IMSI-A │ apn = apn2.net │ 100.65.1.12
+    IMSI-B │ apn = apn1.net │ 100.65.2.11
+    IMSI-B │ apn = apn2.net │ 100.65.2.12
+
+─── sim_apn_ips (only populated for iccid / iccid_apn modes) ────────────────────────────
+
+  mode = iccid:
+    sim_id = 42 │ apn = NULL    │ 100.65.3.10  ← single wildcard row, APN ignored
+
+  mode = iccid_apn:
+    sim_id = 42 │ apn = apn1.net │ 100.65.3.11 ← per-APN rows, no wildcard
+    sim_id = 42 │ apn = apn2.net │ 100.65.3.12
+```
+
+### Query result rows returned for an IMSI-A request
+
+**`imsi` mode** — 1 row
+
+```
+imsi_apn  imsi_static_ip  iccid_apn  iccid_static_ip
+NULL      100.65.1.10     NULL       NULL
+```
+
+**`imsi_apn` mode** — 2 rows
+
+```
+imsi_apn  imsi_static_ip  iccid_apn  iccid_static_ip
+apn1.net  100.65.1.11     NULL       NULL
+apn2.net  100.65.1.12     NULL       NULL
+```
+
+**`iccid` mode** — 1 row
+
+```
+imsi_apn  imsi_static_ip  iccid_apn  iccid_static_ip
+NULL      NULL            NULL       100.65.3.10
+```
+
+**`iccid_apn` mode** — 2 rows
+
+```
+imsi_apn  imsi_static_ip  iccid_apn  iccid_static_ip
+NULL      NULL            apn1.net   100.65.3.11
+NULL      NULL            apn2.net   100.65.3.12
+```
+
+### 16-outcome matrix (4 requests × 4 modes)
+
+| Request | `imsi` | `imsi_apn` | `iccid` | `iccid_apn` |
+|---|---|---|---|---|
+| IMSI-A, apn1.net | 200 `100.65.1.10` (APN ignored) | 200 `100.65.1.11` (exact match) | 200 `100.65.3.10` (APN ignored) | 200 `100.65.3.11` (exact match) |
+| IMSI-A, apn2.net | 200 `100.65.1.10` (APN ignored) | 200 `100.65.1.12` (exact match) | 200 `100.65.3.10` (APN ignored) | 200 `100.65.3.12` (exact match) |
+| IMSI-B, apn1.net | 200 `100.65.2.10` (APN ignored) | 200 `100.65.2.11` (exact match) | 200 `100.65.3.10` (APN ignored, same card) | 200 `100.65.3.11` (exact match, same card) |
+| IMSI-B, apn2.net | 200 `100.65.2.10` (APN ignored) | 200 `100.65.2.12` (exact match) | 200 `100.65.3.10` (APN ignored, same card) | 200 `100.65.3.12` (exact match, same card) |
+
+`imsi` / `imsi_apn` modes give **different** IPs to IMSI-A and IMSI-B — each owns its own
+`imsi_apn_ips` rows. `iccid` / `iccid_apn` modes give the **same** IP to both — they share
+the card's `sim_apn_ips` rows. An unrecognised APN with no wildcard row returns
+`404 apn_not_found` in `imsi_apn` and `iccid_apn` modes.
+
+---
+
 ## First-Connection Allocation — Write Transaction
 
 Triggered by `subscriber-profile-api` via `POST /first-connection` when

@@ -1,5 +1,5 @@
 """
-test_08_profiles_d.py — Profile D: ip_resolution = "iccid_apn"
+test_08_iccid_apn_profile.py — ip_resolution = "iccid_apn"
 
 All IMSIs on a physical card share a set of card-level IPs, one per APN.
 APN resolution order (Resolver::resolveIccidApn):
@@ -8,8 +8,8 @@ APN resolution order (Resolver::resolveIccidApn):
   3. apn_not_found — no match at all → 404
 
 This file is the counterpart to:
-  test_03_profiles_a.py  (iccid mode   — card IP, APN ignored)
-  test_05_profiles_c.py  (imsi_apn mode — per-IMSI+APN IP)
+  test_03_iccid_profile.py  (iccid mode   — card IP, APN ignored)
+  test_05_imsi_apn_profile.py  (imsi_apn mode — per-IMSI+APN IP)
 filling the gap for iccid_apn as a statically provisioned profile.
 
 Resources
@@ -64,7 +64,7 @@ IP_IMS      = "100.65.170.2"   # card-level IP for APN_IMS
 IP_WILDCARD = "100.65.170.3"   # wildcard card-level IP (added in test_07)
 
 
-class TestProfileD:
+class TestIccidApnProfile:
     """End-to-end tests for a statically provisioned iccid_apn profile.
 
     Physical setup: one card (ICCID), two IMSIs, two named APNs provisioned as
@@ -121,18 +121,18 @@ class TestProfileD:
             imsis=[IMSI1, IMSI2],
             apn_ips=[
                 {"apn": APN_INTERNET, "static_ip": IP_INTERNET,
-                 "pool_id": TestProfileD.pool_id},
+                 "pool_id": TestIccidApnProfile.pool_id},
                 {"apn": APN_IMS,      "static_ip": IP_IMS,
-                 "pool_id": TestProfileD.pool_id},
+                 "pool_id": TestIccidApnProfile.pool_id},
             ],
         )
         assert "sim_id" in body
-        TestProfileD.sim_id = body["sim_id"]
+        TestIccidApnProfile.sim_id = body["sim_id"]
 
     # 8.2 ─────────────────────────────────────────────────────────────────────
     def test_02_get_profile(self, http: httpx.Client):
         """GET /profiles/{sim_id} → 200; iccid_ips contains both APN entries."""
-        resp = http.get(f"/profiles/{TestProfileD.sim_id}")
+        resp = http.get(f"/profiles/{TestIccidApnProfile.sim_id}")
         assert resp.status_code == 200
         body = resp.json()
         assert body["iccid"] == ICCID
@@ -195,15 +195,15 @@ class TestProfileD:
         The full iccid_ips list is sent (replacing existing entries).
         """
         resp = http.patch(
-            f"/profiles/{TestProfileD.sim_id}",
+            f"/profiles/{TestIccidApnProfile.sim_id}",
             json={
                 "iccid_ips": [
                     {"apn": APN_INTERNET, "static_ip": IP_INTERNET,
-                     "pool_id": TestProfileD.pool_id, "pool_name": "pool-d-08"},
+                     "pool_id": TestIccidApnProfile.pool_id, "pool_name": "pool-d-08"},
                     {"apn": APN_IMS,      "static_ip": IP_IMS,
-                     "pool_id": TestProfileD.pool_id, "pool_name": "pool-d-08"},
+                     "pool_id": TestIccidApnProfile.pool_id, "pool_name": "pool-d-08"},
                     {"apn": None,         "static_ip": IP_WILDCARD,
-                     "pool_id": TestProfileD.pool_id, "pool_name": "pool-d-08"},
+                     "pool_id": TestIccidApnProfile.pool_id, "pool_name": "pool-d-08"},
                 ],
             },
         )
@@ -239,7 +239,7 @@ class TestProfileD:
     # 8.10 — BAD scenario ─────────────────────────────────────────────────────
     def test_10_suspend_sim(self, http: httpx.Client):
         """PATCH status=suspended → 200."""
-        resp = http.patch(f"/profiles/{TestProfileD.sim_id}",
+        resp = http.patch(f"/profiles/{TestIccidApnProfile.sim_id}",
                           json={"status": "suspended"})
         assert resp.status_code == 200
 
@@ -260,7 +260,7 @@ class TestProfileD:
     # 8.12 ────────────────────────────────────────────────────────────────────
     def test_12_reactivate_and_lookup(self, http: httpx.Client, lookup_http: httpx.Client):
         """PATCH status=active → 200; subsequent GET /lookup resolves again."""
-        resp = http.patch(f"/profiles/{TestProfileD.sim_id}",
+        resp = http.patch(f"/profiles/{TestIccidApnProfile.sim_id}",
                           json={"status": "active"})
         assert resp.status_code == 200
         resp = lookup_http.get("/lookup",
@@ -275,7 +275,7 @@ class TestProfileD:
 
         Per-IMSI suspend: only IMSI1 is blocked; IMSI2 (same card) stays active.
         """
-        resp = http.patch(f"/profiles/{TestProfileD.sim_id}/imsis/{IMSI1}",
+        resp = http.patch(f"/profiles/{TestIccidApnProfile.sim_id}/imsis/{IMSI1}",
                           json={"status": "suspended"})
         assert resp.status_code == 200
 
@@ -309,7 +309,7 @@ class TestProfileD:
     def test_16_reactivate_imsi1_lookup_resolves(
             self, http: httpx.Client, lookup_http: httpx.Client):
         """Reactivate IMSI1 → lookup resolves again for all APNs."""
-        resp = http.patch(f"/profiles/{TestProfileD.sim_id}/imsis/{IMSI1}",
+        resp = http.patch(f"/profiles/{TestIccidApnProfile.sim_id}/imsis/{IMSI1}",
                           json={"status": "active"})
         assert resp.status_code == 200
 
@@ -330,7 +330,7 @@ class TestProfileD:
         The Resolver checks sim_status != 'active' → returns Suspended (403).
         A 404 (not_found) is also accepted if the implementation removes IMSI rows.
         """
-        resp = http.delete(f"/profiles/{TestProfileD.sim_id}")
+        resp = http.delete(f"/profiles/{TestIccidApnProfile.sim_id}")
         assert resp.status_code == 204
 
         resp_lookup = lookup_http.get("/lookup",
@@ -342,4 +342,4 @@ class TestProfileD:
         )
         if resp_lookup.status_code == 403:
             assert resp_lookup.json()["error"] == "suspended"
-        TestProfileD.sim_id = None
+        TestIccidApnProfile.sim_id = None

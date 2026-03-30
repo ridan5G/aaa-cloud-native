@@ -14,7 +14,7 @@ export/search, routing domains, CIDR finder, Grafana metrics, and failure scenar
 
 **Output:** JUnit XML (`/app/results/results.xml`) · console pass/fail summary · Prometheus Pushgateway metrics
 
-**Current suite result: 271 passed · 0 failed · 0 skipped · ~80 s**
+**Current suite result: 274 passed · 0 failed · 0 skipped · ~80 s**
 
 ---
 
@@ -41,15 +41,15 @@ aaa-regression-tester/
 ├── test_01c_routing_domains.py           # Routing domain CRUD + suggest-cidr             [17 tests]
 ├── test_01d_free_cidr_finder.py          # Free CIDR finder end-to-end workflow           [ 7 tests]
 ├── test_02_range_configs.py              # IMSI range config CRUD                         [ 8 tests]
-├── test_03_profiles_a.py                 # Profile A: ip_resolution=iccid                [ 9 tests]
-├── test_04_profiles_b.py                 # Profile B: ip_resolution=imsi                 [ 9 tests]
-├── test_05_profiles_c.py                 # Profile C: ip_resolution=imsi_apn             [ 9 tests]
+├── test_03_iccid_profile.py              # ip_resolution=iccid                           [10 tests]
+├── test_04_imsi_profile.py               # ip_resolution=imsi                            [10 tests]
+├── test_05_imsi_apn_profile.py           # ip_resolution=imsi_apn                        [10 tests]
 ├── test_06_imsi_ops.py                   # Add / remove IMSI, per-IMSI suspend           [ 8 tests]
 ├── test_07_dynamic_alloc.py              # First-connection single-IMSI baseline         [ 9 tests]
 ├── test_07b_dynamic_alloc_modes.py       # First-connection all allocation modes         [25 tests]
 ├── test_07c_release_ips.py               # IP release / IMSI detach + IP return          [ 8 tests]
 ├── test_07e_release_reconnect_all_modes.py  # Release + re-allocate across all 4 modes  [ 5 tests]
-├── test_08_profiles_d.py                 # Profile D: ip_resolution=iccid_apn           [17 tests]
+├── test_08_iccid_apn_profile.py          # ip_resolution=iccid_apn                       [17 tests]
 ├── test_09_migration.py                  # Migration output validation (skipped unless DB pre-seeded) [ 7 tests]
 ├── test_10_errors.py                     # Validation, 404, 409, 503, auth errors        [17 tests]
 ├── test_11_performance.py                # Latency assertions under load (skipped unless dataset present) [ 7 tests]
@@ -190,7 +190,7 @@ call `suggest-cidr` → create pool with the returned CIDR.
 
 ---
 
-### test_03_profiles_a.py — Profile A: `ip_resolution = "iccid"`
+### test_03_iccid_profile.py — `ip_resolution = "iccid"`
 
 In `iccid` mode the APN is ignored — all IMSIs on the SIM card share a single card-level
 static IP.
@@ -206,10 +206,11 @@ static IP.
 | 3.7 | `GET /lookup` after suspended | 403 `{"error":"suspended"}` |
 | 3.8 | `PATCH` status=active; `GET /lookup` | 200, IP resolves again |
 | 3.9 | `DELETE /profiles/{sim_id}` → 204; subsequent `GET` | 200 with `status=terminated` |
+| 3.10 | `GET /lookup?imsi=IMSI2&apn=internet.operator.com` | 200, STATIC_IP (APN ignored — matrix outcome 12) |
 
 ---
 
-### test_04_profiles_b.py — Profile B: `ip_resolution = "imsi"`
+### test_04_imsi_profile.py — `ip_resolution = "imsi"`
 
 In `imsi` mode each IMSI has its own static IP and APN is ignored.
 
@@ -224,16 +225,17 @@ In `imsi` mode each IMSI has its own static IP and APN is ignored.
 | 4.7 | `GET /lookup?imsi=IMSI1` | 403 `{"error":"suspended"}` |
 | 4.8 | `GET /lookup?imsi=IMSI2` | 200, IMSI #2 still resolves |
 | 4.9 | `PATCH /profiles/{sim_id}/imsis/{imsi1}` — update static_ip | 200; GET /lookup returns new IP |
+| 4.10 | `GET /lookup?imsi=IMSI2&apn=ims` | 200, IP_B (APN ignored — matrix outcome 4) |
 
 ---
 
-### test_05_profiles_c.py — Profile C: `ip_resolution = "imsi_apn"`
+### test_05_imsi_apn_profile.py — `ip_resolution = "imsi_apn"`
 
 In `imsi_apn` mode each IMSI×APN pair has its own static IP.
 
 | # | Test | Expected |
 |---|---|---|
-| 5.1 | `POST /profiles` — imsi_apn mode; IMSI1→[smf1→IP_A, smf2→IP_B]; IMSI2→[smf3→IP_C] | 201 |
+| 5.1 | `POST /profiles` — imsi_apn mode; IMSI1→[smf1→IP_A, smf2→IP_B]; IMSI2→[smf3→IP_C, smf4→IP_E] | 201 |
 | 5.2 | `GET /lookup?imsi=IMSI1&apn=smf1` | 200, IP_A |
 | 5.3 | `GET /lookup?imsi=IMSI1&apn=smf2` | 200, IP_B |
 | 5.4 | `GET /lookup?imsi=IMSI2&apn=smf3` | 200, IP_C |
@@ -242,6 +244,7 @@ In `imsi_apn` mode each IMSI×APN pair has its own static IP.
 | 5.7 | `GET /lookup?imsi=IMSI1&apn=smf9` | 200, IP_D (wildcard fires) |
 | 5.8 | `GET /lookup?imsi=IMSI1&apn=smf1` after wildcard added | 200, IP_A (exact wins) |
 | 5.9 | Two concurrent lookups for smf1 + smf2 same IMSI | both return their respective IPs |
+| 5.10 | `GET /lookup?imsi=IMSI2&apn=smf4` | 200, IP_E (exact match — matrix outcome 8) |
 
 ---
 
@@ -376,7 +379,7 @@ duplicate or incorrect IPs across all four `ip_resolution` modes.
 
 ---
 
-### test_08_profiles_d.py — Profile D: `ip_resolution = "iccid_apn"`
+### test_08_iccid_apn_profile.py — `ip_resolution = "iccid_apn"`
 
 All IMSIs on a physical SIM card share a set of card-level IPs, one per APN.
 APN resolution follows lookup order: exact match → wildcard → 404.
@@ -593,7 +596,7 @@ return pre-allocated IPs without invoking first-connection.
 4. run_all.sh pushes JUnit totals to Prometheus Pushgateway (non-fatal if push fails)
 
 Result (full suite, RADIUS enabled):
-  271 passed · 0 failed · 0 skipped · ~80 s
+  274 passed · 0 failed · 0 skipped · ~80 s
 ```
 
 ### Profile Visibility After a Run
@@ -610,6 +613,102 @@ GET /profiles/export?status=active&account_name=TestAccount
 
 shows every auto-provisioned SIM with its allocated IP, `ip_resolution` mode, and pool.
 The next run's `setup_class` terminates those profiles before recreating infrastructure.
+
+---
+
+## Resolution Scenario Reference — ICCID Dual-IMSI (16 outcomes)
+
+This section is the canonical lookup-resolution reference for the test suite. It uses
+the same DB layout that the profile-type and dynamic-allocation tests share, so each cell
+maps directly to one or more test cases.
+
+### Scenario: DB layout
+
+```
+sim_profiles:  sim_id = 42,  ip_resolution = <see per-mode table below>,  status = active
+
+imsi2sim:
+  IMSI-A  →  sim_id = 42
+  IMSI-B  →  sim_id = 42
+
+─── imsi_apn_ips (only populated for imsi / imsi_apn modes) ─────────────────────────────
+
+  mode = imsi:
+    IMSI-A │ apn = NULL    │ 100.65.1.10      ← single wildcard row, APN ignored
+    IMSI-B │ apn = NULL    │ 100.65.2.10
+
+  mode = imsi_apn:
+    IMSI-A │ apn = apn1.net │ 100.65.1.11     ← per-APN rows, no wildcard
+    IMSI-A │ apn = apn2.net │ 100.65.1.12
+    IMSI-B │ apn = apn1.net │ 100.65.2.11
+    IMSI-B │ apn = apn2.net │ 100.65.2.12
+
+─── sim_apn_ips (only populated for iccid / iccid_apn modes) ────────────────────────────
+
+  mode = iccid:
+    sim_id = 42 │ apn = NULL    │ 100.65.3.10  ← single wildcard row, APN ignored
+
+  mode = iccid_apn:
+    sim_id = 42 │ apn = apn1.net │ 100.65.3.11 ← per-APN rows, no wildcard
+    sim_id = 42 │ apn = apn2.net │ 100.65.3.12
+```
+
+The hot-path SQL anchors on the incoming IMSI (`WHERE si.imsi = $1`). For an IMSI-A
+request the result rows are:
+
+**`imsi` mode** — 1 row (1 `imsi_apn_ips` row × 0 `sim_apn_ips` rows; absent side → NULLs)
+
+```
+imsi_apn  imsi_static_ip  iccid_apn  iccid_static_ip
+NULL      100.65.1.10     NULL       NULL
+```
+
+**`imsi_apn` mode** — 2 rows (2 `imsi_apn_ips` rows × 0 `sim_apn_ips` rows)
+
+```
+imsi_apn  imsi_static_ip  iccid_apn  iccid_static_ip
+apn1.net  100.65.1.11     NULL       NULL
+apn2.net  100.65.1.12     NULL       NULL
+```
+
+**`iccid` mode** — 1 row (0 `imsi_apn_ips` rows → 1 base row with NULLs × 1 `sim_apn_ips` row)
+
+```
+imsi_apn  imsi_static_ip  iccid_apn  iccid_static_ip
+NULL      NULL            NULL       100.65.3.10
+```
+
+**`iccid_apn` mode** — 2 rows (0 `imsi_apn_ips` rows → 1 base row with NULLs × 2 `sim_apn_ips` rows)
+
+```
+imsi_apn  imsi_static_ip  iccid_apn  iccid_static_ip
+NULL      NULL            apn1.net   100.65.3.11
+NULL      NULL            apn2.net   100.65.3.12
+```
+
+### 16-outcome matrix
+
+| Request | `imsi` | `imsi_apn` | `iccid` | `iccid_apn` |
+|---|---|---|---|---|
+| IMSI-A, apn1.net | 200 `100.65.1.10` (APN ignored) | 200 `100.65.1.11` (exact match) | 200 `100.65.3.10` (APN ignored) | 200 `100.65.3.11` (exact match) |
+| IMSI-A, apn2.net | 200 `100.65.1.10` (APN ignored) | 200 `100.65.1.12` (exact match) | 200 `100.65.3.10` (APN ignored) | 200 `100.65.3.12` (exact match) |
+| IMSI-B, apn1.net | 200 `100.65.2.10` (APN ignored) | 200 `100.65.2.11` (exact match) | 200 `100.65.3.10` (APN ignored, same card) | 200 `100.65.3.11` (exact match, same card) |
+| IMSI-B, apn2.net | 200 `100.65.2.10` (APN ignored) | 200 `100.65.2.12` (exact match) | 200 `100.65.3.10` (APN ignored, same card) | 200 `100.65.3.12` (exact match, same card) |
+
+Key distinction: `imsi` / `imsi_apn` modes give **different** IPs to IMSI-A and IMSI-B
+(each owns its own `imsi_apn_ips` rows). `iccid` / `iccid_apn` modes give the **same**
+IP to both (they share the card's `sim_apn_ips` rows).
+
+### Test coverage map
+
+| Scenario | Static-provisioning tests | Dynamic first-connection tests |
+|---|---|---|
+| `imsi` mode, dual-IMSI | test_04_imsi_profile: 4.2–4.4, 4.10 | test_07b: M1.1–M1.4 |
+| `imsi_apn` mode, dual-IMSI + dual-APN | test_05_imsi_apn_profile: 5.2–5.4, 5.7–5.8, 5.10 | test_07b: M2.1–M2.4 |
+| `iccid` mode, dual-IMSI | test_03_iccid_profile: 3.3–3.5, 3.10 | test_07b: M3.1–M3.3 |
+| `iccid_apn` mode, dual-IMSI + dual-APN | test_08_iccid_apn_profile: 8.2–8.8 | test_07b: M4.1–M4.4 |
+| Fast-path cache invalidation (all modes) | test_16: 16.1–16.13 | — |
+| RADIUS end-to-end (all modes) | test_12b: 12b.1–12b.13 | — |
 
 ---
 

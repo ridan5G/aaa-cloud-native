@@ -1,10 +1,10 @@
 """
-test_05_profiles_c.py — Profile C: ip_resolution = "imsi_apn"
+test_05_imsi_apn_profile.py — ip_resolution = "imsi_apn"
 
 Each IMSI has per-APN static IPs.
 A wildcard entry (apn = null) acts as a catch-all fallback.
 
-Test cases 5.1 – 5.9  (plan-01 §test_05_profiles_c)
+Test cases 5.1 – 5.10  (plan-01 §test_05_imsi_apn_profile)
 """
 import threading
 
@@ -23,14 +23,16 @@ IP_A = "100.65.160.1"    # IMSI1 → smf1
 IP_B = "100.65.160.2"    # IMSI1 → smf2
 IP_C = "100.65.160.3"    # IMSI2 → smf3
 IP_D = "100.65.160.4"    # IMSI1 wildcard (added in 5.6)
+IP_E = "100.65.160.5"    # IMSI2 → smf4  (matrix outcome 8)
 
 APN_SMF1    = "smf1.operator.com"
 APN_SMF2    = "smf2.operator.com"
 APN_SMF3    = "smf3.operator.com"
+APN_SMF4    = "smf4.operator.com"
 APN_UNKNOWN = "smf9.unknown.com"
 
 
-class TestProfileC:
+class TestImsiApnProfile:
     pool_id:   str | None = None
     sim_id: str | None = None
 
@@ -56,7 +58,7 @@ class TestProfileC:
 
     # 5.1 ─────────────────────────────────────────────────────────────────────
     def test_01_create_profile_imsi_apn(self, http: httpx.Client):
-        """POST /profiles — imsi_apn mode; IMSI1 → [smf1→IP_A, smf2→IP_B]; IMSI2 → [smf3→IP_C] → 201."""
+        """POST /profiles — imsi_apn mode; IMSI1 → [smf1→IP_A, smf2→IP_B]; IMSI2 → [smf3→IP_C, smf4→IP_E] → 201."""
         body = create_profile_imsi_apn(
             http,
             iccid=None,
@@ -66,22 +68,24 @@ class TestProfileC:
                     "imsi": IMSI1,
                     "apn_ips": [
                         {"apn": APN_SMF1, "static_ip": IP_A,
-                         "pool_id": TestProfileC.pool_id},
+                         "pool_id": TestImsiApnProfile.pool_id},
                         {"apn": APN_SMF2, "static_ip": IP_B,
-                         "pool_id": TestProfileC.pool_id},
+                         "pool_id": TestImsiApnProfile.pool_id},
                     ],
                 },
                 {
                     "imsi": IMSI2,
                     "apn_ips": [
                         {"apn": APN_SMF3, "static_ip": IP_C,
-                         "pool_id": TestProfileC.pool_id},
+                         "pool_id": TestImsiApnProfile.pool_id},
+                        {"apn": APN_SMF4, "static_ip": IP_E,
+                         "pool_id": TestImsiApnProfile.pool_id},
                     ],
                 },
             ],
         )
         assert "sim_id" in body
-        TestProfileC.sim_id = body["sim_id"]
+        TestImsiApnProfile.sim_id = body["sim_id"]
 
     # 5.2 ─────────────────────────────────────────────────────────────────────
     def test_02_lookup_imsi1_smf1(self, lookup_http: httpx.Client):
@@ -110,6 +114,20 @@ class TestProfileC:
         assert r.status_code == 200
         assert r.json()["static_ip"] == IP_C
 
+    # 5.10 ────────────────────────────────────────────────────────────────────
+    def test_10_imsi2_second_apn_resolves_distinct_ip(self, lookup_http: httpx.Client):
+        """imsi_apn mode: IMSI2 + smf4 → IP_E (each IMSI+APN pair has its own IP).
+
+        Matrix outcome 8: IMSI-B + apn2 → IP_E.
+        Confirms IMSI2's second APN entry resolves to its own distinct IP,
+        symmetric with IMSI1 having smf1→IP_A and smf2→IP_B.
+        """
+        r = lookup_http.get("/lookup",
+                            params={"imsi": IMSI2, "apn": APN_SMF4,
+                                    "use_case_id": USE_CASE_ID})
+        assert r.status_code == 200
+        assert r.json()["static_ip"] == IP_E
+
     # 5.5 ─────────────────────────────────────────────────────────────────────
     def test_05_lookup_unknown_apn_no_wildcard(self, lookup_http: httpx.Client):
         """GET /lookup?imsi=IMSI1&apn=smf9.unknown (no match, no wildcard) → 404 apn_not_found."""
@@ -123,15 +141,15 @@ class TestProfileC:
     def test_06_add_wildcard_apn_entry(self, http: httpx.Client):
         """PATCH imsi1 — add {apn:null, static_ip:IP_D} wildcard entry → 200."""
         r = http.patch(
-            f"/profiles/{TestProfileC.sim_id}/imsis/{IMSI1}",
+            f"/profiles/{TestImsiApnProfile.sim_id}/imsis/{IMSI1}",
             json={
                 "apn_ips": [
                     {"apn": APN_SMF1, "static_ip": IP_A,
-                     "pool_id": TestProfileC.pool_id},
+                     "pool_id": TestImsiApnProfile.pool_id},
                     {"apn": APN_SMF2, "static_ip": IP_B,
-                     "pool_id": TestProfileC.pool_id},
+                     "pool_id": TestImsiApnProfile.pool_id},
                     {"apn": None,     "static_ip": IP_D,
-                     "pool_id": TestProfileC.pool_id},
+                     "pool_id": TestImsiApnProfile.pool_id},
                 ],
             },
         )

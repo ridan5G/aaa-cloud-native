@@ -1,10 +1,10 @@
 """
-test_04_profiles_b.py — Profile B: ip_resolution = "imsi"
+test_04_imsi_profile.py — ip_resolution = "imsi"
 
 Each IMSI has its own APN-agnostic IP.  APN is ignored.
 Per-IMSI suspend is supported; SIM-level suspend affects all IMSIs.
 
-Test cases 4.1 – 4.9  (plan-01 §test_04_profiles_b)
+Test cases 4.1 – 4.10  (plan-01 §test_04_imsi_profile)
 """
 import httpx
 
@@ -21,7 +21,7 @@ IP_NEW = "100.65.150.99"
 POOL_SUBNET = "100.65.150.0/24"
 
 
-class TestProfileB:
+class TestImsiProfile:
     pool_id:   str | None = None
     sim_id: str | None = None
 
@@ -53,12 +53,12 @@ class TestProfileB:
             iccid=None,
             account_name="TestAccount",
             imsis=[
-                {"imsi": IMSI1, "static_ip": IP1, "pool_id": TestProfileB.pool_id},
-                {"imsi": IMSI2, "static_ip": IP2, "pool_id": TestProfileB.pool_id},
+                {"imsi": IMSI1, "static_ip": IP1, "pool_id": TestImsiProfile.pool_id},
+                {"imsi": IMSI2, "static_ip": IP2, "pool_id": TestImsiProfile.pool_id},
             ],
         )
         assert "sim_id" in body
-        TestProfileB.sim_id = body["sim_id"]
+        TestImsiProfile.sim_id = body["sim_id"]
 
     # 4.2 ─────────────────────────────────────────────────────────────────────
     def test_02_lookup_imsi1(self, lookup_http: httpx.Client):
@@ -87,18 +87,32 @@ class TestProfileB:
         assert r.status_code == 200
         assert r.json()["static_ip"] == IP2
 
+    # 4.10 ────────────────────────────────────────────────────────────────────
+    def test_10_imsi2_apn_ignored_returns_same_ip(self, lookup_http: httpx.Client):
+        """imsi mode: IMSI2 with a second APN still returns IP2 (APN ignored).
+
+        Matrix outcome 4: IMSI-B + apn2 → IP_B.
+        Mirrors 4.3 (IMSI1 + second APN) for IMSI2, confirming APN-agnostic
+        resolution is symmetric across both IMSIs.
+        """
+        r = lookup_http.get("/lookup",
+                            params={"imsi": IMSI2, "apn": "ims.operator.com",
+                                    "use_case_id": USE_CASE_ID})
+        assert r.status_code == 200
+        assert r.json()["static_ip"] == IP2
+
     # 4.5 ─────────────────────────────────────────────────────────────────────
     def test_05_enrich_iccid(self, http: httpx.Client):
         """PATCH iccid → 200; GET confirms iccid populated."""
-        r = http.patch(f"/profiles/{TestProfileB.sim_id}", json={"iccid": ICCID})
+        r = http.patch(f"/profiles/{TestImsiProfile.sim_id}", json={"iccid": ICCID})
         assert r.status_code == 200
-        body = http.get(f"/profiles/{TestProfileB.sim_id}").json()
+        body = http.get(f"/profiles/{TestImsiProfile.sim_id}").json()
         assert body["iccid"] == ICCID
 
     # 4.6 ─────────────────────────────────────────────────────────────────────
     def test_06_suspend_imsi1(self, http: httpx.Client):
         """PATCH /profiles/{sim_id}/imsis/{imsi1} status=suspended → 200."""
-        r = http.patch(f"/profiles/{TestProfileB.sim_id}/imsis/{IMSI1}",
+        r = http.patch(f"/profiles/{TestImsiProfile.sim_id}/imsis/{IMSI1}",
                        json={"status": "suspended"})
         assert r.status_code == 200
 
@@ -124,9 +138,9 @@ class TestProfileB:
     def test_09_update_imsi1_ip(self, http: httpx.Client, lookup_http: httpx.Client):
         """PATCH imsi1 static_ip → 200; subsequent GET /lookup returns new IP."""
         # Reactivate + change IP
-        r = http.patch(f"/profiles/{TestProfileB.sim_id}/imsis/{IMSI1}",
+        r = http.patch(f"/profiles/{TestImsiProfile.sim_id}/imsis/{IMSI1}",
                        json={"status": "active", "static_ip": IP_NEW,
-                             "pool_id": TestProfileB.pool_id})
+                             "pool_id": TestImsiProfile.pool_id})
         assert r.status_code == 200
 
         r = lookup_http.get("/lookup",

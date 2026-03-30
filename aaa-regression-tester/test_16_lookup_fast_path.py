@@ -8,9 +8,9 @@ Gap analysis vs existing suite
 ────────────────────────────────
   test_10_errors  — covers missing IMSI/APN params in GET /lookup but NOT
                     malformed IMSI format (wrong length, non-digit chars).
-  test_04_profiles_b — tests per-IMSI suspend in imsi mode but NOT SIM-level
-                       suspend (PATCH /profiles/{id} status=suspended).
-  test_05_profiles_c — zero suspend coverage for imsi_apn mode.
+  test_04_imsi_profile — tests per-IMSI suspend in imsi mode but NOT SIM-level
+                         suspend (PATCH /profiles/{id} status=suspended).
+  test_05_imsi_apn_profile — zero suspend coverage for imsi_apn mode.
 
 Resources
 ─────────

@@ -884,6 +884,61 @@ useEffect(() => {
 
 ---
 
+## Resolution Reference — ICCID Dual-IMSI (16 outcomes)
+
+Operators creating or editing profiles in the UI need to understand what static IP a
+subscriber will receive depending on the `ip_resolution` mode selected. The table below
+covers all combinations for a physical SIM card shared by two IMSIs (Dual-SIM device),
+each with two APNs configured.
+
+### DB layout for this scenario
+
+```
+sim_profiles:  sim_id = 42,  ip_resolution = <see per-mode table below>,  status = active
+
+imsi2sim:
+  IMSI-A  →  sim_id = 42
+  IMSI-B  →  sim_id = 42
+
+─── imsi_apn_ips (only populated for imsi / imsi_apn modes) ─────────────────────────────
+
+  mode = imsi:
+    IMSI-A │ apn = NULL    │ 100.65.1.10      ← single wildcard row, APN ignored
+    IMSI-B │ apn = NULL    │ 100.65.2.10
+
+  mode = imsi_apn:
+    IMSI-A │ apn = apn1.net │ 100.65.1.11     ← per-APN rows, no wildcard
+    IMSI-A │ apn = apn2.net │ 100.65.1.12
+    IMSI-B │ apn = apn1.net │ 100.65.2.11
+    IMSI-B │ apn = apn2.net │ 100.65.2.12
+
+─── sim_apn_ips (only populated for iccid / iccid_apn modes) ────────────────────────────
+
+  mode = iccid:
+    sim_id = 42 │ apn = NULL    │ 100.65.3.10  ← single wildcard row, APN ignored
+
+  mode = iccid_apn:
+    sim_id = 42 │ apn = apn1.net │ 100.65.3.11 ← per-APN rows, no wildcard
+    sim_id = 42 │ apn = apn2.net │ 100.65.3.12
+```
+
+### 16-outcome matrix (4 requests × 4 modes)
+
+| Request | `imsi` | `imsi_apn` | `iccid` | `iccid_apn` |
+|---|---|---|---|---|
+| IMSI-A, apn1.net | 200 `100.65.1.10` (APN ignored) | 200 `100.65.1.11` (exact match) | 200 `100.65.3.10` (APN ignored) | 200 `100.65.3.11` (exact match) |
+| IMSI-A, apn2.net | 200 `100.65.1.10` (APN ignored) | 200 `100.65.1.12` (exact match) | 200 `100.65.3.10` (APN ignored) | 200 `100.65.3.12` (exact match) |
+| IMSI-B, apn1.net | 200 `100.65.2.10` (APN ignored) | 200 `100.65.2.11` (exact match) | 200 `100.65.3.10` (APN ignored, same card) | 200 `100.65.3.11` (exact match, same card) |
+| IMSI-B, apn2.net | 200 `100.65.2.10` (APN ignored) | 200 `100.65.2.12` (exact match) | 200 `100.65.3.10` (APN ignored, same card) | 200 `100.65.3.12` (exact match, same card) |
+
+**Key distinction for the UI:** in `imsi` / `imsi_apn` modes each IMSI gets its own IP —
+the IP Resolution column on the SIM detail page shows per-IMSI entries. In `iccid` /
+`iccid_apn` modes both IMSIs share the card-level IP — the UI shows a single entry under
+the ICCID. An unconfigured APN with no wildcard row will produce a `404 apn_not_found`
+at lookup time, which the UI should surface as a warning in the profile validator.
+
+---
+
 ## CSV Template Download (client-side)
 
 No server endpoint needed — the template is generated in the browser:

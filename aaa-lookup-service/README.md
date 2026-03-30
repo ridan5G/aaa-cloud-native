@@ -84,6 +84,13 @@ Step 1 — Execute hot-path SQL query:
   LEFT JOIN   sim_apn_ips ci ON ci.sim_id = sp.sim_id
   WHERE si.imsi = $1
 
+The two LEFT JOINs produce a Cartesian product: the query returns
+`|imsi_apn_ips rows for this IMSI| × |sim_apn_ips rows for this sim_id|` result rows.
+If one side has no matching rows the LEFT JOIN still emits one result row with NULLs for
+that side's columns. Resolvers iterate the full row vector and inspect only the columns
+relevant to their mode — `imsi_apn` / `imsi_static_ip` for IMSI modes, `iccid_apn` /
+`iccid_static_ip` for ICCID modes.
+
 Step 2 — If NO rows returned (IMSI absent from read replica):
   → POST {PROVISIONING_URL}/v1/first-connection
     body: {"imsi": $1, "apn": $2, "imei": ..., "use_case_id": ...}
@@ -129,6 +136,110 @@ The APN is always present in the request but is only used when `ip_resolution` r
 | `iccid_apn` | Exact match in `sim_apn_ips.apn`; fallback to `apn=NULL` wildcard |
 | `imsi` | Ignored — return the single IMSI-level IP |
 | `imsi_apn` | Exact match in `imsi_apn_ips.apn`; fallback to `apn=NULL` wildcard |
+
+---
+
+## Fast Path — ICCID Dual-IMSI Walk-through
+
+This section walks through every combination of the four `ip_resolution` modes against a
+single ICCID shared by two IMSIs, each with two APNs — 4 requests × 4 modes = 16 outcomes.
+
+### Scenario: DB layout
+
+```
+sim_profiles:  sim_id = 42,  ip_resolution = <see per-mode table below>,  status = active
+
+imsi2sim:
+  IMSI-A  →  sim_id = 42
+  IMSI-B  →  sim_id = 42
+
+─── imsi_apn_ips (IMSI-level, only populated for imsi / imsi_apn modes) ──────────────────
+
+  mode = imsi:
+    IMSI-A │ apn = NULL    │ 100.65.1.10      ← single wildcard row, APN ignored
+    IMSI-B │ apn = NULL    │ 100.65.2.10
+
+  mode = imsi_apn:
+    IMSI-A │ apn = apn1.net │ 100.65.1.11     ← per-APN rows, no wildcard
+    IMSI-A │ apn = apn2.net │ 100.65.1.12
+    IMSI-B │ apn = apn1.net │ 100.65.2.11
+    IMSI-B │ apn = apn2.net │ 100.65.2.12
+
+─── sim_apn_ips (card-level, only populated for iccid / iccid_apn modes) ─────────────────
+
+  mode = iccid:
+    sim_id = 42 │ apn = NULL    │ 100.65.3.10  ← single wildcard row, APN ignored
+
+  mode = iccid_apn:
+    sim_id = 42 │ apn = apn1.net │ 100.65.3.11 ← per-APN rows, no wildcard
+    sim_id = 42 │ apn = apn2.net │ 100.65.3.12
+```
+
+The query always anchors on the incoming IMSI (`WHERE si.imsi = $1`). IMSI-B's request
+produces an identical row set structure — only the `imsi_*` values differ.
+
+### Per-mode SQL result rows (shown for an IMSI-A request)
+
+**`imsi` mode** — 1 `imsi_apn_ips` row × 0 `sim_apn_ips` rows → 1 result row
+
+```
+imsi_apn  imsi_static_ip  iccid_apn  iccid_static_ip
+NULL      100.65.1.10     NULL       NULL
+```
+
+**`imsi_apn` mode** — 2 `imsi_apn_ips` rows × 0 `sim_apn_ips` rows → 2 result rows
+
+```
+imsi_apn  imsi_static_ip  iccid_apn  iccid_static_ip
+apn1.net  100.65.1.11     NULL       NULL
+apn2.net  100.65.1.12     NULL       NULL
+```
+
+**`iccid` mode** — 0 `imsi_apn_ips` rows (→ 1 base row with NULLs) × 1 `sim_apn_ips` row → 1 result row
+
+```
+imsi_apn  imsi_static_ip  iccid_apn  iccid_static_ip
+NULL      NULL            NULL       100.65.3.10
+```
+
+**`iccid_apn` mode** — 0 `imsi_apn_ips` rows (→ 1 base row with NULLs) × 2 `sim_apn_ips` rows → 2 result rows
+
+```
+imsi_apn  imsi_static_ip  iccid_apn  iccid_static_ip
+NULL      NULL            apn1.net   100.65.3.11
+NULL      NULL            apn2.net   100.65.3.12
+```
+
+### 16-outcome resolution matrix
+
+| Request | `imsi` | `imsi_apn` | `iccid` | `iccid_apn` |
+|---|---|---|---|---|
+| IMSI-A, apn1.net | 200 `100.65.1.10` (APN ignored) | 200 `100.65.1.11` (exact match) | 200 `100.65.3.10` (APN ignored) | 200 `100.65.3.11` (exact match) |
+| IMSI-A, apn2.net | 200 `100.65.1.10` (APN ignored) | 200 `100.65.1.12` (exact match) | 200 `100.65.3.10` (APN ignored) | 200 `100.65.3.12` (exact match) |
+| IMSI-B, apn1.net | 200 `100.65.2.10` (APN ignored) | 200 `100.65.2.11` (exact match) | 200 `100.65.3.10` (APN ignored, same card) | 200 `100.65.3.11` (exact match, same card) |
+| IMSI-B, apn2.net | 200 `100.65.2.10` (APN ignored) | 200 `100.65.2.12` (exact match) | 200 `100.65.3.10` (APN ignored, same card) | 200 `100.65.3.12` (exact match, same card) |
+
+### Mode notes
+
+**`imsi`** — Resolver picks the single row where `imsi_apn IS NULL`. APN in the request is
+completely ignored. IMSI-A and IMSI-B each own a separate row in `imsi_apn_ips` so they
+always receive different IPs regardless of the requested APN.
+
+**`imsi_apn`** — Resolver scans for an exact `imsi_apn` match (priority 1), then falls back
+to a `imsi_apn IS NULL` wildcard row (priority 2). In this scenario there is no wildcard —
+only per-APN rows — so an unrecognised APN returns `404 apn_not_found`. IMSI-A and IMSI-B
+maintain independent rows in `imsi_apn_ips`, so the same APN resolves to a different IP for
+each IMSI.
+
+**`iccid`** — Resolver picks the single row where `iccid_apn IS NULL`. APN is ignored.
+Both IMSI-A and IMSI-B share `sim_id=42`, so both see the same `sim_apn_ips` row and
+receive the identical card-level IP `100.65.3.10` regardless of which IMSI or APN is
+requested.
+
+**`iccid_apn`** — Resolver scans for an exact `iccid_apn` match, then falls back to a
+`iccid_apn IS NULL` wildcard. APN differentiation is at card level: `IMSI-A, apn1.net`
+and `IMSI-B, apn1.net` both resolve to `100.65.3.11` because they share the same
+`sim_apn_ips` row. An unrecognised APN with no wildcard returns `404 apn_not_found`.
 
 ---
 

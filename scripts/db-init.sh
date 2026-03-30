@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
 # db-init.sh — Apply the AAA schema + grants to the CloudNativePG primary.
 #
-# WHEN TO RUN:
-#   Automatically called by `make setup` and `make bootstrap`.
-#   Run manually if you deployed the chart against a pre-existing CNPG cluster
-#   that predates the initdb ConfigMap (i.e., postInitApplicationSQLRefs never ran).
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║  DEPRECATED — superseded by the Helm post-install/post-upgrade  ║
+# ║  hook Job in charts/aaa-database/templates/db-migrate-job.yaml  ║
+# ║                                                                  ║
+# ║  `helm upgrade --install aaa-platform ...` now automatically     ║
+# ║  runs the migration Job, so `make db-init` is no longer needed   ║
+# ║  as a separate step.                                             ║
+# ║                                                                  ║
+# ║  This script is kept as a manual fallback for:                   ║
+# ║    • environments without Helm hook support                      ║
+# ║    • debugging / one-off schema inspection                       ║
+# ╚══════════════════════════════════════════════════════════════════╝
 #
 # IDEMPOTENT: Uses CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS.
 #   Safe to re-run at any time — existing objects are left untouched.

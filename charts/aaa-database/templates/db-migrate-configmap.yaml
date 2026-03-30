@@ -1,0 +1,191 @@
+{{/*
+Migration SQL ConfigMap — executed by the db-migrate Job on every
+helm install / helm upgrade via the post-install,post-upgrade hook.
+
+Runs as the postgres superuser BEFORE schema.sql so stale tables are
+cleaned up first, column migrations are applied, and then the full
+schema SQL (CREATE TABLE IF NOT EXISTS) fills in any missing objects.
+
+All blocks are idempotent: safe to re-run on any schema generation.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aaa-database.clusterName" . }}-migrate-sql
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aaa-database.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+data:
+  migrate.sql: |
+    -- ================================================================
+    -- AAA Platform — Idempotent migration script
+    -- Applied by the db-migrate Helm hook Job (postgres superuser).
+    -- Runs BEFORE schema.sql; schema.sql handles CREATE TABLE IF NOT EXISTS.
+    -- ================================================================
+
+    -- ── Drop stale tables from superseded schema generations ─────────
+    -- Generation map (old name → current name):
+    --   Plan-1  subscriber_profiles → sim_profiles
+    --           subscriber_imsis    → imsi2sim
+    --           subscriber_apn_ips  → imsi_apn_ips
+    --           subscriber_iccid_ips→ sim_apn_ips
+    --   Plan-2a device_profiles     → sim_profiles  (CASCADE covers children)
+    DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'device_profiles' AND relkind = 'r')
+      AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'sim_profiles' AND relkind = 'r') THEN
+        DROP TABLE device_profiles CASCADE;
+        RAISE NOTICE 'Dropped stale Plan-2a table device_profiles (cascades to imsi2device, imsi_apn_ips, device_apn_ips)';
+      END IF;
+
+      IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'imsi_apn_ips' AND relkind = 'r')
+      AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'imsi2sim' AND relkind = 'r') THEN
+        DROP TABLE imsi_apn_ips CASCADE;
+        RAISE NOTICE 'Dropped stale imsi_apn_ips (FK target changed to imsi2sim)';
+      END IF;
+
+      IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'subscriber_profiles' AND relkind = 'r')
+      AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'sim_profiles' AND relkind = 'r') THEN
+        DROP TABLE subscriber_profiles CASCADE;
+        RAISE NOTICE 'Dropped stale Plan-1 table subscriber_profiles';
+      END IF;
+
+      IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'subscriber_imsis' AND relkind = 'r')
+      AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'imsi2sim' AND relkind = 'r') THEN
+        DROP TABLE subscriber_imsis CASCADE;
+        RAISE NOTICE 'Dropped stale Plan-1 table subscriber_imsis';
+      END IF;
+
+      IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'subscriber_apn_ips' AND relkind = 'r')
+      AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'imsi_apn_ips' AND relkind = 'r') THEN
+        DROP TABLE subscriber_apn_ips CASCADE;
+        RAISE NOTICE 'Dropped stale Plan-1 table subscriber_apn_ips';
+      END IF;
+
+      IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'subscriber_iccid_ips' AND relkind = 'r')
+      AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'sim_apn_ips' AND relkind = 'r') THEN
+        DROP TABLE subscriber_iccid_ips CASCADE;
+        RAISE NOTICE 'Dropped stale Plan-1 table subscriber_iccid_ips';
+      END IF;
+    END;
+    $$;
+
+    -- ── Column migrations: ip_pools.routing_domain_id ─────────────────
+    -- Gen-1: ip_pools had no routing column      → add routing_domain_id FK
+    -- Gen-2: ip_pools had routing_domain TEXT    → replace with routing_domain_id FK
+    -- Gen-3: ip_pools has routing_domain_id UUID → already current, skip
+    DO $$
+    DECLARE
+      v_ip_pools_exists BOOL;
+      v_has_rd_text     BOOL;
+      v_has_rd_id       BOOL;
+      v_default_rd_id   UUID;
+    BEGIN
+      SELECT EXISTS (
+        SELECT 1 FROM pg_class WHERE relname = 'ip_pools' AND relkind = 'r'
+      ) INTO v_ip_pools_exists;
+
+      IF NOT v_ip_pools_exists THEN
+        RAISE NOTICE 'ip_pools migration skipped: table not yet created (schema.sql will create it correctly)';
+        RETURN;
+      END IF;
+
+      SELECT EXISTS (
+        SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+        WHERE c.relname = 'ip_pools' AND a.attname = 'routing_domain'
+          AND a.attnum > 0 AND NOT a.attisdropped
+      ) INTO v_has_rd_text;
+
+      SELECT EXISTS (
+        SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+        WHERE c.relname = 'ip_pools' AND a.attname = 'routing_domain_id'
+          AND a.attnum > 0 AND NOT a.attisdropped
+      ) INTO v_has_rd_id;
+
+      IF v_has_rd_id THEN
+        RAISE NOTICE 'ip_pools migration skipped: routing_domain_id already exists';
+        RETURN;
+      END IF;
+
+      -- Ensure routing_domains exists before adding the FK
+      CREATE TABLE IF NOT EXISTS routing_domains (
+          id               UUID        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+          name             TEXT        NOT NULL,
+          description      TEXT,
+          allowed_prefixes TEXT[]      NOT NULL DEFAULT '{}',
+          created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+          CONSTRAINT uq_routing_domain_name UNIQUE (name)
+      );
+      INSERT INTO routing_domains (name, description)
+      VALUES ('default', 'Default routing domain')
+      ON CONFLICT (name) DO NOTHING;
+
+      IF v_has_rd_text THEN
+        RAISE NOTICE 'Migration Gen-2: ip_pools.routing_domain TEXT → routing_domain_id UUID FK';
+        INSERT INTO routing_domains (name)
+        SELECT DISTINCT routing_domain FROM ip_pools
+        ON CONFLICT (name) DO NOTHING;
+
+        ALTER TABLE ip_pools ADD COLUMN routing_domain_id UUID;
+        UPDATE ip_pools p
+        SET routing_domain_id = rd.id
+        FROM routing_domains rd WHERE rd.name = p.routing_domain;
+        ALTER TABLE ip_pools ALTER COLUMN routing_domain_id SET NOT NULL;
+        ALTER TABLE ip_pools ADD CONSTRAINT ip_pools_routing_domain_id_fkey
+            FOREIGN KEY (routing_domain_id) REFERENCES routing_domains (id);
+        CREATE INDEX IF NOT EXISTS idx_pools_routing_domain_id ON ip_pools (routing_domain_id);
+        ALTER TABLE ip_pools DROP COLUMN routing_domain;
+        DROP INDEX IF EXISTS idx_pools_routing_domain;
+        RAISE NOTICE 'Migration Gen-2 complete';
+      ELSE
+        RAISE NOTICE 'Migration Gen-1: adding routing_domain_id FK to ip_pools';
+        SELECT id INTO v_default_rd_id FROM routing_domains WHERE name = 'default';
+        ALTER TABLE ip_pools ADD COLUMN routing_domain_id UUID;
+        UPDATE ip_pools SET routing_domain_id = v_default_rd_id;
+        ALTER TABLE ip_pools ALTER COLUMN routing_domain_id SET NOT NULL;
+        ALTER TABLE ip_pools ADD CONSTRAINT ip_pools_routing_domain_id_fkey
+            FOREIGN KEY (routing_domain_id) REFERENCES routing_domains (id);
+        CREATE INDEX IF NOT EXISTS idx_pools_routing_domain_id ON ip_pools (routing_domain_id);
+        RAISE NOTICE 'Migration Gen-1 complete';
+      END IF;
+    END;
+    $$;
+
+    -- ── Gen-4: provisioning_mode columns ──────────────────────────────
+    -- Skipped automatically on fresh installs (tables don't exist yet;
+    -- schema.sql will create them with the column already present).
+    DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'imsi_range_configs' AND relkind = 'r') THEN
+        ALTER TABLE imsi_range_configs
+            ADD COLUMN IF NOT EXISTS provisioning_mode TEXT NOT NULL DEFAULT 'first_connect';
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_imsi_range_prov_mode') THEN
+          ALTER TABLE imsi_range_configs ADD CONSTRAINT chk_imsi_range_prov_mode
+              CHECK (provisioning_mode IN ('first_connect', 'immediate'));
+        END IF;
+      END IF;
+
+      IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'iccid_range_configs' AND relkind = 'r') THEN
+        ALTER TABLE iccid_range_configs
+            ADD COLUMN IF NOT EXISTS provisioning_mode TEXT NOT NULL DEFAULT 'first_connect';
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_iccid_range_prov_mode') THEN
+          ALTER TABLE iccid_range_configs ADD CONSTRAINT chk_iccid_range_prov_mode
+              CHECK (provisioning_mode IN ('first_connect', 'immediate'));
+        END IF;
+      END IF;
+    END;
+    $$;
+
+    -- ── DEFAULT PRIVILEGES for aaa_app ────────────────────────────────
+    -- Covers tables/sequences created by this Job (running as postgres).
+    -- The GRANT ON ALL TABLES at the end of schema.sql handles objects
+    -- that already exist at the time schema.sql runs.
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO aaa_app;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+        GRANT USAGE, SELECT ON SEQUENCES TO aaa_app;
