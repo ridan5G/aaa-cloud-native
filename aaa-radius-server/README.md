@@ -1,6 +1,8 @@
 # aaa-radius-server
 
-Lightweight C++ RADIUS authentication server. Receives `Access-Request` packets on UDP/1812, performs a single HTTP lookup, and returns `Access-Accept` (with `Framed-IP-Address`) or `Access-Reject`.
+Lightweight C++ RADIUS authentication server. Its **sole purpose is RADIUS-to-REST protocol translation** — it receives `Access-Request` packets on UDP/1812, forwards the IMSI/APN to `aaa-lookup-service` via a single `GET /lookup` REST call, and returns `Access-Accept` (with `Framed-IP-Address`) or `Access-Reject`.
+
+> **Deployment note:** This component is only required when the upstream NAS/PGW/SMF/GGSN nodes speak RADIUS (UDP/1812). If your access nodes can send authentication requests directly as REST calls to `aaa-lookup-service`, this service can be removed from the deployment entirely — `aaa-lookup-service` already exposes the full `GET /lookup` HTTP interface.
 
 ## Role & SLA
 
