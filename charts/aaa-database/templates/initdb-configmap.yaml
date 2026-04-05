@@ -322,8 +322,7 @@ data:
         account_name    TEXT,
         f_imsi          TEXT        NOT NULL,
         t_imsi          TEXT        NOT NULL,
-        pool_id         UUID        NOT NULL
-                                    REFERENCES ip_pools (pool_id),
+        pool_id         UUID        REFERENCES ip_pools (pool_id),  -- nullable: slot uses APN-pool routing when NULL
         ip_resolution   TEXT        NOT NULL DEFAULT 'imsi',
         iccid_range_id  BIGINT
                                     REFERENCES iccid_range_configs (id)
@@ -407,7 +406,7 @@ data:
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
         CONSTRAINT chk_bulk_job_status
-            CHECK (status IN ('queued', 'running', 'completed', 'failed'))
+            CHECK (status IN ('queued', 'running', 'completed', 'completed_with_errors', 'failed'))
     );
 
     CREATE OR REPLACE TRIGGER trg_bj_updated_at

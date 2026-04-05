@@ -1,18 +1,10 @@
 #!/usr/bin/env bash
 # db-init.sh — Apply the AAA schema + grants to the CloudNativePG primary.
 #
-# ╔══════════════════════════════════════════════════════════════════╗
-# ║  DEPRECATED — superseded by the Helm post-install/post-upgrade  ║
-# ║  hook Job in charts/aaa-database/templates/db-migrate-job.yaml  ║
-# ║                                                                  ║
-# ║  `helm upgrade --install aaa-platform ...` now automatically     ║
-# ║  runs the migration Job, so `make db-init` is no longer needed   ║
-# ║  as a separate step.                                             ║
-# ║                                                                  ║
-# ║  This script is kept as a manual fallback for:                   ║
-# ║    • environments without Helm hook support                      ║
-# ║    • debugging / one-off schema inspection                       ║
-# ╚══════════════════════════════════════════════════════════════════╝
+# WHEN TO RUN:
+#   Automatically called by `make setup` and `make bootstrap`.
+#   Run manually if you deployed the chart against a pre-existing CNPG cluster
+#   that predates the initdb ConfigMap (i.e., postInitApplicationSQLRefs never ran).
 #
 # IDEMPOTENT: Uses CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS.
 #   Safe to re-run at any time — existing objects are left untouched.
@@ -273,6 +265,55 @@ DO $$ BEGIN
 END $$;
 SQL
 echo "Gen-4 migration done."
+
+# ── Gen-5: nullable pool_id on imsi_range_configs ────────────────────────────
+# Slots in imsi_apn/iccid_apn mode route IPs entirely through range_config_apn_pools
+# and legitimately have no default pool_id.  The NOT NULL constraint was too strict.
+# ALTER COLUMN … DROP NOT NULL is idempotent when the constraint is already absent.
+echo "Applying Gen-5 migration (nullable imsi_range_configs.pool_id)..."
+kubectl exec -i "${PRIMARY_POD}" \
+  -n "${NAMESPACE}" \
+  -- psql -U postgres -d "${DB_NAME}" <<'SQL'
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'imsi_range_configs'
+          AND column_name = 'pool_id'
+          AND is_nullable = 'NO'
+    ) THEN
+        ALTER TABLE imsi_range_configs ALTER COLUMN pool_id DROP NOT NULL;
+        RAISE NOTICE 'Gen-5: dropped NOT NULL from imsi_range_configs.pool_id';
+    ELSE
+        RAISE NOTICE 'Gen-5: imsi_range_configs.pool_id already nullable — skipped';
+    END IF;
+END $$;
+SQL
+echo "Gen-5 migration done."
+
+# ── Gen-6: add 'completed_with_errors' to chk_bulk_job_status ────────────────
+# iccid-range immediate provisioning jobs use this status when some cards fail
+# (e.g. missing APN config on a slot).  The original constraint only had four
+# values; adding the fifth is idempotent via DROP+ADD CONSTRAINT.
+echo "Applying Gen-6 migration (chk_bulk_job_status + completed_with_errors)..."
+kubectl exec -i "${PRIMARY_POD}" \
+  -n "${NAMESPACE}" \
+  -- psql -U postgres -d "${DB_NAME}" <<'SQL'
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.check_constraints
+        WHERE constraint_name = 'chk_bulk_job_status'
+          AND check_clause LIKE '%completed_with_errors%'
+    ) THEN
+        ALTER TABLE bulk_jobs DROP CONSTRAINT IF EXISTS chk_bulk_job_status;
+        ALTER TABLE bulk_jobs ADD CONSTRAINT chk_bulk_job_status
+            CHECK (status IN ('queued', 'running', 'completed', 'completed_with_errors', 'failed'));
+        RAISE NOTICE 'Gen-6: added completed_with_errors to chk_bulk_job_status';
+    ELSE
+        RAISE NOTICE 'Gen-6: chk_bulk_job_status already includes completed_with_errors — skipped';
+    END IF;
+END $$;
+SQL
+echo "Gen-6 migration done."
 
 # ── Apply schema SQL from ConfigMap ───────────────────────────────────────────
 echo "Applying schema SQL from ConfigMap '${CONFIGMAP}'..."

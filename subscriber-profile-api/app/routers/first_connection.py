@@ -79,11 +79,10 @@ async def _load_apn_pools(
     """Return (apn, pool_id) pairs to allocate in a single transaction.
 
     - imsi / iccid modes:   [(None, default_pool)]  — single IP, APN-agnostic.
-    - imsi_apn / iccid_apn: all APNs from range_config_apn_pools, ensuring
-      request_apn is included (using default_pool if not explicitly mapped).
-      Falls back to [(request_apn, default_pool)] when no entries are defined.
-      When request_apn is None (immediate provisioning), only configured APNs
-      are returned; if none are configured, [(None, default_pool)] is returned.
+    - imsi_apn / iccid_apn: all APNs from range_config_apn_pools.
+      APN pool entries are MANDATORY for these modes; returns [] when none are
+      configured so callers can raise a hard error (missing_apn_config).
+      request_apn is added with default_pool if it is not already mapped.
     """
     if ip_resolution not in ("imsi_apn", "iccid_apn"):
         return [(None, default_pool)]
@@ -95,9 +94,9 @@ async def _load_apn_pools(
     )
 
     if not rows:
-        if request_apn is None:
-            return [(None, default_pool)]
-        return [(request_apn, default_pool)]
+        # APN config is mandatory for imsi_apn / iccid_apn — return [] so the
+        # caller can surface a clear missing_apn_config error.
+        return []
 
     pairs: dict[str, str] = {row["apn"]: row["pool_id"] for row in rows}
     if request_apn is not None and request_apn not in pairs:
@@ -215,6 +214,12 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
     if iccid_range_id is None:
         async with conn.transaction():
             apn_pools = await _load_apn_pools(conn, range_config_id, pool_id, ip_resolution, body.apn)
+            if not apn_pools:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"error": "missing_apn_config",
+                            "message": "range config has no APN pool entries for imsi_apn/iccid_apn mode"},
+                )
             allocated_ip = None
 
             if _realloc_sim_id:
@@ -317,6 +322,12 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
                 if not allocated_ip:
                     # Not pre-provisioned (crash recovery) — allocate all APNs now.
                     apn_pools = await _load_apn_pools(conn, range_config_id, pool_id, ip_resolution, body.apn)
+                    if not apn_pools:
+                        raise HTTPException(
+                            status_code=422,
+                            detail={"error": "missing_apn_config",
+                                    "message": "slot has no APN pool entries for imsi_apn/iccid_apn mode"},
+                        )
                     for apn_val, apn_pool in apn_pools:
                         ip = await _allocate_ip(conn, apn_pool)
                         if not ip:
@@ -346,6 +357,12 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
                 if not allocated_ip:
                     # IPs were released — re-allocate for this card-level profile.
                     apn_pools = await _load_apn_pools(conn, range_config_id, pool_id, ip_resolution, body.apn)
+                    if not apn_pools:
+                        raise HTTPException(
+                            status_code=422,
+                            detail={"error": "missing_apn_config",
+                                    "message": "slot has no APN pool entries for iccid_apn mode"},
+                        )
                     for pv, pp in apn_pools:
                         ip = await _allocate_ip(conn, pp)
                         if not ip:
@@ -383,6 +400,12 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
         # ── First slot to connect for this card ───────────────────────────────
         # Load all APNs to provision for this slot.
         apn_pools = await _load_apn_pools(conn, range_config_id, pool_id, ip_resolution, body.apn)
+        if not apn_pools:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "missing_apn_config",
+                        "message": "slot has no APN pool entries for imsi_apn/iccid_apn mode"},
+            )
         allocated_ip = None
 
         metadata = json.dumps({"tags": ["auto-allocated", "multi-imsi"], "imei": body.imei})
@@ -432,9 +455,11 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
         # Each sibling gets IPs for all its defined APNs, preventing a thundering herd.
         sibling_rows = await conn.fetch(
             """
-            SELECT id, f_imsi, imsi_slot, pool_id::text AS pool_id
-            FROM imsi_range_configs
-            WHERE iccid_range_id = $1 AND status = 'active' AND id != $2
+            SELECT irc.id, irc.f_imsi, irc.imsi_slot,
+                   COALESCE(irc.pool_id, ir.pool_id)::text AS pool_id
+            FROM imsi_range_configs irc
+            JOIN iccid_range_configs ir ON ir.id = irc.iccid_range_id
+            WHERE irc.iccid_range_id = $1 AND irc.status = 'active' AND irc.id != $2
             """,
             iccid_range_id, range_config_id,
         )
@@ -452,8 +477,14 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
             if ip_resolution in ("imsi", "imsi_apn"):
                 # Load all APNs for this sibling's slot (each slot may have its own overrides).
                 sibling_apn_pools = await _load_apn_pools(
-                    conn, sibling["id"], sibling_base_pool, ip_resolution, body.apn
+                    conn, sibling["id"], sibling_base_pool, ip_resolution, body.apn,
                 )
+                if ip_resolution == "imsi_apn" and not sibling_apn_pools:
+                    raise HTTPException(
+                        status_code=422,
+                        detail={"error": "missing_apn_config",
+                                "message": f"sibling slot {sibling['imsi_slot']} has no APN pool entries for imsi_apn mode"},
+                    )
                 for apn_val, apn_pool in sibling_apn_pools:
                     sibling_ip = await _allocate_ip(conn, apn_pool)
                     if not sibling_ip:

@@ -17,6 +17,7 @@ spec:
         prometheus.io/scrape: "false"
     spec:
       restartPolicy: Never
+      serviceAccountName: {{ if .Values.rbac.create }}{{ include "aaa-regression-tester.fullname" . }}{{ else }}default{{ end }}
       containers:
         - name: regression-tester
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -58,6 +59,10 @@ spec:
             {{- end }}
             - name: DB_URL
               value: {{ .Values.env.DB_URL | quote }}
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:

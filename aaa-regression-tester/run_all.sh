@@ -75,6 +75,59 @@ if [ -n "${PUSHGATEWAY_URL:-}" ]; then
     || echo "WARNING: metrics push failed (non-fatal)"
 fi
 
+# ── Check pod logs for exceptions ─────────────────────────────────────────────
+check_pod_exceptions() {
+  local namespace="${NAMESPACE:-aaa-platform}"
+  local -a prefixes=(
+    "aaa-platform-aaa-lookup-service"
+    "aaa-platform-aaa-radius-server"
+    "aaa-platform-subscriber-profile-api"
+  )
+  local exception_pods=0
+
+  echo "══════════════════════════════════════════════════════"
+  echo " Checking pod logs for exceptions (namespace: ${namespace})"
+  echo "══════════════════════════════════════════════════════"
+
+  for prefix in "${prefixes[@]}"; do
+    local pods
+    pods=$(kubectl get pods -n "${namespace}" --no-headers 2>/dev/null \
+           | awk '{print $1}' | grep "^${prefix}" || true)
+
+    if [ -z "${pods}" ]; then
+      echo "  WARNING: no pods found with prefix '${prefix}'"
+      continue
+    fi
+
+    for pod in ${pods}; do
+      echo -n "  ${pod}: "
+      local hits
+      hits=$(kubectl logs -n "${namespace}" "${pod}" 2>/dev/null \
+             | grep -i "exception" || true)
+      if [ -n "${hits}" ]; then
+        echo "EXCEPTIONS FOUND:"
+        echo "${hits}" | head -100 | sed 's/^/    /'
+        exception_pods=$((exception_pods + 1))
+      else
+        echo "ok (no exceptions)"
+      fi
+    done
+  done
+
+  echo "──────────────────────────────────────────────────────"
+  if [ "${exception_pods}" -gt 0 ]; then
+    echo " WARNING: exceptions detected in ${exception_pods} pod(s) — review logs above"
+  else
+    echo " No exceptions found in any pod"
+  fi
+}
+
+if kubectl version --client >/dev/null 2>&1; then
+  check_pod_exceptions
+else
+  echo "WARNING: kubectl not available — skipping pod log exception check"
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo "══════════════════════════════════════════════════════"
 echo " Results written to: ${JUNIT_XML}"

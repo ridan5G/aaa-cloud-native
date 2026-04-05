@@ -320,6 +320,7 @@ function ProfileDetail() {
   const [newImsi, setNewImsi] = useState({ imsi: '', priority: '1', static_ip: '', pool_id: '' })
   const [saving,  setSaving]  = useState(false)
   const [connecting, setConnecting] = useState(false)
+  const [connectApn, setConnectApn] = useState('')
 
   async function load() {
     if (!sim_id) return
@@ -372,8 +373,8 @@ function ProfileDetail() {
   async function simulateFirstConnect() {
     const imsi = imsis[0]?.imsi
     if (!imsi) { show('error', 'No IMSIs on this SIM'); return }
-    // Use first known APN from existing IP mappings; fall back to dummy for APN-agnostic modes
-    const apn = imsis[0]?.apn_ips?.[0]?.apn ?? profile?.iccid_ips?.[0]?.apn ?? 'internet'
+    const apn = connectApn.trim()
+    if (!apn) { show('error', 'Enter an APN before simulating first connection'); return }
     setConnecting(true)
     try {
       const r = await apiClient.post('/first-connection', { imsi, apn })
@@ -454,10 +455,19 @@ function ProfileDetail() {
               <button onClick={() => patchProfile({ status: 'active' })} className="btn-ghost text-xs text-green-600 border border-green-200">Reactivate</button>
             )}
             {profile.status === 'active' && (
-              <button onClick={simulateFirstConnect} disabled={connecting}
-                className="btn-ghost text-xs text-purple-600 border border-purple-200">
-                {connecting ? 'Connecting…' : 'Simulate 1st Connect'}
-              </button>
+              <span className="flex items-center gap-1">
+                <input
+                  type="text"
+                  value={connectApn}
+                  onChange={e => setConnectApn(e.target.value)}
+                  placeholder="APN…"
+                  className="px-2 py-1 text-xs border border-border rounded-md bg-page focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 w-28"
+                />
+                <button onClick={simulateFirstConnect} disabled={connecting}
+                  className="btn-ghost text-xs text-purple-600 border border-purple-200">
+                  {connecting ? 'Connecting…' : 'Simulate 1st Connect'}
+                </button>
+              </span>
             )}
             {profile.status !== 'terminated' && (
               <button onClick={releaseIps} className="btn-ghost text-xs text-blue-600 border border-blue-200">Release IPs</button>

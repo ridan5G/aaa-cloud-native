@@ -1,5 +1,6 @@
 import re
 import json
+import logging
 import uuid as _uuid
 from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -11,6 +12,7 @@ from app.routers.first_connection import _allocate_ip, _load_apn_pools
 from app.routers.range_configs import _check_pool_capacity
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 ICCID_RE = re.compile(r"^\d{19,20}$")
 IMSI_RE = re.compile(r"^\d{15}$")
@@ -88,88 +90,111 @@ async def _run_provision_iccid_job(
     processed = failed = 0
     errors = []
 
-    async with get_pool().acquire() as conn:
-        for batch_start in range(0, card_count, BULK_BATCH_SIZE):
-            batch_offsets = range(batch_start, min(batch_start + BULK_BATCH_SIZE, card_count))
-            async with conn.transaction():
-                for offset in batch_offsets:
-                    derived_iccid = str(int(f_iccid) + offset).zfill(iccid_len)
-                    try:
-                        existing = await conn.fetchval(
-                            "SELECT sim_id::text FROM sim_profiles WHERE iccid = $1",
-                            derived_iccid,
-                        )
-                        if existing:
-                            processed += 1
-                            continue
-
-                        sim_id = await conn.fetchval(
-                            "INSERT INTO sim_profiles (account_name, status, ip_resolution, iccid, metadata) "
-                            "VALUES ($1,'active',$2,$3,$4::jsonb) RETURNING sim_id::text",
-                            account_name,
-                            ip_resolution,
-                            derived_iccid,
-                            metadata,
-                        )
-
-                        for slot in slot_rows:
-                            slot_imsi = str(int(slot["f_imsi"]) + offset).zfill(15)
-                            slot_pool = slot["pool_id"] or parent.get("pool_id") or ""
-                            await conn.execute(
-                                "INSERT INTO imsi2sim (imsi, sim_id, status, priority) "
-                                "VALUES ($1,$2::uuid,'active',$3) ON CONFLICT DO NOTHING",
-                                slot_imsi,
-                                sim_id,
-                                slot["imsi_slot"],
+    try:
+        async with get_pool().acquire() as conn:
+            for batch_start in range(0, card_count, BULK_BATCH_SIZE):
+                batch_offsets = range(batch_start, min(batch_start + BULK_BATCH_SIZE, card_count))
+                async with conn.transaction():
+                    for offset in batch_offsets:
+                        derived_iccid = str(int(f_iccid) + offset).zfill(iccid_len)
+                        try:
+                            existing = await conn.fetchval(
+                                "SELECT sim_id::text FROM sim_profiles WHERE iccid = $1",
+                                derived_iccid,
                             )
-                            if ip_resolution in ("imsi", "imsi_apn"):
-                                apn_pools = await _load_apn_pools(
-                                    conn, slot["id"], slot_pool, ip_resolution
-                                )
-                                for apn_val, apn_pool in apn_pools:
-                                    ip = await _allocate_ip(conn, apn_pool)
-                                    if not ip:
-                                        raise RuntimeError(f"pool_exhausted:{apn_pool}")
-                                    await conn.execute(
-                                        "INSERT INTO imsi_apn_ips (imsi,apn,static_ip,pool_id) "
-                                        "VALUES ($1,$2,$3::inet,$4::uuid)",
-                                        slot_imsi,
-                                        apn_val,
-                                        ip,
-                                        apn_pool,
-                                    )
-                            # iccid/iccid_apn: allocate card-level IPs from slot 1 only
-                            elif slot["imsi_slot"] == 1:
-                                apn_pools = await _load_apn_pools(
-                                    conn, slot["id"], slot_pool, ip_resolution
-                                )
-                                for apn_val, apn_pool in apn_pools:
-                                    ip = await _allocate_ip(conn, apn_pool)
-                                    if not ip:
-                                        raise RuntimeError(f"pool_exhausted:{apn_pool}")
-                                    await conn.execute(
-                                        "INSERT INTO sim_apn_ips (sim_id,apn,static_ip,pool_id) "
-                                        "VALUES ($1::uuid,$2,$3::inet,$4::uuid)",
-                                        sim_id,
-                                        apn_val,
-                                        ip,
-                                        apn_pool,
-                                    )
-                        processed += 1
-                    except Exception as exc:
-                        failed += 1
-                        errors.append({"iccid": derived_iccid, "message": str(exc)})
+                            if existing:
+                                processed += 1
+                                continue
 
-        status = "completed" if not errors else "completed_with_errors"
-        await conn.execute(
-            "UPDATE bulk_jobs SET status=$1, processed=$2, failed=$3, "
-            "errors=$4::jsonb, updated_at=now() WHERE job_id=$5::uuid",
-            status,
-            processed,
-            failed,
-            errors,
-            job_id,
-        )
+                            sim_id = await conn.fetchval(
+                                "INSERT INTO sim_profiles (account_name, status, ip_resolution, iccid, metadata) "
+                                "VALUES ($1,'active',$2,$3,$4::jsonb) RETURNING sim_id::text",
+                                account_name,
+                                ip_resolution,
+                                derived_iccid,
+                                metadata,
+                            )
+
+                            for slot in slot_rows:
+                                slot_imsi = str(int(slot["f_imsi"]) + offset).zfill(15)
+                                slot_pool = slot["pool_id"] or parent.get("pool_id")
+                                await conn.execute(
+                                    "INSERT INTO imsi2sim (imsi, sim_id, status, priority) "
+                                    "VALUES ($1,$2::uuid,'active',$3) ON CONFLICT DO NOTHING",
+                                    slot_imsi,
+                                    sim_id,
+                                    slot["imsi_slot"],
+                                )
+                                if ip_resolution in ("imsi", "imsi_apn"):
+                                    apn_pools = await _load_apn_pools(
+                                        conn, slot["id"], slot_pool, ip_resolution
+                                    )
+                                    if ip_resolution == "imsi_apn" and not apn_pools:
+                                        raise RuntimeError(
+                                            f"missing_apn_config: slot {slot['imsi_slot']} has no APN pool "
+                                            f"entries for imsi_apn mode"
+                                        )
+                                    for apn_val, apn_pool in apn_pools:
+                                        ip = await _allocate_ip(conn, apn_pool)
+                                        if not ip:
+                                            raise RuntimeError(f"pool_exhausted:{apn_pool}")
+                                        await conn.execute(
+                                            "INSERT INTO imsi_apn_ips (imsi,apn,static_ip,pool_id) "
+                                            "VALUES ($1,$2,$3::inet,$4::uuid)",
+                                            slot_imsi,
+                                            apn_val,
+                                            ip,
+                                            apn_pool,
+                                        )
+                                # iccid/iccid_apn: allocate card-level IPs from slot 1 only
+                                elif slot["imsi_slot"] == 1:
+                                    apn_pools = await _load_apn_pools(
+                                        conn, slot["id"], slot_pool, ip_resolution
+                                    )
+                                    if ip_resolution == "iccid_apn" and not apn_pools:
+                                        raise RuntimeError(
+                                            f"missing_apn_config: slot {slot['imsi_slot']} has no APN pool "
+                                            f"entries for iccid_apn mode"
+                                        )
+                                    for apn_val, apn_pool in apn_pools:
+                                        ip = await _allocate_ip(conn, apn_pool)
+                                        if not ip:
+                                            raise RuntimeError(f"pool_exhausted:{apn_pool}")
+                                        await conn.execute(
+                                            "INSERT INTO sim_apn_ips (sim_id,apn,static_ip,pool_id) "
+                                            "VALUES ($1::uuid,$2,$3::inet,$4::uuid)",
+                                            sim_id,
+                                            apn_val,
+                                            ip,
+                                            apn_pool,
+                                        )
+                            processed += 1
+                        except Exception as exc:
+                            failed += 1
+                            errors.append({"iccid": derived_iccid, "message": str(exc)})
+
+            status = "completed" if not errors else "completed_with_errors"
+            await conn.execute(
+                "UPDATE bulk_jobs SET status=$1, processed=$2, failed=$3, "
+                "errors=$4::jsonb, updated_at=now() WHERE job_id=$5::uuid",
+                status,
+                processed,
+                failed,
+                errors,
+                job_id,
+            )
+    except Exception as job_exc:
+        logger.error("Unhandled exception in _run_provision_iccid_job %s: %s", job_id, job_exc)
+        try:
+            async with get_pool().acquire() as _conn:
+                await _conn.execute(
+                    "UPDATE bulk_jobs SET status='failed', "
+                    "errors=$1::jsonb, updated_at=now() WHERE job_id=$2::uuid",
+                    [{"message": str(job_exc)}],
+                    job_id,
+                )
+        except Exception:
+            pass
 
 
 @router.post("/iccid-range-configs", status_code=201, dependencies=[Depends(require_auth)])
@@ -508,7 +533,7 @@ async def add_imsi_slot(
                         "SELECT id, f_imsi, imsi_slot, COALESCE(pool_id::text, $2) AS pool_id "
                         "FROM imsi_range_configs WHERE iccid_range_id = $1 AND status='active'",
                         config_id,
-                        parent["pool_id"] or "",
+                        parent["pool_id"],
                     )
                     slot_rows = [dict(s) for s in slot_rows_raw]
                     for slot in slot_rows:

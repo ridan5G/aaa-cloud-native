@@ -99,7 +99,7 @@ function IccidRangeConfigList() {
         setShowNew(false)
         navigate('/bulk-jobs')
       } else {
-        show('success', 'ICCID range config created')
+        show('success', 'SIM range config created')
         setShowNew(false); load()
       }
     } catch (e) { show('error', String(e)) }
@@ -110,7 +110,7 @@ function IccidRangeConfigList() {
       <div className="flex items-center justify-between">
         <div>
           <p className="text-xs text-gray-400 uppercase tracking-widest font-medium">Configuration</p>
-          <h1 className="page-title">ICCID Range Configs</h1>
+          <h1 className="page-title">SIM Range Configs</h1>
         </div>
         <button onClick={() => setShowNew(true)} className="btn-primary">+ New Config</button>
       </div>
@@ -646,6 +646,7 @@ function NewIccidConfigModal({
     ip_resolution: 'iccid', imsi_count: 1, description: '',
     provisioning_mode: 'first_connect',
   })
+  const [skipIccid, setSkipIccid] = useState(false)
   const [iccidCount, setIccidCount] = useState<string>('')
   const [slotDrafts, setSlotDrafts] = useState<ImsiSlotDraft[]>([{ f_imsi: '', t_imsi: '', pool_id: '', apn_pools: [] }])
   const [cardApnPools, setCardApnPools] = useState<ApnPoolDraft[]>([])
@@ -718,7 +719,7 @@ function NewIccidConfigModal({
 
   const immediateSlotsMissing = form.provisioning_mode === 'immediate' &&
     slotDrafts.some(s => !s.f_imsi || !s.t_imsi)
-  const canSubmit = !!form.f_iccid && !!form.t_iccid && !immediateSlotsMissing
+  const canSubmit = (skipIccid || (!!form.f_iccid && !!form.t_iccid)) && !immediateSlotsMissing
 
   return (
     <>
@@ -726,33 +727,52 @@ function NewIccidConfigModal({
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto">
         <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg my-4">
           <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-            <h2 className="text-base font-semibold">New ICCID Range Config</h2>
+            <h2 className="text-base font-semibold">New SIM Range Config</h2>
             <button onClick={onClose} className="btn-icon text-xl leading-none">×</button>
           </div>
           <div className="px-6 py-5 space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="field">
-                <label className="label">From ICCID *</label>
-                <input className="input font-mono text-sm" placeholder="8901260000000000000"
-                  value={form.f_iccid} onChange={e => setIccidField('f_iccid', e.target.value)} />
+            <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={skipIccid}
+                onChange={e => {
+                  setSkipIccid(e.target.checked)
+                  if (e.target.checked) {
+                    setForm(f => ({ ...f, f_iccid: '', t_iccid: '' }))
+                    setIccidCount('')
+                  }
+                }}
+                className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary"
+              />
+              I don't have an ICCID range (skip)
+            </label>
+            {!skipIccid && (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="field">
+                  <label className="label">From ICCID *</label>
+                  <input className="input font-mono text-sm" placeholder="8901260000000000000"
+                    value={form.f_iccid} onChange={e => setIccidField('f_iccid', e.target.value)} />
+                </div>
+                <div className="field">
+                  <label className="label">To ICCID *</label>
+                  <input className="input font-mono text-sm" placeholder="8901260000000099999"
+                    value={form.t_iccid} onChange={e => setIccidField('t_iccid', e.target.value)} />
+                </div>
               </div>
-              <div className="field">
-                <label className="label">To ICCID *</label>
-                <input className="input font-mono text-sm" placeholder="8901260000000099999"
-                  value={form.t_iccid} onChange={e => setIccidField('t_iccid', e.target.value)} />
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-4">
-              <div className="field col-span-2">
+            )}
+            <div className={`grid gap-4 ${skipIccid ? 'grid-cols-1' : 'grid-cols-3'}`}>
+              <div className={`field ${skipIccid ? '' : 'col-span-2'}`}>
                 <label className="label">Account Name</label>
                 <input className="input text-sm" placeholder="Operator A"
                   value={form.account_name} onChange={e => setF('account_name', e.target.value)} />
               </div>
-              <div className="field">
-                <label className="label">ICCID Count</label>
-                <input className="input text-sm bg-gray-50 text-gray-500 cursor-default" readOnly
-                  value={iccidCount || '—'} tabIndex={-1} />
-              </div>
+              {!skipIccid && (
+                <div className="field">
+                  <label className="label">ICCID Count</label>
+                  <input className="input text-sm bg-gray-50 text-gray-500 cursor-default" readOnly
+                    value={iccidCount || '—'} tabIndex={-1} />
+                </div>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="field">

@@ -32,13 +32,19 @@ def _force_clear_pool_ips(pool_id: str) -> None:
             await conn.execute(
                 "DELETE FROM sim_apn_ips WHERE pool_id = $1::uuid", pool_id
             )
+            # Clear APN-pool catalog entries that reference this pool.
+            # These may exist when a slot uses pool_id=NULL (APN-only routing) but
+            # its per-APN entries still point to this pool — teardown skips them.
+            await conn.execute(
+                "DELETE FROM range_config_apn_pools WHERE pool_id = $1::uuid", pool_id
+            )
             # Clear range configs that reference this pool so DELETE /pools succeeds.
             # iccid_range_configs.pool_id is nullable — only delete rows that match.
             # Deleting iccid_range_configs cascades to imsi slots (imsi_range_configs).
             await conn.execute(
                 "DELETE FROM iccid_range_configs WHERE pool_id = $1::uuid", pool_id
             )
-            # Standalone imsi_range_configs (pool_id NOT NULL, no cascade from above)
+            # Standalone imsi_range_configs (pool_id nullable after Gen-5 migration)
             await conn.execute(
                 "DELETE FROM imsi_range_configs WHERE pool_id = $1::uuid", pool_id
             )
@@ -91,10 +97,10 @@ def create_pool(
 ) -> dict:
     """POST /pools and return the full response body including pool_id.
 
-    If replace_on_conflict=True and a 409 pool_overlap is returned, the
-    conflicting pool is deleted and the request is retried once. If the
-    conflicting pool itself returns 409 pool_in_use (stale allocated IPs),
-    those IPs are cleared directly via DB before retrying the delete.
+    If replace_on_conflict=True and a 409 pool_overlap is returned, stale
+    data referencing the conflicting pool is cleared directly via DB
+    (allocated IPs, APN-pool catalog entries, stale range configs), then
+    the conflicting pool is deleted and the request is retried once.
     """
     body: dict = {
         "name":         pool_name,
@@ -112,11 +118,12 @@ def create_pool(
     if resp.status_code == 409 and replace_on_conflict:
         conflict_id = resp.json().get("conflicting_pool_id")
         if conflict_id:
-            del_resp = http.delete(f"/pools/{conflict_id}")
-            if del_resp.status_code == 409:
-                # pool_in_use — clear stale IPs via DB then force-delete
-                _force_clear_pool_ips(conflict_id)
-                http.delete(f"/pools/{conflict_id}")
+            # Always proactively clear stale data before attempting delete.
+            # This handles both 409 pool_in_use (allocated IPs) and 500 FK-
+            # violation (range_config_apn_pools entries left by a teardown that
+            # never ran because a prior setup_class raised before completing).
+            _force_clear_pool_ips(conflict_id)
+            http.delete(f"/pools/{conflict_id}")
             resp = http.post("/pools", json=body)
     assert resp.status_code == 201, f"create_pool failed: {resp.status_code} {resp.text}"
     return resp.json()

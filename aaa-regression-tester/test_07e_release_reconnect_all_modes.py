@@ -32,6 +32,7 @@ from fixtures.range_configs import (
     create_iccid_range_config,
     delete_iccid_range_config,
     add_imsi_slot,
+    add_apn_pool,
 )
 
 # ── Module constants ──────────────────────────────────────────────────────────
@@ -187,7 +188,7 @@ class TestReleaseReconnectAllModes:
             )
             cls.iccid_rc_ids["iccid_apn"] = iccid_apn_rc["id"]
 
-            add_imsi_slot(
+            slot_iccid_apn = add_imsi_slot(
                 c,
                 iccid_range_id=iccid_apn_rc["id"],
                 f_imsi=F_IMSI_ICCID_APN,
@@ -196,6 +197,9 @@ class TestReleaseReconnectAllModes:
                 ip_resolution="iccid_apn",
                 pool_id=cls.pool_ids["iccid_apn"],
             )
+            # iccid_apn mode requires APN pool entries (mandatory per rule)
+            add_apn_pool(c, range_config_id=slot_iccid_apn["range_config_id"],
+                         apn=APN, pool_id=cls.pool_ids["iccid_apn"])
 
     @classmethod
     def teardown_class(cls):

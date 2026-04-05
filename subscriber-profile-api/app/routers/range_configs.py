@@ -67,7 +67,10 @@ async def _check_pool_capacity(
             range_config_id,
             default_pool,
         )
-        pools_needed = {default_pool: range_size} if not rows else {}
+        # Only fall back to default_pool when it is known (not None/empty).
+        # A slot with no APN-pool rows AND no default pool is misconfigured;
+        # the job will catch it with missing_apn_config — skip capacity check here.
+        pools_needed = {default_pool: range_size} if not rows and default_pool else {}
         for r in rows:
             pid = r["pool_id"]
             pools_needed[pid] = pools_needed.get(pid, 0) + range_size

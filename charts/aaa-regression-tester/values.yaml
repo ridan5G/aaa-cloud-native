@@ -58,6 +58,12 @@ pcap:
   # PVC size for the capture file.  A full test run is typically 5–50 MB.
   storageSize: "512Mi"
 
+# ── RBAC ─────────────────────────────────────────────────────────
+# Creates a ServiceAccount + Role (pods/log read) so the Job can
+# inspect pod logs for exceptions after the test suite finishes.
+rbac:
+  create: true
+
 # ── Helm name overrides ─────────────────────────────────────────
 nameOverride: ""
 fullnameOverride: ""

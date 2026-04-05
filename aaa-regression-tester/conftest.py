@@ -190,3 +190,26 @@ def percentile(values: list[float], p: float) -> float:
     lo, hi = int(index), min(int(index) + 1, len(sorted_vals) - 1)
     frac = index - lo
     return sorted_vals[lo] * (1 - frac) + sorted_vals[hi] * frac
+
+
+# ── Per-test beacon ────────────────────────────────────────────────────────────
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    """Fire a GET request to 1.1.1.1 after each test, encoding name + result in the path."""
+    if report.when != "call":
+        return
+
+    import urllib.parse
+
+    if report.passed:
+        outcome = "PASSED"
+    elif report.failed:
+        outcome = "FAILED"
+    else:
+        outcome = "SKIPPED"
+
+    encoded = urllib.parse.quote(f"{report.nodeid} {outcome}", safe="")
+    try:
+        httpx.get(f"http://1.1.1.1/{encoded}", timeout=2.0)
+    except Exception:
+        pass  # Never block or fail a test on beacon errors

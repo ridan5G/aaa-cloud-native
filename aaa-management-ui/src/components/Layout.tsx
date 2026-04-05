@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { NavLink, Outlet } from 'react-router-dom'
 import { useToasts } from '../stores/toast'
 
 // ─── SVG Icons ───────────────────────────────────────────────────────────────
@@ -75,20 +75,7 @@ function JobsIcon({ c = 'w-4 h-4' }: { c?: string }) {
     </svg>
   )
 }
-function ChevronDown() {
-  return (
-    <svg viewBox="0 0 10 6" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-2.5 h-2.5">
-      <path d="M1 1l4 4 4-4" />
-    </svg>
-  )
-}
-function ChevronRight() {
-  return (
-    <svg viewBox="0 0 6 10" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-2.5 h-2.5">
-      <path d="M1 1l4 4-4 4" />
-    </svg>
-  )
-}
+
 function BellIcon() {
   return (
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-5 h-5">
@@ -156,10 +143,6 @@ const TOP_NAV = [
   { to: '/pools',            label: 'IP Pools',        Icon: PoolIcon },
   { to: '/routing-domains',  label: 'Routing Domains', Icon: NetworkIcon },
 ]
-const RANGE_CHILDREN = [
-  { to: '/range-configs',       label: 'IMSI Range Configs' },
-  { to: '/iccid-range-configs', label: 'ICCID Range Configs' },
-]
 const BOTTOM_NAV = [
   { to: '/bulk-jobs',         label: 'Bulk Jobs',    Icon: JobsIcon },
   { to: '/sim-profile-types', label: 'New SIM',             Icon: LayersIcon },
@@ -169,11 +152,6 @@ const BOTTOM_NAV = [
 // ─── Layout ───────────────────────────────────────────────────────────────────
 export default function Layout() {
   const [collapsed, setCollapsed] = useState(false)
-  const [rangeOpen, setRangeOpen] = useState(false)
-  const location = useLocation()
-  const isRangeActive =
-    location.pathname.startsWith('/range-configs') ||
-    location.pathname.startsWith('/iccid-range-configs')
 
   function NavItem({ to, label, Icon }: { to: string; label: string; Icon: React.ComponentType<{ c?: string }> }) {
     return (
@@ -225,43 +203,7 @@ export default function Layout() {
           <nav className="flex-1 py-3 overflow-y-auto overflow-x-hidden space-y-0.5">
             {TOP_NAV.map(item => <NavItem key={item.to} {...item} />)}
 
-            {/* Range Configs accordion */}
-            <div>
-              <button
-                onClick={() => setRangeOpen(o => !o)}
-                className={`w-full flex items-center gap-3 px-4 py-2.5 mx-2 text-sm font-medium transition-colors rounded-md w-[calc(100%-16px)] ${
-                  isRangeActive
-                    ? 'text-primary bg-primary/10'
-                    : 'text-sidebar-muted hover:text-white hover:bg-sidebar-hover'
-                }`}
-              >
-                <RangeIcon c="w-4 h-4 shrink-0" />
-                {!collapsed && (
-                  <>
-                    <span className="flex-1 text-left whitespace-nowrap">Range Configs</span>
-                    {rangeOpen || isRangeActive ? <ChevronDown /> : <ChevronRight />}
-                  </>
-                )}
-              </button>
-
-              {!collapsed && (rangeOpen || isRangeActive) && (
-                <div className="ml-10 border-l border-white/10 pl-3 space-y-0.5 py-1 mr-2">
-                  {RANGE_CHILDREN.map(child => (
-                    <NavLink
-                      key={child.to}
-                      to={child.to}
-                      className={({ isActive }) =>
-                        `block px-3 py-2 text-sm rounded-md transition-colors ${
-                          isActive ? 'text-white font-medium bg-sidebar-hover' : 'text-sidebar-muted hover:text-white hover:bg-sidebar-hover'
-                        }`
-                      }
-                    >
-                      {child.label}
-                    </NavLink>
-                  ))}
-                </div>
-              )}
-            </div>
+            <NavItem to="/iccid-range-configs" label="SIM Range configs" Icon={RangeIcon} />
 
             {BOTTOM_NAV.map(item => <NavItem key={item.to} {...item} />)}
           </nav>

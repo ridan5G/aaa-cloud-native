@@ -366,24 +366,30 @@ async def delete_pool(pool_id: str, conn=Depends(get_conn)):
             detail={"error": "not_found", "resource": "ip_pool", "pool_id": pool_id},
         )
 
-    allocated = await conn.fetchval(
+    in_use = await conn.fetchval(
         """
         SELECT COUNT(*) FROM (
-            SELECT 1 FROM imsi_apn_ips WHERE pool_id = $1::uuid
+            SELECT 1 FROM imsi_apn_ips           WHERE pool_id = $1::uuid
             UNION ALL
-            SELECT 1 FROM sim_apn_ips WHERE pool_id = $1::uuid
+            SELECT 1 FROM sim_apn_ips             WHERE pool_id = $1::uuid
+            UNION ALL
+            SELECT 1 FROM range_config_apn_pools  WHERE pool_id = $1::uuid
+            UNION ALL
+            SELECT 1 FROM iccid_range_configs     WHERE pool_id = $1::uuid
+            UNION ALL
+            SELECT 1 FROM imsi_range_configs      WHERE pool_id = $1::uuid
         ) AS combined
         """,
         pool_id,
     )
 
-    if allocated > 0:
+    if in_use > 0:
         raise HTTPException(
             status_code=409,
             detail={
                 "error": "pool_in_use",
                 "pool_id": pool_id,
-                "allocated": int(allocated),
+                "in_use": int(in_use),
             },
         )
 

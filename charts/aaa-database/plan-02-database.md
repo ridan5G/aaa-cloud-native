@@ -301,7 +301,7 @@ CREATE TABLE imsi_range_configs (
     account_name    TEXT,
     f_imsi          TEXT        NOT NULL,   -- from IMSI (inclusive, 15 digits)
     t_imsi          TEXT        NOT NULL,   -- to IMSI (inclusive, 15 digits)
-    pool_id         UUID        NOT NULL REFERENCES ip_pools (pool_id),  -- per-slot pool; overrides parent iccid_range_configs.pool_id
+    pool_id         UUID        REFERENCES ip_pools (pool_id),  -- nullable: slot uses APN-pool routing when NULL; overrides parent iccid_range_configs.pool_id
     ip_resolution   TEXT        NOT NULL DEFAULT 'imsi',
     iccid_range_id  BIGINT      REFERENCES iccid_range_configs (id) ON DELETE CASCADE,
     imsi_slot       SMALLINT    NOT NULL DEFAULT 1,  -- 1=primary … 10=tenth IMSI on card
