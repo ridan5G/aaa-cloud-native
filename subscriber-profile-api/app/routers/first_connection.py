@@ -265,12 +265,12 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
                     )
                 if ip_resolution in ("imsi", "imsi_apn"):
                     await conn.execute(
-                        "INSERT INTO imsi_apn_ips (imsi, apn, static_ip, pool_id) VALUES ($1, $2, $3::inet, $4::uuid)",
+                        "INSERT INTO imsi_apn_ips (imsi, apn, static_ip, pool_id) VALUES ($1, $2, $3::inet, $4::uuid) ON CONFLICT DO NOTHING",
                         body.imsi, apn_val, ip, apn_pool,
                     )
                 else:  # iccid / iccid_apn
                     await conn.execute(
-                        "INSERT INTO sim_apn_ips (sim_id, apn, static_ip, pool_id) VALUES ($1::uuid, $2, $3::inet, $4::uuid)",
+                        "INSERT INTO sim_apn_ips (sim_id, apn, static_ip, pool_id) VALUES ($1::uuid, $2, $3::inet, $4::uuid) ON CONFLICT DO NOTHING",
                         sim_id, apn_val, ip, apn_pool,
                     )
                 if apn_val == request_apn_val:
@@ -488,12 +488,12 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
                 )
             if ip_resolution in ("imsi", "imsi_apn"):
                 await conn.execute(
-                    "INSERT INTO imsi_apn_ips (imsi, apn, static_ip, pool_id) VALUES ($1, $2, $3::inet, $4::uuid)",
+                    "INSERT INTO imsi_apn_ips (imsi, apn, static_ip, pool_id) VALUES ($1, $2, $3::inet, $4::uuid) ON CONFLICT DO NOTHING",
                     body.imsi, apn_val, ip, apn_pool,
                 )
             else:  # iccid / iccid_apn
                 await conn.execute(
-                    "INSERT INTO sim_apn_ips (sim_id, apn, static_ip, pool_id) VALUES ($1::uuid, $2, $3::inet, $4::uuid)",
+                    "INSERT INTO sim_apn_ips (sim_id, apn, static_ip, pool_id) VALUES ($1::uuid, $2, $3::inet, $4::uuid) ON CONFLICT DO NOTHING",
                     sim_id, apn_val, ip, apn_pool,
                 )
             if apn_val == request_apn_val:

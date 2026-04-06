@@ -18,6 +18,7 @@ from app.config import HTTP_PORT, METRICS_PORT, CORS_ORIGINS
 from app.db import init_db, close_db
 from app.metrics import start_metrics_server, api_request_duration, http_requests_in_flight
 from app.routers import health, pools, routing_domains, range_configs, iccid_range_configs, profiles, imsis, first_connection, bulk
+import asyncpg
 import time
 
 logging.basicConfig(
@@ -112,6 +113,71 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(
         status_code=422,
         content={"error": "validation_error", "details": exc.errors()},
+    )
+
+
+def _asyncpg_response(exc: asyncpg.PostgresError) -> JSONResponse | None:
+    """Map a known asyncpg DB error to an HTTP JSONResponse, or return None."""
+    if isinstance(exc, asyncpg.UniqueViolationError):
+        constraint = getattr(exc, "constraint_name", None) or ""
+        logger.warning("Unique constraint violation: %s — %s", constraint, exc)
+        return JSONResponse(
+            status_code=409,
+            content={"error": "conflict", "detail": str(exc), "constraint": constraint},
+        )
+    if isinstance(exc, asyncpg.ForeignKeyViolationError):
+        logger.warning("Foreign key violation: %s", exc)
+        return JSONResponse(
+            status_code=409,
+            content={"error": "conflict", "detail": str(exc)},
+        )
+    if isinstance(exc, asyncpg.CheckViolationError):
+        constraint = getattr(exc, "constraint_name", None) or ""
+        logger.warning("Check constraint violation: %s — %s", constraint, exc)
+        return JSONResponse(
+            status_code=422,
+            content={"error": "constraint_violation", "detail": str(exc), "constraint": constraint},
+        )
+    return None
+
+
+@app.exception_handler(asyncpg.PostgresError)
+async def asyncpg_exception_handler(request: Request, exc: asyncpg.PostgresError):
+    """Catch asyncpg DB errors that escape router try/except blocks."""
+    response = _asyncpg_response(exc)
+    if response:
+        return response
+    logger.exception("Unhandled DB error: %s", exc)
+    return JSONResponse(
+        status_code=500,
+        content={"error": "db_error", "detail": str(exc)},
+    )
+
+
+@app.exception_handler(ExceptionGroup)
+async def exception_group_handler(request: Request, exc: ExceptionGroup):
+    """Unwrap Python 3.11 ExceptionGroup (raised by asyncio TaskGroup).
+
+    Starlette's ExceptionMiddleware does not handle ExceptionGroup, so asyncpg
+    errors wrapped inside a TaskGroup escape the entire middleware stack and
+    crash the ASGI application with a 500 Internal Server Error log storm.
+    We unwrap the group, map any known DB error to a proper HTTP response, and
+    fall back to 500 for anything else.
+    """
+    # Flatten one level — TaskGroup wraps exactly one sub-exception in practice.
+    causes = list(exc.exceptions)
+    for cause in causes:
+        if isinstance(cause, asyncpg.PostgresError):
+            response = _asyncpg_response(cause)
+            if response:
+                return response
+        if isinstance(cause, HTTPException):
+            return await http_exception_handler(request, cause)
+    # Unknown sub-exception — log and return 500.
+    logger.exception("Unhandled ExceptionGroup: %s", exc)
+    return JSONResponse(
+        status_code=500,
+        content={"error": "internal_server_error", "detail": str(exc)},
     )
 
 

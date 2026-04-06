@@ -21,15 +21,15 @@ Resources
 ─────────
   Module 20 → IMSI prefix 27877 20 xxxxxxxx  (no conflict with other modules)
 
-  Subnets (all 119.175.230.x / 119.175.231.x):
-    A  — 119.175.230.0/24   (253 usable; 15 needed for imsi)
-    B  — 119.175.231.0/24   (internet APN pool)
-         119.175.232.0/24   (IMS APN pool)
-    C  — 119.175.233.0/24   (5 needed for iccid)
-    D  — 119.175.234.0/24   (internet APN pool)
-         119.175.235.0/24   (IMS APN pool)
-    E  — 119.175.236.0/24   (15 needed for deletion test)
-    F  — 119.175.237.0/28   (tiny; no IPs actually allocated for validation test)
+  Subnets (all 100.73.230.x / 100.73.231.x):
+    A  — 100.73.230.0/24   (253 usable; 15 needed for imsi)
+    B  — 100.73.231.0/24   (internet APN pool)
+         100.73.232.0/24   (IMS APN pool)
+    C  — 100.73.233.0/24   (5 needed for iccid)
+    D  — 100.73.234.0/24   (internet APN pool)
+         100.73.235.0/24   (IMS APN pool)
+    E  — 100.73.236.0/24   (15 needed for deletion test)
+    F  — 100.73.237.0/28   (tiny; no IPs actually allocated for validation test)
 
   IMSI ranges (5-card groups, 3 slots per group):
     A: S1=278772001000000–278772001000004  S2=278772002000000–278772002000004
@@ -68,14 +68,14 @@ APN_INTERNET = "internet.operator.com"
 APN_IMS      = "ims.operator.com"
 
 # ── Subnets ───────────────────────────────────────────────────────────────────
-SUBNET_A         = "119.175.230.0/24"
-SUBNET_B_INET    = "119.175.231.0/24"
-SUBNET_B_IMS     = "119.175.232.0/24"
-SUBNET_C         = "119.175.233.0/24"
-SUBNET_D_INET    = "119.175.234.0/24"
-SUBNET_D_IMS     = "119.175.235.0/24"
-SUBNET_E         = "119.175.236.0/24"
-SUBNET_F         = "119.175.237.0/28"
+SUBNET_A         = "100.73.230.0/24"
+SUBNET_B_INET    = "100.73.231.0/24"
+SUBNET_B_IMS     = "100.73.232.0/24"
+SUBNET_C         = "100.73.233.0/24"
+SUBNET_D_INET    = "100.73.234.0/24"
+SUBNET_D_IMS     = "100.73.235.0/24"
+SUBNET_E         = "100.73.236.0/24"
+SUBNET_F         = "100.73.237.0/28"
 
 # ── IMSI ranges (slot_group * 1_000_000 + class_offset) ──────────────────────
 # Class A — imsi resolution

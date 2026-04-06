@@ -68,6 +68,34 @@ def pytest_sessionstart(session):
         print(f"\n[conftest] WARNING: DB flush failed ({exc}) — tests may see stale data.\n")
 
 
+# ── Subnet allocation registry ────────────────────────────────────────────────
+# All pool subnets used in the test suite MUST be allocated here.
+# All addresses are within the CGNAT range (RFC 6598: 100.64.0.0/10).
+# Never reuse a block across modules — pool_overlap 409 will result.
+#
+# Module  File                         Block               Notes
+# ──────  ───────────────────────────  ──────────────────  ─────────────────────
+#  01     test_01_pools.py             100.65.120.0/22     .120–.123
+#  01b    test_01b_profiles.py         100.65.130.0/23     .130–.131
+#  01c    test_01c_routing_domains.py  10.99.0.0/16        non-CGNAT (routing test)
+#  02     test_02_*.py                 100.65.140.0/22     .140–.143
+#  03     test_03_*.py                 100.65.150.0/22     .150–.153
+#  04     test_04_*.py                 100.65.160.0/22     .160–.163
+#  05     test_05_*.py                 100.65.170.0/22     .170–.173
+#  06     test_06_*.py                 100.65.180.0/22     .180–.183
+#  07     test_07_*.py                 100.65.184.0/22     .184–.187
+#  07b    test_07b_dynamic_alloc_*.py  100.72.230.0/24     .230 block (/29 slices)
+#  08     test_08_*.py                 100.65.190.0/22     .190–.193
+#  09     test_09_*.py                 100.65.195.0/22     .195–.198
+#  10     test_10_*.py                 100.65.200.0/22     .200–.203
+#  11     test_11_performance.py       100.68.0.0/14       large perf pool
+#  12     test_12_*.py                 100.65.206.0/22     .206–.209
+#  13     test_13_*.py                 100.65.210.0/22     .210–.213
+#  19     test_19_validation_*.py      100.65.220.0/22     .220–.223
+#  20     test_20_imsi_only_*.py       100.73.230.0/22     .230–.237
+#  21     test_21_imsi_only_*.py       100.65.240.0/22     .240–.245
+# ──────────────────────────────────────────────────────────────────────────────
+
 # ── Common test data ──────────────────────────────────────────────────────────
 ACCOUNT_NAME   = "TestAccount"
 SUBNET_24      = "100.65.120.0/24"
