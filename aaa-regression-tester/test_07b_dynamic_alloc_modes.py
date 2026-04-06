@@ -66,12 +66,12 @@ class TestS2SingleImsiApn:
         with _new_client() as c:
             cleanup_stale_profiles(c, "27877090000000")
             cls.pool_internet_id = create_pool(
-                c, subnet="100.65.230.0/29",
+                c, subnet="109.165.230.0/29",
                 pool_name="s2-internet", account_name="TestAccount",
                 replace_on_conflict=True,
             )["pool_id"]
             cls.pool_ims_id = create_pool(
-                c, subnet="100.65.230.8/29",
+                c, subnet="109.165.230.8/29",
                 pool_name="s2-ims", account_name="TestAccount",
                 replace_on_conflict=True,
             )["pool_id"]
@@ -108,7 +108,7 @@ class TestS2SingleImsiApn:
         body = r.json()
         assert "sim_id" in body
         assert "static_ip" in body
-        assert body["static_ip"].startswith("100.65.230.")
+        assert body["static_ip"].startswith("109.165.230.")
 
     def test_02_both_apns_provisioned(self, http: httpx.Client):
         """After first-connection, both APN IPs exist on the profile."""
@@ -142,7 +142,7 @@ class TestS2SingleImsiApn:
         imsi = make_imsi(MODULE, 0)
         r = _fc(http, imsi, APN_IMS)
         assert r.status_code == 200, f"Expected 200 for pre-provisioned ims APN: {r.text}"
-        assert r.json()["static_ip"].startswith("100.65.230.")
+        assert r.json()["static_ip"].startswith("109.165.230.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -161,7 +161,7 @@ class TestS3SingleIccid:
         with _new_client() as c:
             cleanup_stale_profiles(c, "27877090000020")
             cls.pool_id = create_pool(
-                c, subnet="100.65.230.16/29",
+                c, subnet="109.165.230.16/29",
                 pool_name="s3-pool", account_name="TestAccount",
                 replace_on_conflict=True,
             )["pool_id"]
@@ -233,12 +233,12 @@ class TestS4SingleIccidApn:
         with _new_client() as c:
             cleanup_stale_profiles(c, "27877090000040")
             cls.pool_internet_id = create_pool(
-                c, subnet="100.65.230.24/29",
+                c, subnet="109.165.230.24/29",
                 pool_name="s4-internet", account_name="TestAccount",
                 replace_on_conflict=True,
             )["pool_id"]
             cls.pool_ims_id = create_pool(
-                c, subnet="100.65.230.32/29",
+                c, subnet="109.165.230.32/29",
                 pool_name="s4-ims", account_name="TestAccount",
                 replace_on_conflict=True,
             )["pool_id"]
@@ -295,7 +295,7 @@ class TestS4SingleIccidApn:
         imsi = make_imsi(MODULE, 400)
         r = _fc(http, imsi, APN_IMS)
         assert r.status_code == 200, f"Expected 200 for pre-provisioned ims APN: {r.text}"
-        assert r.json()["static_ip"].startswith("100.65.230.")
+        assert r.json()["static_ip"].startswith("109.165.230.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -325,12 +325,12 @@ class TestM1MultiImsi:
             # Slot-1 prefix is sufficient — profiles contain both IMSI slots
             cleanup_stale_profiles(c, "27877090000060")
             cls.pool_slot1_id = create_pool(
-                c, subnet="100.65.230.40/29",
+                c, subnet="109.165.230.40/29",
                 pool_name="m1-slot1", account_name="TestAccount",
                 replace_on_conflict=True,
             )["pool_id"]
             cls.pool_slot2_id = create_pool(
-                c, subnet="100.65.230.48/29",
+                c, subnet="109.165.230.48/29",
                 pool_name="m1-slot2", account_name="TestAccount",
                 replace_on_conflict=True,
             )["pool_id"]
@@ -403,8 +403,8 @@ class TestM1MultiImsi:
         ip1 = r1.json()["static_ip"]
         ip2 = r2.json()["static_ip"]
         assert ip1 != ip2, f"Slot IPs must differ: both got {ip1}"
-        assert ip1.startswith("100.65.230.4"), "Slot-1 IP from pool_slot1 (/29 at .40)"
-        assert ip2.startswith("100.65.230.4") or ip2.startswith("100.65.230.5"), \
+        assert ip1.startswith("109.165.230.4"), "Slot-1 IP from pool_slot1 (/29 at .40)"
+        assert ip2.startswith("109.165.230.4") or ip2.startswith("109.165.230.5"), \
             "Slot-2 IP from pool_slot2 (/29 at .48)"
 
 
@@ -434,12 +434,12 @@ class TestM2MultiImsiApn:
         with _new_client() as c:
             cleanup_stale_profiles(c, "27877090000080")
             cls.pool_internet_id = create_pool(
-                c, subnet="100.65.230.56/29",
+                c, subnet="109.165.230.56/29",
                 pool_name="m2-internet", account_name="TestAccount",
                 replace_on_conflict=True,
             )["pool_id"]
             cls.pool_ims_id = create_pool(
-                c, subnet="100.65.230.64/29",
+                c, subnet="109.165.230.64/29",
                 pool_name="m2-ims", account_name="TestAccount",
                 replace_on_conflict=True,
             )["pool_id"]
@@ -556,7 +556,7 @@ class TestM3MultiIccid:
         with _new_client() as c:
             cleanup_stale_profiles(c, "27877090000100")
             cls.pool_id = create_pool(
-                c, subnet="100.65.230.72/29",
+                c, subnet="109.165.230.72/29",
                 pool_name="m3-pool", account_name="TestAccount",
                 replace_on_conflict=True,
             )["pool_id"]
@@ -638,12 +638,12 @@ class TestM4MultiIccidApn:
         with _new_client() as c:
             cleanup_stale_profiles(c, "27877090000120")
             cls.pool_internet_id = create_pool(
-                c, subnet="100.65.230.80/29",
+                c, subnet="109.165.230.80/29",
                 pool_name="m4-internet", account_name="TestAccount",
                 replace_on_conflict=True,
             )["pool_id"]
             cls.pool_ims_id = create_pool(
-                c, subnet="100.65.230.88/29",
+                c, subnet="109.165.230.88/29",
                 pool_name="m4-ims", account_name="TestAccount",
                 replace_on_conflict=True,
             )["pool_id"]

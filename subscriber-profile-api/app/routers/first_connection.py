@@ -14,6 +14,14 @@ from its own slot pool(s). This prevents a thundering herd when all SIMs fail
 over simultaneously — subsequent IMSI connections are served by the
 idempotency path (single indexed read, no allocation, no write).
 
+IMSI-only support (no ICCID range)
+──────────────────────────────────
+When f_iccid is absent (NULL), the group has no ICCID bounds. The card is
+identified by slot-1's IMSI at the same card offset instead of by a derived
+ICCID. sim_profiles are created with iccid=NULL. All other provisioning
+semantics (sibling pre-provisioning, idempotency, IP allocation) are identical
+to ICCID-range configs.
+
 APN catalog provisioning
 ────────────────────────
 For ip_resolution='imsi_apn' or 'iccid_apn', range_config_apn_pools defines
@@ -175,7 +183,7 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
                ir.provisioning_mode AS parent_provisioning_mode
         FROM imsi_range_configs irc
         LEFT JOIN iccid_range_configs ir ON ir.id = irc.iccid_range_id
-        WHERE irc.f_imsi <= $1 AND irc.t_imsi >= $1 AND irc.status = 'active'
+        WHERE irc.f_imsi <= $1 AND irc.t_imsi >= $1 AND irc.status IN ('active', 'provisioned')
         ORDER BY irc.f_imsi
         LIMIT 1
         """,
@@ -283,16 +291,44 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
 
     # ── Multi-IMSI SIM path ───────────────────────────────────────────────────
     f_imsi = range_row["f_imsi"]
-    f_iccid = range_row["f_iccid"]
+    f_iccid = range_row["f_iccid"] or None   # normalize '' → None (IMSI-only configs)
     offset = int(body.imsi) - int(f_imsi)
-    iccid_len = len(f_iccid)
-    derived_iccid = str(int(f_iccid) + offset).zfill(iccid_len)
+    have_iccid = bool(f_iccid)
+
+    if have_iccid:
+        iccid_len = len(f_iccid)
+        derived_iccid = str(int(f_iccid) + offset).zfill(iccid_len)
+    else:
+        derived_iccid = None
+        # IMSI-only: identify the card by slot-1's primary IMSI at this offset.
+        # Slot-1 is the canonical card identity when no ICCID range is configured.
+        slot1_f_imsi = await conn.fetchval(
+            "SELECT f_imsi FROM imsi_range_configs "
+            "WHERE iccid_range_id = $1 AND imsi_slot = 1 AND status IN ('active', 'provisioned')",
+            iccid_range_id,
+        )
+        if not slot1_f_imsi:
+            first_connection_total.labels(result="not_found").inc()
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "missing_slot1",
+                        "message": "IMSI-only range config has no active slot 1 defined"},
+            )
+        slot1_primary_imsi = str(int(slot1_f_imsi) + offset).zfill(15)
 
     async with conn.transaction():
-        existing = await conn.fetchrow(
-            "SELECT sim_id::text FROM sim_profiles WHERE iccid = $1 FOR UPDATE",
-            derived_iccid,
-        )
+        if have_iccid:
+            existing = await conn.fetchrow(
+                "SELECT sim_id::text FROM sim_profiles WHERE iccid = $1 FOR UPDATE",
+                derived_iccid,
+            )
+        else:
+            # IMSI-only: look up the card's sim_profile via slot-1's IMSI in imsi2sim.
+            # FOR UPDATE on imsi2sim serialises concurrent first-connections for the same card.
+            existing = await conn.fetchrow(
+                "SELECT sim_id::text FROM imsi2sim WHERE imsi = $1 FOR UPDATE",
+                slot1_primary_imsi,
+            )
 
         if not existing and range_row["parent_provisioning_mode"] == "immediate":
             # Immediate mode: provisioning is driven by the background job (fired when
@@ -409,14 +445,26 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
         allocated_ip = None
 
         metadata = json.dumps({"tags": ["auto-allocated", "multi-imsi"], "imei": body.imei})
-        sim_id = await conn.fetchval(
-            """
-            INSERT INTO sim_profiles (account_name, status, ip_resolution, iccid, metadata)
-            VALUES ($1, 'active', $2, $3, $4::jsonb)
-            RETURNING sim_id::text
-            """,
-            account_name, ip_resolution, derived_iccid, metadata,
-        )
+        if have_iccid:
+            sim_id = await conn.fetchval(
+                """
+                INSERT INTO sim_profiles (account_name, status, ip_resolution, iccid, metadata)
+                VALUES ($1, 'active', $2, $3, $4::jsonb)
+                RETURNING sim_id::text
+                """,
+                account_name, ip_resolution, derived_iccid, metadata,
+            )
+        else:
+            # IMSI-only: create the sim_profile without an ICCID (iccid stays NULL).
+            # PostgreSQL UNIQUE constraint on sim_profiles.iccid allows multiple NULLs.
+            sim_id = await conn.fetchval(
+                """
+                INSERT INTO sim_profiles (account_name, status, ip_resolution, metadata)
+                VALUES ($1, 'active', $2, $3::jsonb)
+                RETURNING sim_id::text
+                """,
+                account_name, ip_resolution, metadata,
+            )
 
         await conn.execute(
             "INSERT INTO imsi2sim (imsi, sim_id, status, priority) VALUES ($1, $2::uuid, 'active', $3)",
@@ -459,7 +507,7 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
                    COALESCE(irc.pool_id, ir.pool_id)::text AS pool_id
             FROM imsi_range_configs irc
             JOIN iccid_range_configs ir ON ir.id = irc.iccid_range_id
-            WHERE irc.iccid_range_id = $1 AND irc.status = 'active' AND irc.id != $2
+            WHERE irc.iccid_range_id = $1 AND irc.status IN ('active', 'provisioned') AND irc.id != $2
             """,
             iccid_range_id, range_config_id,
         )

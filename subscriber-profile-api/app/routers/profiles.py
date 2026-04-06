@@ -1,5 +1,6 @@
 import re
 import json
+import uuid
 from typing import Optional, Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -347,12 +348,12 @@ async def export_profiles(
 
 
 @router.get("/profiles/{sim_id}", dependencies=[Depends(require_auth)])
-async def get_profile(sim_id: str, conn=Depends(get_conn)):
+async def get_profile(sim_id: uuid.UUID, conn=Depends(get_conn)):
     result = await _build_profile_response(sim_id, conn)
     if result is None:
         raise HTTPException(
             status_code=404,
-            detail={"error": "not_found", "resource": "subscriber_profile", "sim_id": sim_id},
+            detail={"error": "not_found", "resource": "subscriber_profile", "sim_id": str(sim_id)},
         )
     return result
 
@@ -473,14 +474,14 @@ async def list_profiles(
 
 
 @router.put("/profiles/{sim_id}", dependencies=[Depends(require_auth)])
-async def replace_profile(sim_id: str, body: ProfileCreate, conn=Depends(get_conn)):
+async def replace_profile(sim_id: uuid.UUID, body: ProfileCreate, conn=Depends(get_conn)):
     existing = await conn.fetchrow(
         "SELECT sim_id FROM sim_profiles WHERE sim_id = $1::uuid", sim_id
     )
     if not existing:
         raise HTTPException(
             status_code=404,
-            detail={"error": "not_found", "resource": "subscriber_profile", "sim_id": sim_id},
+            detail={"error": "not_found", "resource": "subscriber_profile", "sim_id": str(sim_id)},
         )
 
     if body.iccid is not None and not ICCID_RE.match(body.iccid):
@@ -554,14 +555,14 @@ async def replace_profile(sim_id: str, body: ProfileCreate, conn=Depends(get_con
 
 
 @router.patch("/profiles/{sim_id}", dependencies=[Depends(require_auth)])
-async def patch_profile(sim_id: str, body: ProfilePatch, conn=Depends(get_conn)):
+async def patch_profile(sim_id: uuid.UUID, body: ProfilePatch, conn=Depends(get_conn)):
     existing = await conn.fetchrow(
         "SELECT sim_id FROM sim_profiles WHERE sim_id = $1::uuid", sim_id
     )
     if not existing:
         raise HTTPException(
             status_code=404,
-            detail={"error": "not_found", "resource": "subscriber_profile", "sim_id": sim_id},
+            detail={"error": "not_found", "resource": "subscriber_profile", "sim_id": str(sim_id)},
         )
 
     updates = []
@@ -651,7 +652,7 @@ async def patch_profile(sim_id: str, body: ProfilePatch, conn=Depends(get_conn))
 
 
 @router.post("/profiles/{sim_id}/release-ips", dependencies=[Depends(require_auth)])
-async def release_ips(sim_id: str, conn=Depends(get_conn)):
+async def release_ips(sim_id: uuid.UUID, conn=Depends(get_conn)):
     existing = await conn.fetchrow(
         "SELECT sim_id FROM sim_profiles WHERE sim_id = $1::uuid AND status != 'terminated'",
         sim_id,
@@ -659,7 +660,7 @@ async def release_ips(sim_id: str, conn=Depends(get_conn)):
     if not existing:
         raise HTTPException(
             status_code=404,
-            detail={"error": "not_found", "resource": "subscriber_profile", "sim_id": sim_id},
+            detail={"error": "not_found", "resource": "subscriber_profile", "sim_id": str(sim_id)},
         )
 
     async with conn.transaction():
@@ -711,7 +712,7 @@ async def release_ips(sim_id: str, conn=Depends(get_conn)):
 
 
 @router.delete("/profiles/{sim_id}", status_code=204, dependencies=[Depends(require_auth)])
-async def delete_profile(sim_id: str, conn=Depends(get_conn)):
+async def delete_profile(sim_id: uuid.UUID, conn=Depends(get_conn)):
     existing = await conn.fetchrow(
         "SELECT sim_id FROM sim_profiles WHERE sim_id = $1::uuid AND status != 'terminated'",
         sim_id,
@@ -719,7 +720,7 @@ async def delete_profile(sim_id: str, conn=Depends(get_conn)):
     if not existing:
         raise HTTPException(
             status_code=404,
-            detail={"error": "not_found", "resource": "subscriber_profile", "sim_id": sim_id},
+            detail={"error": "not_found", "resource": "subscriber_profile", "sim_id": str(sim_id)},
         )
     async with conn.transaction():
         # Hard-delete child rows so IMSI and IPs are freed for reuse.

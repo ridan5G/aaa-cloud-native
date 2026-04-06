@@ -529,5 +529,7 @@ uninstall:                      ## Uninstall Helm release + delete CNPG cluster 
 	helm uninstall $(RELEASE) -n $(NAMESPACE) || true
 	kubectl delete cluster aaa-postgres -n $(NAMESPACE) --ignore-not-found
 	kubectl delete pvc -n $(NAMESPACE) -l cnpg.io/cluster=aaa-postgres --ignore-not-found
+	kubectl delete pvc aaa-regression-tester-pcap -n $(NAMESPACE) --ignore-not-found
+	kubectl delete pods -n $(NAMESPACE) -l job-name=aaa-regression-tester --ignore-not-found
 
 clean: uninstall cluster-down   ## Full teardown: Helm release + CNPG + PVCs + k3d cluster

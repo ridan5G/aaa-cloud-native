@@ -254,8 +254,9 @@ data:
     -- ================================================================
     -- Table 8: iccid_range_configs
     -- Parent table for Multi-IMSI SIM provisioning.
-    -- Each row defines a range of ICCIDs (physical SIM cards) that carry
-    -- multiple IMSIs. Child IMSI ranges are in imsi_range_configs.
+    -- Each row defines a group of IMSIs that belong to the same physical SIM card.
+    -- f_iccid / t_iccid are OPTIONAL — omit both for IMSI-only groups (no ICCID bounds).
+    -- Child IMSI ranges are in imsi_range_configs.
     --
     -- ip_resolution authority:
     --   Standalone IMSI range (iccid_range_id IS NULL):
@@ -267,8 +268,8 @@ data:
     CREATE TABLE IF NOT EXISTS iccid_range_configs (
         id              BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         account_name    TEXT,
-        f_iccid         TEXT        NOT NULL,
-        t_iccid         TEXT        NOT NULL,
+        f_iccid         TEXT,       -- nullable: NULL = IMSI-only group (no ICCID bounds)
+        t_iccid         TEXT,       -- nullable: NULL = IMSI-only group
         pool_id         UUID        REFERENCES ip_pools (pool_id),  -- nullable: slots may each define their own pool
         ip_resolution   TEXT        NOT NULL DEFAULT 'imsi',
         imsi_count      SMALLINT    NOT NULL DEFAULT 1,
@@ -277,15 +278,15 @@ data:
         created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
         CONSTRAINT chk_iccid_range_status
-            CHECK (status IN ('active', 'suspended')),
+            CHECK (status IN ('active', 'suspended', 'provisioned')),
         CONSTRAINT chk_iccid_range_ip_res
             CHECK (ip_resolution IN ('imsi', 'imsi_apn', 'iccid', 'iccid_apn')),
         CONSTRAINT chk_f_iccid_format
-            CHECK (f_iccid ~ '^\d{19,20}$'),
+            CHECK (f_iccid IS NULL OR f_iccid ~ '^\d{19,20}$'),
         CONSTRAINT chk_t_iccid_format
-            CHECK (t_iccid ~ '^\d{19,20}$'),
+            CHECK (t_iccid IS NULL OR t_iccid ~ '^\d{19,20}$'),
         CONSTRAINT chk_iccid_range_order
-            CHECK (f_iccid <= t_iccid),
+            CHECK (f_iccid IS NULL OR f_iccid <= t_iccid),
         CONSTRAINT chk_imsi_count
             CHECK (imsi_count BETWEEN 1 AND 10),
         provisioning_mode TEXT        NOT NULL DEFAULT 'first_connect',
@@ -333,7 +334,7 @@ data:
         created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
         CONSTRAINT chk_range_status
-            CHECK (status IN ('active', 'suspended')),
+            CHECK (status IN ('active', 'suspended', 'provisioned')),
         CONSTRAINT chk_range_ip_resolution
             CHECK (ip_resolution IN ('imsi', 'imsi_apn', 'iccid', 'iccid_apn')),
         CONSTRAINT chk_f_imsi_15
@@ -397,14 +398,15 @@ data:
     -- Job installs share the same definition.
     -- ================================================================
     CREATE TABLE IF NOT EXISTS bulk_jobs (
-        job_id      UUID        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
-        status      TEXT        NOT NULL DEFAULT 'queued',
-        submitted   INT         NOT NULL DEFAULT 0,
-        processed   INT         NOT NULL DEFAULT 0,
-        failed      INT         NOT NULL DEFAULT 0,
-        errors      JSONB,
-        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        job_id          UUID        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+        status          TEXT        NOT NULL DEFAULT 'queued',
+        submitted       INT         NOT NULL DEFAULT 0,
+        processed       INT         NOT NULL DEFAULT 0,
+        failed          INT         NOT NULL DEFAULT 0,
+        errors          JSONB,
+        range_config_id BIGINT      REFERENCES iccid_range_configs (id) ON DELETE SET NULL,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
         CONSTRAINT chk_bulk_job_status
             CHECK (status IN ('queued', 'running', 'completed', 'completed_with_errors', 'failed'))
     );

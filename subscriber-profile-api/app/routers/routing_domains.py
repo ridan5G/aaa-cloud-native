@@ -8,6 +8,7 @@ in the domain and enables the suggest-cidr endpoint.
 """
 import ipaddress
 import math
+import uuid
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -169,7 +170,7 @@ async def list_routing_domains(
 
 
 @router.get("/routing-domains/{domain_id}", dependencies=[Depends(require_auth)])
-async def get_routing_domain(domain_id: str, conn=Depends(get_conn)):
+async def get_routing_domain(domain_id: uuid.UUID, conn=Depends(get_conn)):
     row = await conn.fetchrow(
         """
         SELECT rd.id::text, rd.name, rd.description, rd.allowed_prefixes,
@@ -185,14 +186,14 @@ async def get_routing_domain(domain_id: str, conn=Depends(get_conn)):
     if not row:
         raise HTTPException(
             status_code=404,
-            detail={"error": "not_found", "resource": "routing_domain", "id": domain_id},
+            detail={"error": "not_found", "resource": "routing_domain", "id": str(domain_id)},
         )
     return _row_to_dict(row)
 
 
 @router.patch("/routing-domains/{domain_id}", dependencies=[Depends(require_auth)])
 async def patch_routing_domain(
-    domain_id: str, body: RoutingDomainPatch, conn=Depends(get_conn)
+    domain_id: uuid.UUID, body: RoutingDomainPatch, conn=Depends(get_conn)
 ):
     row = await conn.fetchrow(
         "SELECT id FROM routing_domains WHERE id = $1::uuid", domain_id
@@ -200,7 +201,7 @@ async def patch_routing_domain(
     if not row:
         raise HTTPException(
             status_code=404,
-            detail={"error": "not_found", "resource": "routing_domain", "id": domain_id},
+            detail={"error": "not_found", "resource": "routing_domain", "id": str(domain_id)},
         )
 
     if body.name is not None:
@@ -235,20 +236,20 @@ async def patch_routing_domain(
             domain_id,
         )
 
-    return {"id": domain_id}
+    return {"id": str(domain_id)}
 
 
 @router.delete(
     "/routing-domains/{domain_id}", status_code=204, dependencies=[Depends(require_auth)]
 )
-async def delete_routing_domain(domain_id: str, conn=Depends(get_conn)):
+async def delete_routing_domain(domain_id: uuid.UUID, conn=Depends(get_conn)):
     row = await conn.fetchrow(
         "SELECT id FROM routing_domains WHERE id = $1::uuid", domain_id
     )
     if not row:
         raise HTTPException(
             status_code=404,
-            detail={"error": "not_found", "resource": "routing_domain", "id": domain_id},
+            detail={"error": "not_found", "resource": "routing_domain", "id": str(domain_id)},
         )
 
     pool_count = await conn.fetchval(
@@ -259,7 +260,7 @@ async def delete_routing_domain(domain_id: str, conn=Depends(get_conn)):
             status_code=409,
             detail={
                 "error": "domain_in_use",
-                "id": domain_id,
+                "id": str(domain_id),
                 "pool_count": int(pool_count),
                 "detail": f"Routing domain has {pool_count} pool(s) — delete all pools first",
             },
@@ -270,7 +271,7 @@ async def delete_routing_domain(domain_id: str, conn=Depends(get_conn)):
 
 @router.get("/routing-domains/{domain_id}/suggest-cidr", dependencies=[Depends(require_auth)])
 async def suggest_cidr(
-    domain_id: str,
+    domain_id: uuid.UUID,
     size: int = Query(..., ge=1, description="Minimum number of usable host IPs required"),
     conn=Depends(get_conn),
 ):
@@ -288,7 +289,7 @@ async def suggest_cidr(
     if not domain:
         raise HTTPException(
             status_code=404,
-            detail={"error": "not_found", "resource": "routing_domain", "id": domain_id},
+            detail={"error": "not_found", "resource": "routing_domain", "id": str(domain_id)},
         )
 
     allowed_prefixes = list(domain["allowed_prefixes"] or [])

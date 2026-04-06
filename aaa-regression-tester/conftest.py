@@ -46,8 +46,12 @@ def pytest_sessionstart(session):
     async def _flush():
         conn = await asyncpg.connect(DB_URL)
         try:
+            # Clear range configs first (children: imsi_range_configs, range_config_apn_pools,
+            # bulk_jobs.range_config_id → SET NULL).  Then pools (children: ip_pool_available).
+            # CASCADE handles remaining FK dependencies across all tables.
             await conn.execute(
-                "TRUNCATE imsi_apn_ips, sim_apn_ips, imsi2sim, sim_profiles CASCADE"
+                "TRUNCATE iccid_range_configs, ip_pools, "
+                "imsi_apn_ips, sim_apn_ips, imsi2sim, sim_profiles CASCADE"
             )
             # Reset default routing domain to unrestricted so tests using
             # 100.65.x.x (CGNAT) subnets are not blocked by stale allowed_prefixes.
@@ -199,8 +203,6 @@ def pytest_runtest_logreport(report: pytest.TestReport) -> None:
     if report.when != "call":
         return
 
-    import urllib.parse
-
     if report.passed:
         outcome = "PASSED"
     elif report.failed:
@@ -208,8 +210,8 @@ def pytest_runtest_logreport(report: pytest.TestReport) -> None:
     else:
         outcome = "SKIPPED"
 
-    encoded = urllib.parse.quote(f"{report.nodeid} {outcome}", safe="")
+    path = report.nodeid.replace("::", "/")
     try:
-        httpx.get(f"http://1.1.1.1/{encoded}", timeout=2.0)
+        httpx.get(f"http://1.1.1.1/{path}?status={outcome}", timeout=2.0)
     except Exception:
         pass  # Never block or fail a test on beacon errors

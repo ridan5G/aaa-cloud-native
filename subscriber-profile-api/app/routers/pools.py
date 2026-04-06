@@ -1,4 +1,5 @@
 import ipaddress
+import uuid
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -195,7 +196,7 @@ async def create_pool(body: PoolCreate, conn=Depends(get_conn)):
 
 
 @router.get("/pools/{pool_id}", dependencies=[Depends(require_auth)])
-async def get_pool(pool_id: str, conn=Depends(get_conn)):
+async def get_pool(pool_id: uuid.UUID, conn=Depends(get_conn)):
     row = await conn.fetchrow(
         """
         SELECT p.pool_id::text, p.account_name, p.pool_name AS name,
@@ -211,7 +212,7 @@ async def get_pool(pool_id: str, conn=Depends(get_conn)):
     if not row:
         raise HTTPException(
             status_code=404,
-            detail={"error": "not_found", "resource": "ip_pool", "pool_id": pool_id},
+            detail={"error": "not_found", "resource": "ip_pool", "pool_id": str(pool_id)},
         )
     return dict(row)
 
@@ -288,14 +289,14 @@ async def list_pools(
 
 
 @router.get("/pools/{pool_id}/stats", dependencies=[Depends(require_auth)])
-async def get_pool_stats(pool_id: str, conn=Depends(get_conn)):
+async def get_pool_stats(pool_id: uuid.UUID, conn=Depends(get_conn)):
     pool = await conn.fetchrow(
         "SELECT pool_id FROM ip_pools WHERE pool_id = $1::uuid", pool_id
     )
     if not pool:
         raise HTTPException(
             status_code=404,
-            detail={"error": "not_found", "resource": "ip_pool", "pool_id": pool_id},
+            detail={"error": "not_found", "resource": "ip_pool", "pool_id": str(pool_id)},
         )
 
     stats = await conn.fetchrow(
@@ -319,7 +320,7 @@ async def get_pool_stats(pool_id: str, conn=Depends(get_conn)):
     available = int(stats["available"])
     allocated = int(stats["allocated"])
     return {
-        "pool_id": pool_id,
+        "pool_id": str(pool_id),
         "total": available + allocated,
         "allocated": allocated,
         "available": available,
@@ -327,14 +328,14 @@ async def get_pool_stats(pool_id: str, conn=Depends(get_conn)):
 
 
 @router.patch("/pools/{pool_id}", dependencies=[Depends(require_auth)])
-async def patch_pool(pool_id: str, body: PoolPatch, conn=Depends(get_conn)):
+async def patch_pool(pool_id: uuid.UUID, body: PoolPatch, conn=Depends(get_conn)):
     row = await conn.fetchrow(
         "SELECT pool_id FROM ip_pools WHERE pool_id = $1::uuid", pool_id
     )
     if not row:
         raise HTTPException(
             status_code=404,
-            detail={"error": "not_found", "resource": "ip_pool", "pool_id": pool_id},
+            detail={"error": "not_found", "resource": "ip_pool", "pool_id": str(pool_id)},
         )
 
     if body.name is not None:
@@ -352,18 +353,18 @@ async def patch_pool(pool_id: str, body: PoolPatch, conn=Depends(get_conn)):
             pool_id,
         )
 
-    return {"pool_id": pool_id}
+    return {"pool_id": str(pool_id)}
 
 
 @router.delete("/pools/{pool_id}", status_code=204, dependencies=[Depends(require_auth)])
-async def delete_pool(pool_id: str, conn=Depends(get_conn)):
+async def delete_pool(pool_id: uuid.UUID, conn=Depends(get_conn)):
     row = await conn.fetchrow(
         "SELECT pool_id FROM ip_pools WHERE pool_id = $1::uuid", pool_id
     )
     if not row:
         raise HTTPException(
             status_code=404,
-            detail={"error": "not_found", "resource": "ip_pool", "pool_id": pool_id},
+            detail={"error": "not_found", "resource": "ip_pool", "pool_id": str(pool_id)},
         )
 
     in_use = await conn.fetchval(
@@ -388,7 +389,7 @@ async def delete_pool(pool_id: str, conn=Depends(get_conn)):
             status_code=409,
             detail={
                 "error": "pool_in_use",
-                "pool_id": pool_id,
+                "pool_id": str(pool_id),
                 "in_use": int(in_use),
             },
         )

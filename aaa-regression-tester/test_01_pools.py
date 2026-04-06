@@ -80,7 +80,7 @@ class TestPools:
         TestPools.pool_id = None  # already deleted
 
     # 1.7 ─────────────────────────────────────────────────────────────────────
-    def test_07_delete_pool_with_active_allocations(self, http: httpx.Client):
+    def test_07_delete_pool_with_ip_in_use(self, http: httpx.Client):
         """DELETE pool with active allocations → 409 pool_in_use."""
         # Create a pool and a profile that allocates from it
         pool = create_pool(http, subnet="100.65.121.0/24",

@@ -1,4 +1,5 @@
 import re
+import uuid
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -49,12 +50,12 @@ async def _require_profile(sim_id: str, conn):
     if not row:
         raise HTTPException(
             status_code=404,
-            detail={"error": "not_found", "resource": "subscriber_profile", "sim_id": sim_id},
+            detail={"error": "not_found", "resource": "subscriber_profile", "sim_id": str(sim_id)},
         )
 
 
 @router.get("/profiles/{sim_id}/imsis", dependencies=[Depends(require_auth)])
-async def list_imsis(sim_id: str, conn=Depends(get_conn)):
+async def list_imsis(sim_id: uuid.UUID, conn=Depends(get_conn)):
     await _require_profile(sim_id, conn)
     rows = await conn.fetch(
         """
@@ -89,7 +90,7 @@ async def list_imsis(sim_id: str, conn=Depends(get_conn)):
 
 
 @router.get("/profiles/{sim_id}/imsis/{imsi}", dependencies=[Depends(require_auth)])
-async def get_imsi(sim_id: str, imsi: str, conn=Depends(get_conn)):
+async def get_imsi(sim_id: uuid.UUID, imsi: str, conn=Depends(get_conn)):
     await _require_profile(sim_id, conn)
     row = await conn.fetchrow(
         """
@@ -126,7 +127,7 @@ async def get_imsi(sim_id: str, imsi: str, conn=Depends(get_conn)):
 
 
 @router.post("/profiles/{sim_id}/imsis", status_code=201, dependencies=[Depends(require_auth)])
-async def add_imsi(sim_id: str, body: ImsiCreate, conn=Depends(get_conn)):
+async def add_imsi(sim_id: uuid.UUID, body: ImsiCreate, conn=Depends(get_conn)):
     await _require_profile(sim_id, conn)
 
     if not IMSI_RE.match(body.imsi):
@@ -156,11 +157,11 @@ async def add_imsi(sim_id: str, body: ImsiCreate, conn=Depends(get_conn)):
                 body.imsi, aip.apn, aip.static_ip, aip.pool_id, aip.pool_name,
             )
 
-    return {"imsi": body.imsi, "sim_id": sim_id}
+    return {"imsi": body.imsi, "sim_id": str(sim_id)}
 
 
 @router.patch("/profiles/{sim_id}/imsis/{imsi}", dependencies=[Depends(require_auth)])
-async def patch_imsi(sim_id: str, imsi: str, body: ImsiPatch, conn=Depends(get_conn)):
+async def patch_imsi(sim_id: uuid.UUID, imsi: str, body: ImsiPatch, conn=Depends(get_conn)):
     await _require_profile(sim_id, conn)
     row = await conn.fetchrow(
         "SELECT imsi FROM imsi2sim WHERE sim_id = $1::uuid AND imsi = $2",
@@ -205,7 +206,7 @@ async def patch_imsi(sim_id: str, imsi: str, body: ImsiPatch, conn=Depends(get_c
 
 
 @router.delete("/profiles/{sim_id}/imsis/{imsi}", status_code=204, dependencies=[Depends(require_auth)])
-async def delete_imsi(sim_id: str, imsi: str, conn=Depends(get_conn)):
+async def delete_imsi(sim_id: uuid.UUID, imsi: str, conn=Depends(get_conn)):
     await _require_profile(sim_id, conn)
     row = await conn.fetchrow(
         "SELECT imsi FROM imsi2sim WHERE sim_id = $1::uuid AND imsi = $2",

@@ -65,8 +65,8 @@ def delete_range_config(http: httpx.Client, config_id: int | str) -> None:
 def create_iccid_range_config(
     http: httpx.Client,
     *,
-    f_iccid: str,
-    t_iccid: str,
+    f_iccid: str | None = None,
+    t_iccid: str | None = None,
     ip_resolution: str,
     account_name: str = "TestAccount",
     imsi_count: int = 2,
@@ -74,15 +74,21 @@ def create_iccid_range_config(
     description: str = "regression-test iccid range",
     provisioning_mode: str | None = None,
 ) -> dict:
-    """POST /iccid-range-configs and return the response body including id."""
-    body = {
+    """POST /iccid-range-configs and return the response body including id.
+
+    ``f_iccid``/``t_iccid`` are optional — omit both to create an IMSI-only SIM group
+    (no ICCID bounds; supports first_connect and immediate provisioning_modes).
+    """
+    body: dict = {
         "account_name":  account_name,
-        "f_iccid":       f_iccid,
-        "t_iccid":       t_iccid,
         "ip_resolution": ip_resolution,
         "imsi_count":    imsi_count,
         "description":   description,
     }
+    if f_iccid is not None:
+        body["f_iccid"] = f_iccid
+    if t_iccid is not None:
+        body["t_iccid"] = t_iccid
     if pool_id is not None:
         body["pool_id"] = pool_id
     if provisioning_mode is not None:
@@ -134,6 +140,25 @@ def add_apn_pool(
                      json={"apn": apn, "pool_id": pool_id})
     assert resp.status_code == 201, (
         f"add_apn_pool failed: {resp.status_code} {resp.text}"
+    )
+    return resp.json()
+
+
+def add_imsi_slot_apn_pool(
+    http: httpx.Client,
+    *,
+    iccid_range_id: int | str,
+    slot: int,
+    apn: str,
+    pool_id: str,
+) -> dict:
+    """POST /iccid-range-configs/{id}/imsi-slots/{slot}/apn-pools and return the response."""
+    resp = http.post(
+        f"/iccid-range-configs/{iccid_range_id}/imsi-slots/{slot}/apn-pools",
+        json={"apn": apn, "pool_id": pool_id},
+    )
+    assert resp.status_code == 201, (
+        f"add_imsi_slot_apn_pool failed: {resp.status_code} {resp.text}"
     )
     return resp.json()
 

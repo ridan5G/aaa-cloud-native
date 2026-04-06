@@ -11,6 +11,7 @@ import json
 import logging
 import re
 import time
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
 from app.db import get_conn, get_pool
 from app.auth import require_auth
@@ -611,7 +612,7 @@ async def bulk_upsert(
 async def list_jobs(limit: int = 100, conn=Depends(get_conn)):
     rows = await conn.fetch(
         """
-        SELECT job_id::text, status, submitted, processed, failed, created_at
+        SELECT job_id::text, status, submitted, processed, failed, created_at, range_config_id
         FROM bulk_jobs
         ORDER BY created_at DESC
         LIMIT $1
@@ -622,10 +623,10 @@ async def list_jobs(limit: int = 100, conn=Depends(get_conn)):
 
 
 @router.get("/jobs/{job_id}", dependencies=[Depends(require_auth)])
-async def get_job(job_id: str, conn=Depends(get_conn)):
+async def get_job(job_id: uuid.UUID, conn=Depends(get_conn)):
     row = await conn.fetchrow(
         """
-        SELECT job_id::text, status, submitted, processed, failed, errors
+        SELECT job_id::text, status, submitted, processed, failed, errors, range_config_id
         FROM bulk_jobs WHERE job_id = $1::uuid
         """,
         job_id,
@@ -633,7 +634,7 @@ async def get_job(job_id: str, conn=Depends(get_conn)):
     if not row:
         raise HTTPException(
             status_code=404,
-            detail={"error": "not_found", "resource": "bulk_job", "job_id": job_id},
+            detail={"error": "not_found", "resource": "bulk_job", "job_id": str(job_id)},
         )
     result = dict(row)
     if result["errors"] is None:

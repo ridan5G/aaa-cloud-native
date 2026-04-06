@@ -29,8 +29,8 @@ def _val_err(field: str, msg: str):
 
 class IccidRangeCreate(BaseModel):
     account_name: Optional[str] = None
-    f_iccid: str
-    t_iccid: str
+    f_iccid: Optional[str] = None  # nullable: omit to create an IMSI-only SIM group (no ICCID bounds)
+    t_iccid: Optional[str] = None
     pool_id: Optional[str] = None  # nullable: each IMSI slot may define its own pool
     ip_resolution: str = "imsi"
     imsi_count: int = 1
@@ -67,6 +67,135 @@ class ImsiSlotPatch(BaseModel):
 class ApnPoolCreate(BaseModel):
     apn: str
     pool_id: str
+
+
+async def _run_provision_imsi_job(
+    job_id: str,
+    iccid_range_id: int,
+    parent: dict,
+    slot_rows: list[dict],
+):
+    """Background task: provision every card in an IMSI-only (no ICCID) range.
+
+    Iterates over slot-1's IMSI range to derive card_count.  For each card offset,
+    creates one sim_profile with iccid=NULL, links all IMSI slots, and allocates IPs.
+    """
+    slot1 = next(s for s in slot_rows if s["imsi_slot"] == 1)
+    card_count = int(slot1["t_imsi"]) - int(slot1["f_imsi"]) + 1
+    ip_resolution = parent["ip_resolution"]
+    account_name = parent["account_name"] or ""
+    metadata = json.dumps({"tags": ["auto-allocated", "multi-imsi"]})
+    processed = failed = 0
+    errors = []
+
+    try:
+        async with get_pool().acquire() as conn:
+            for batch_start in range(0, card_count, BULK_BATCH_SIZE):
+                batch_offsets = range(batch_start, min(batch_start + BULK_BATCH_SIZE, card_count))
+                async with conn.transaction():
+                    for offset in batch_offsets:
+                        primary_imsi = str(int(slot1["f_imsi"]) + offset).zfill(15)
+                        try:
+                            existing = await conn.fetchval(
+                                "SELECT sim_id::text FROM imsi2sim WHERE imsi = $1",
+                                primary_imsi,
+                            )
+                            if existing:
+                                processed += 1
+                                continue
+
+                            sim_id = await conn.fetchval(
+                                "INSERT INTO sim_profiles (account_name, status, ip_resolution, metadata) "
+                                "VALUES ($1,'active',$2,$3::jsonb) RETURNING sim_id::text",
+                                account_name,
+                                ip_resolution,
+                                metadata,
+                            )
+
+                            for slot in slot_rows:
+                                slot_imsi = str(int(slot["f_imsi"]) + offset).zfill(15)
+                                slot_pool = slot["pool_id"] or parent.get("pool_id")
+                                await conn.execute(
+                                    "INSERT INTO imsi2sim (imsi, sim_id, status, priority) "
+                                    "VALUES ($1,$2::uuid,'active',$3) ON CONFLICT DO NOTHING",
+                                    slot_imsi,
+                                    sim_id,
+                                    slot["imsi_slot"],
+                                )
+                                if ip_resolution in ("imsi", "imsi_apn"):
+                                    apn_pools = await _load_apn_pools(
+                                        conn, slot["id"], slot_pool, ip_resolution
+                                    )
+                                    if ip_resolution == "imsi_apn" and not apn_pools:
+                                        raise RuntimeError(
+                                            f"missing_apn_config: slot {slot['imsi_slot']} has no APN pool "
+                                            f"entries for imsi_apn mode"
+                                        )
+                                    for apn_val, apn_pool in apn_pools:
+                                        ip = await _allocate_ip(conn, apn_pool)
+                                        if not ip:
+                                            raise RuntimeError(f"pool_exhausted:{apn_pool}")
+                                        await conn.execute(
+                                            "INSERT INTO imsi_apn_ips (imsi,apn,static_ip,pool_id) "
+                                            "VALUES ($1,$2,$3::inet,$4::uuid)",
+                                            slot_imsi,
+                                            apn_val,
+                                            ip,
+                                            apn_pool,
+                                        )
+                                # iccid/iccid_apn: allocate card-level IPs from slot 1 only
+                                elif slot["imsi_slot"] == 1:
+                                    apn_pools = await _load_apn_pools(
+                                        conn, slot["id"], slot_pool, ip_resolution
+                                    )
+                                    if ip_resolution == "iccid_apn" and not apn_pools:
+                                        raise RuntimeError(
+                                            f"missing_apn_config: slot {slot['imsi_slot']} has no APN pool "
+                                            f"entries for iccid_apn mode"
+                                        )
+                                    for apn_val, apn_pool in apn_pools:
+                                        ip = await _allocate_ip(conn, apn_pool)
+                                        if not ip:
+                                            raise RuntimeError(f"pool_exhausted:{apn_pool}")
+                                        await conn.execute(
+                                            "INSERT INTO sim_apn_ips (sim_id,apn,static_ip,pool_id) "
+                                            "VALUES ($1::uuid,$2,$3::inet,$4::uuid)",
+                                            sim_id,
+                                            apn_val,
+                                            ip,
+                                            apn_pool,
+                                        )
+                            processed += 1
+                        except Exception as exc:
+                            failed += 1
+                            errors.append({"primary_imsi": primary_imsi, "message": str(exc)})
+
+            status = "completed" if not errors else "completed_with_errors"
+            await conn.execute(
+                "UPDATE bulk_jobs SET status=$1, processed=$2, failed=$3, "
+                "errors=$4::jsonb, updated_at=now() WHERE job_id=$5::uuid",
+                status,
+                processed,
+                failed,
+                errors,
+                job_id,
+            )
+            await conn.execute(
+                "UPDATE iccid_range_configs SET status='provisioned', updated_at=now() WHERE id=$1",
+                iccid_range_id,
+            )
+    except Exception as job_exc:
+        logger.error("Unhandled exception in _run_provision_imsi_job %s: %s", job_id, job_exc)
+        try:
+            async with get_pool().acquire() as _conn:
+                await _conn.execute(
+                    "UPDATE bulk_jobs SET status='failed', "
+                    "errors=$1::jsonb, updated_at=now() WHERE job_id=$2::uuid",
+                    [{"message": str(job_exc)}],
+                    job_id,
+                )
+        except Exception:
+            pass
 
 
 async def _run_provision_iccid_job(
@@ -183,6 +312,10 @@ async def _run_provision_iccid_job(
                 errors,
                 job_id,
             )
+            await conn.execute(
+                "UPDATE iccid_range_configs SET status='provisioned', updated_at=now() WHERE id=$1",
+                iccid_range_id,
+            )
     except Exception as job_exc:
         logger.error("Unhandled exception in _run_provision_iccid_job %s: %s", job_id, job_exc)
         try:
@@ -199,12 +332,17 @@ async def _run_provision_iccid_job(
 
 @router.post("/iccid-range-configs", status_code=201, dependencies=[Depends(require_auth)])
 async def create_iccid_range_config(body: IccidRangeCreate, conn=Depends(get_conn)):
-    if not ICCID_RE.match(body.f_iccid):
-        _val_err("f_iccid", "must be 19-20 digits")
-    if not ICCID_RE.match(body.t_iccid):
-        _val_err("t_iccid", "must be 19-20 digits")
-    if body.f_iccid > body.t_iccid:
-        _val_err("f_iccid", "f_iccid must be <= t_iccid")
+    # ICCID range is optional — omitting both creates an IMSI-only SIM group
+    have_iccid = bool(body.f_iccid) and bool(body.t_iccid)
+    if bool(body.f_iccid) != bool(body.t_iccid):
+        _val_err("f_iccid", "f_iccid and t_iccid must both be provided or both omitted")
+    if have_iccid:
+        if not ICCID_RE.match(body.f_iccid):
+            _val_err("f_iccid", "must be 19-20 digits")
+        if not ICCID_RE.match(body.t_iccid):
+            _val_err("t_iccid", "must be 19-20 digits")
+        if body.f_iccid > body.t_iccid:
+            _val_err("f_iccid", "f_iccid must be <= t_iccid")
     if body.ip_resolution not in IP_RES_VALUES:
         _val_err("ip_resolution", f"must be one of {IP_RES_VALUES}")
     if not (1 <= body.imsi_count <= 10):
@@ -230,8 +368,8 @@ async def create_iccid_range_config(body: IccidRangeCreate, conn=Depends(get_con
         RETURNING id
         """,
         body.account_name,
-        body.f_iccid,
-        body.t_iccid,
+        body.f_iccid or None,
+        body.t_iccid or None,
         body.pool_id,
         body.ip_resolution,
         body.imsi_count,
@@ -377,41 +515,83 @@ async def delete_iccid_range_config(config_id: int, conn=Depends(get_conn)):
         )
 
     if row["provisioning_mode"] == "immediate":
-        while True:
-            sim_ids = [
-                r["sim_id"]
-                for r in await conn.fetch(
-                    "SELECT sim_id::text AS sim_id FROM sim_profiles "
-                    "WHERE iccid >= $1 AND iccid <= $2 LIMIT $3",
-                    row["f_iccid"],
-                    row["t_iccid"],
-                    BULK_BATCH_SIZE,
-                )
-            ]
-            if not sim_ids:
-                break
-            async with conn.transaction():
-                imsi_ips = await conn.fetch(
-                    "SELECT pool_id::text, host(static_ip) AS ip FROM imsi_apn_ips "
-                    "WHERE imsi IN (SELECT imsi FROM imsi2sim WHERE sim_id=ANY($1::uuid[])) "
-                    "AND pool_id IS NOT NULL",
-                    sim_ids,
-                )
-                sim_ips = await conn.fetch(
-                    "SELECT pool_id::text, host(static_ip) AS ip FROM sim_apn_ips "
-                    "WHERE sim_id=ANY($1::uuid[]) AND pool_id IS NOT NULL",
-                    sim_ids,
-                )
-                all_ips = [(r["pool_id"], r["ip"]) for r in list(imsi_ips) + list(sim_ips)]
-                if all_ips:
-                    await conn.executemany(
-                        "INSERT INTO ip_pool_available (pool_id,ip) VALUES ($1::uuid,$2::inet) "
-                        "ON CONFLICT DO NOTHING",
-                        all_ips,
+        if row["f_iccid"]:
+            # ICCID-range configs: find provisioned sim_profiles by ICCID bounds
+            while True:
+                sim_ids = [
+                    r["sim_id"]
+                    for r in await conn.fetch(
+                        "SELECT sim_id::text AS sim_id FROM sim_profiles "
+                        "WHERE iccid >= $1 AND iccid <= $2 LIMIT $3",
+                        row["f_iccid"],
+                        row["t_iccid"],
+                        BULK_BATCH_SIZE,
                     )
-                await conn.execute(
-                    "DELETE FROM sim_profiles WHERE sim_id=ANY($1::uuid[])", sim_ids
-                )
+                ]
+                if not sim_ids:
+                    break
+                async with conn.transaction():
+                    imsi_ips = await conn.fetch(
+                        "SELECT pool_id::text, host(static_ip) AS ip FROM imsi_apn_ips "
+                        "WHERE imsi IN (SELECT imsi FROM imsi2sim WHERE sim_id=ANY($1::uuid[])) "
+                        "AND pool_id IS NOT NULL",
+                        sim_ids,
+                    )
+                    sim_ips = await conn.fetch(
+                        "SELECT pool_id::text, host(static_ip) AS ip FROM sim_apn_ips "
+                        "WHERE sim_id=ANY($1::uuid[]) AND pool_id IS NOT NULL",
+                        sim_ids,
+                    )
+                    all_ips = [(r["pool_id"], r["ip"]) for r in list(imsi_ips) + list(sim_ips)]
+                    if all_ips:
+                        await conn.executemany(
+                            "INSERT INTO ip_pool_available (pool_id,ip) VALUES ($1::uuid,$2::inet) "
+                            "ON CONFLICT DO NOTHING",
+                            all_ips,
+                        )
+                    await conn.execute(
+                        "DELETE FROM sim_profiles WHERE sim_id=ANY($1::uuid[])", sim_ids
+                    )
+        else:
+            # IMSI-only configs (iccid=NULL): find sim_profiles via imsi2sim joined to slot ranges
+            while True:
+                sim_ids = [
+                    r["sim_id"]
+                    for r in await conn.fetch(
+                        "SELECT DISTINCT i2s.sim_id::text AS sim_id "
+                        "FROM imsi2sim i2s "
+                        "JOIN imsi_range_configs irc ON ("
+                        "    irc.iccid_range_id = $1 "
+                        "    AND i2s.imsi >= irc.f_imsi AND i2s.imsi <= irc.t_imsi) "
+                        "LIMIT $2",
+                        config_id,
+                        BULK_BATCH_SIZE,
+                    )
+                ]
+                if not sim_ids:
+                    break
+                async with conn.transaction():
+                    imsi_ips = await conn.fetch(
+                        "SELECT pool_id::text, host(static_ip) AS ip FROM imsi_apn_ips "
+                        "WHERE imsi IN (SELECT imsi FROM imsi2sim WHERE sim_id=ANY($1::uuid[])) "
+                        "AND pool_id IS NOT NULL",
+                        sim_ids,
+                    )
+                    sim_ips = await conn.fetch(
+                        "SELECT pool_id::text, host(static_ip) AS ip FROM sim_apn_ips "
+                        "WHERE sim_id=ANY($1::uuid[]) AND pool_id IS NOT NULL",
+                        sim_ids,
+                    )
+                    all_ips = [(r["pool_id"], r["ip"]) for r in list(imsi_ips) + list(sim_ips)]
+                    if all_ips:
+                        await conn.executemany(
+                            "INSERT INTO ip_pool_available (pool_id,ip) VALUES ($1::uuid,$2::inet) "
+                            "ON CONFLICT DO NOTHING",
+                            all_ips,
+                        )
+                    await conn.execute(
+                        "DELETE FROM sim_profiles WHERE sim_id=ANY($1::uuid[])", sim_ids
+                    )
 
     # CASCADE delete handles child imsi_range_configs rows
     await conn.execute("DELETE FROM iccid_range_configs WHERE id = $1", config_id)
@@ -476,21 +656,37 @@ async def add_imsi_slot(
         )
 
     # Cardinality check: t_imsi - f_imsi must equal t_iccid - f_iccid
-    imsi_cardinality = int(body.t_imsi) - int(body.f_imsi)
-    iccid_cardinality = int(parent["t_iccid"]) - int(parent["f_iccid"])
-    if imsi_cardinality != iccid_cardinality:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "validation_failed",
-                "details": [
-                    {
-                        "field": "imsi_range",
-                        "message": f"cardinality {imsi_cardinality + 1} does not match iccid range cardinality {iccid_cardinality + 1}",
-                    }
-                ],
-            },
+    # For IMSI-only + immediate: all slots must share the same cardinality
+    if parent["f_iccid"]:
+        imsi_cardinality = int(body.t_imsi) - int(body.f_imsi)
+        iccid_cardinality = int(parent["t_iccid"]) - int(parent["f_iccid"])
+        if imsi_cardinality != iccid_cardinality:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "validation_failed",
+                    "details": [
+                        {
+                            "field": "imsi_range",
+                            "message": f"cardinality {imsi_cardinality + 1} does not match iccid range cardinality {iccid_cardinality + 1}",
+                        }
+                    ],
+                },
+            )
+    elif parent["provisioning_mode"] == "immediate":
+        new_card = int(body.t_imsi) - int(body.f_imsi)
+        existing_slots = await conn.fetch(
+            "SELECT f_imsi, t_imsi FROM imsi_range_configs "
+            "WHERE iccid_range_id = $1 AND status = 'active'",
+            config_id,
         )
+        for ex in existing_slots:
+            if int(ex["t_imsi"]) - int(ex["f_imsi"]) != new_card:
+                _val_err(
+                    "imsi_range",
+                    "all slots must have the same cardinality for immediate "
+                    "provisioning without an ICCID range",
+                )
 
     pool_id = body.pool_id or parent["pool_id"]
     job_id = None
@@ -528,24 +724,31 @@ async def add_imsi_slot(
                     config_id,
                 )
                 if slot_count == parent["imsi_count"]:
-                    card_count = int(parent["t_iccid"]) - int(parent["f_iccid"]) + 1
                     slot_rows_raw = await conn.fetch(
-                        "SELECT id, f_imsi, imsi_slot, COALESCE(pool_id::text, $2) AS pool_id "
+                        "SELECT id, f_imsi, t_imsi, imsi_slot, COALESCE(pool_id::text, $2) AS pool_id "
                         "FROM imsi_range_configs WHERE iccid_range_id = $1 AND status='active'",
                         config_id,
                         parent["pool_id"],
                     )
                     slot_rows = [dict(s) for s in slot_rows_raw]
+                    if parent["f_iccid"]:
+                        card_count = int(parent["t_iccid"]) - int(parent["f_iccid"]) + 1
+                        provision_fn = _run_provision_iccid_job
+                    else:
+                        slot1 = next(s for s in slot_rows if s["imsi_slot"] == 1)
+                        card_count = int(slot1["t_imsi"]) - int(slot1["f_imsi"]) + 1
+                        provision_fn = _run_provision_imsi_job
                     for slot in slot_rows:
                         await _check_pool_capacity(
                             conn, slot["id"], card_count, slot["pool_id"], parent["ip_resolution"]
                         )
                     job_id = str(_uuid.uuid4())
                     await conn.execute(
-                        "INSERT INTO bulk_jobs (job_id, status, submitted) "
-                        "VALUES ($1::uuid,'queued',$2)",
+                        "INSERT INTO bulk_jobs (job_id, status, submitted, range_config_id) "
+                        "VALUES ($1::uuid,'queued',$2,$3)",
                         job_id,
                         card_count * len(slot_rows),
+                        config_id,
                     )
     except HTTPException:
         raise
@@ -556,7 +759,7 @@ async def add_imsi_slot(
 
     if job_id and slot_rows is not None:
         background_tasks.add_task(
-            _run_provision_iccid_job,
+            provision_fn,
             job_id,
             config_id,
             dict(parent),
@@ -592,10 +795,10 @@ async def patch_imsi_slot(config_id: int, slot: int, body: ImsiSlotPatch, conn=D
             f"imsi slot ip_resolution '{body.ip_resolution}' conflicts with parent iccid range ip_resolution '{parent['ip_resolution']}'",
         )
 
-    # Revalidate cardinality if imsi range changes
+    # Revalidate cardinality if imsi range changes (skip if parent has no ICCID range)
     new_f = body.f_imsi or row["f_imsi"]
     new_t = body.t_imsi or row["t_imsi"]
-    if body.f_imsi or body.t_imsi:
+    if (body.f_imsi or body.t_imsi) and parent["f_iccid"]:
         imsi_cardinality = int(new_t) - int(new_f)
         iccid_cardinality = int(parent["t_iccid"]) - int(parent["f_iccid"])
         if imsi_cardinality != iccid_cardinality:
