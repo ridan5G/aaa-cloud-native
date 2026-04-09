@@ -154,12 +154,14 @@ aaa-radius-server/
 ├── CMakeLists.txt          C++20 build, vcpkg toolchain
 ├── vcpkg.json              Dependencies: curl, nlohmann-json, spdlog, openssl
 ├── Dockerfile              2-stage Ubuntu 24.04 build → minimal runtime image
+├── Dockerfile.base         Pre-built base with all vcpkg packages (build once; reused by Dockerfile)
 ├── README.md               Architecture, config reference, capacity sizing
 └── src/
     ├── Config.h            Singleton loaded from env vars
     ├── Radius.h / .cpp     RADIUS packet parse + build (RFC 2865)
     ├── HttpClient.h / .cpp libcurl wrapper (per-thread CURL* handle)
     ├── Handler.h / .cpp    Single-call AAA business logic
+    ├── Metrics.h / .cpp    Prometheus counters + histogram; CivetWeb exposer on METRICS_PORT
     └── main.cpp            UDP socket + WorkQueue + thread pool
 ```
 
@@ -170,7 +172,8 @@ aaa-radius-server/
 | `Config.h` | Singleton; reads all env vars; validates at startup |
 | `Radius.cpp` | `parseAccessRequest()` — walks attribute TLVs, decodes VSAs; `buildAccessAccept()` / `buildAccessReject()` — assembles RFC 2865 packets with correct authenticator |
 | `HttpClient.cpp` | One `CURL*` per instance; `get()` / `post()` with 5 s / 10 s timeouts; `CURLOPT_NOSIGNAL=1` (thread safe) |
-| `Handler.cpp` | Calls `lookup()`; maps HTTP status codes (200/403/404/503) to Accept/Reject. No fallback call. |
+| `Handler.cpp` | Calls `lookup()`; maps HTTP status codes (200/403/404/503) to Accept/Reject; supports primary + secondary URL failover |
+| `Metrics.cpp` | Prometheus registry setup; CivetWeb-based HTTP exposer on `METRICS_PORT`; thread-safe via prometheus-cpp atomic counters |
 | `main.cpp` | `recvfrom` loop; `WorkQueue` (MPMC with mutex+condvar); thread pool; `SIGTERM`/`SIGINT` closes socket to unblock `recvfrom` |
 
 ### Thread model
@@ -198,8 +201,10 @@ All configuration is via environment variables, read at startup by `Config::load
 |---|---|---|---|
 | `RADIUS_PORT` | `1812` | No | UDP port to listen on |
 | `RADIUS_SECRET` | `testing123` | **Yes (non-empty)** | Shared secret with NAS clients; used for response authenticator |
-| `LOOKUP_URL` | `http://aaa-lookup-service:8081` | No | aaa-lookup-service base URL (no `/v1` suffix) |
+| `LOOKUP_URL` | `http://aaa-lookup-service:8081/v1` | No | aaa-lookup-service base URL (includes `/v1` path prefix) |
+| `LOOKUP_URL_SECONDARY` | (empty) | No | Secondary region URL; enables region failover on transport errors |
 | `WORKER_THREADS` | `8` | No | Thread pool size (1–256); tune for throughput (see Capacity) |
+| `METRICS_PORT` | `9090` | No | TCP port for Prometheus `/metrics` endpoint |
 | `LOG_LEVEL` | `info` | No | `trace` \| `debug` \| `info` \| `warn` \| `error` |
 
 **`RADIUS_SECRET` must match the secret configured on every NAS client that
@@ -211,7 +216,10 @@ sends Access-Requests.** If it is wrong, the NAS will discard all responses
 ## Build
 
 ```bash
-# Build image
+# Build the vcpkg base image (only needed when vcpkg.json changes)
+make build-radius-base REGISTRY=k3d-aaa-registry.localhost:5111 TAG=dev
+
+# Build the server image (uses the pre-built base)
 make build-radius-server REGISTRY=k3d-aaa-registry.localhost:5111 TAG=dev
 
 # Or as part of the full platform

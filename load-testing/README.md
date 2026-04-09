@@ -31,8 +31,8 @@ Expected responses:
 
 ## Test Data — Seed 10,000 Subscribers
 
-Before running any test, populate the database with test subscribers.
-All use `ip_resolution = 'imsi_apn'` so every lookup against APN `internet` returns HTTP 200.
+Before running any k6 HTTP test, populate the database with test subscribers.
+All use `ip_resolution = 'imsi_apn'` so every lookup against APNs `internet`, `mms`, or `ims` returns HTTP 200.
 
 ```bash
 # Requires DB port-forward active:
@@ -40,7 +40,7 @@ All use `ip_resolution = 'imsi_apn'` so every lookup against APN `internet` retu
 make load-test-seed
 ```
 
-Test IMSI range: `001010000001001` – `001010000011000`
+Test IMSI range: `001010000000001` – `001010000010000`
 Test IP range: `100.64.0.1` – `100.64.39.94` (CGNAT /10)
 
 ---
@@ -61,8 +61,8 @@ make build-load-tester
 |--------|----------|----------|----------|-----------|
 | `smoke.js` | Basic sanity check | 1 VU | 1 min | ~10 |
 | `load.js` | Sustained normal load | Ramping arrival-rate | 14 min | 500 |
-| `stress.js` | Find breaking point | Ramping arrival-rate | 28 min | 0 → 2 000 |
-| `spike.js` | Sudden traffic burst | Ramping arrival-rate | 6 min | 50 → 2 000 → 50 |
+| `stress.js` | Find breaking point | Ramping arrival-rate | 25 min | 0 → 2 000 |
+| `spike.js` | Sudden traffic burst | Ramping arrival-rate | 5 min 30 s | 50 → 2 000 → 50 → 1 500 → 0 |
 | `soak.js` | Memory/leak detection | Constant arrival-rate | 45 min | 300 |
 
 ---
@@ -72,8 +72,10 @@ make build-load-tester
 ### Smoke
 | Metric | Threshold |
 |--------|-----------|
-| `http_req_duration p(99)` | < 15 ms |
 | `http_req_failed rate` | < 1 % |
+| `server_errors rate` | < 1 % |
+
+> No latency threshold on smoke — `kubectl port-forward` adds 15–60 ms jitter that would always fail the SLA gate. Run `load.js` / `soak.js` in-cluster for latency assertions.
 
 ### Load (normal operations gate)
 | Metric | Threshold |
@@ -82,6 +84,21 @@ make build-load-tester
 | `http_req_duration p(99)` | < 15 ms |
 | `http_req_failed rate` | < 0.5 % |
 | `server_errors rate` | < 0.1 % |
+
+### Stress
+Relaxed thresholds (goal: observe where degradation occurs, not gate the run):
+
+| Metric | Threshold |
+|--------|-----------|
+| `http_req_duration p(99)` | < 100 ms |
+| `http_req_failed rate` | < 15 % |
+| `server_errors rate` | < 5 % |
+
+### Spike
+| Metric | Threshold |
+|--------|-----------|
+| `http_req_failed rate` | < 20 % |
+| `server_errors rate` | < 10 % |
 
 ### Soak
 Same as Load, plus no monotonic growth in Prometheus `aaa_in_flight_requests`.
@@ -113,6 +130,11 @@ make load-test-soak           # 45-min soak
 ### Option B — In-cluster Kubernetes Job
 
 ```bash
+# Create the seed ConfigMap (once)
+kubectl create configmap aaa-load-test-seed-sql \
+  --from-file=seed_load_test.sql=load-testing/seed/seed_load_test.sql \
+  -n aaa-platform
+
 # Apply seed job (runs once, completes)
 kubectl apply -f load-testing/k8s/seed-job.yaml -n aaa-platform
 kubectl wait --for=condition=complete job/aaa-load-test-seed -n aaa-platform --timeout=120s
@@ -172,19 +194,18 @@ combining a stepped fast-path load with a constant first-connection background.
 
 | Sender | Protocol | Rate | IMSI pool | Expected response |
 |--------|----------|------|-----------|-------------------|
-| Fast-path | RADIUS UDP/1812 | 300 → 400 → 500 → 600 RPS (stepped) | 10 K known IMSIs (in `imsi2sim`) | Access-Accept (IP from `imsi_apn_ips`) |
+| Fast-path | RADIUS UDP/1812 | 100 → 200 → 300 RPS (stepped) | 10 K known IMSIs (in `imsi2sim`) | Access-Accept (IP from `imsi_apn_ips`) |
 | First-connect | RADIUS UDP/1812 | 2 RPS constant | Sequential new IMSIs (in range, not in `imsi2sim`) | Access-Accept (triggers subscriber-profile-api `/first-connection`) |
 
 ### Load tiers (fast-path)
 
 | Tier | Target RPS | Duration | Purpose |
 |------|-----------|----------|---------|
-| tier-300 | 300 | 5 min | Low baseline |
-| tier-400 | 400 | 5 min | Mid baseline |
-| tier-500 | 500 | 5 min | Normal ops |
-| tier-600 | 600 | 5 min | Capacity ceiling |
+| tier-100 | 100 | 5 min | Low baseline |
+| tier-200 | 200 | 5 min | Mid baseline |
+| tier-300 | 300 | 5 min | Normal ops ceiling |
 
-Total duration: **~20 minutes** (plus first-connect runs throughout).
+Total duration: **~15 minutes** (plus first-connect runs throughout).
 
 ### Pass criteria
 
@@ -195,11 +216,12 @@ Total duration: **~20 minutes** (plus first-connect runs throughout).
 
 ### Test data
 
-Fast-path seed: same 10 K subscribers created by `make load-test-seed`
-(IMSI `001010000001001` – `001010000011000`, IPs pre-assigned in `imsi_apn_ips`).
+Fast-path seed: provisioned at runtime by `radius_load.py` setup phase via subscriber-profile-api.
+IMSI range: `001010000001001` – `001010000011000`, pool `100.64.0.0/16` (`load-test-fastpath`).
+The script warms up all 10K subscribers via RADIUS before starting the timed tiers — no manual SQL seed step required.
 
-First-connect seed (added to `seed_load_test.sql`):
-- New `ip_pools` entry: `100.65.0.0/20` (`load-test-firstconn`) — 4 094 free IPs
+First-connect provisioning (also done automatically by `radius_load.py` setup):
+- New `ip_pools` entry: `100.65.0.0/20` (`load-test-firstconn`) — ~4 094 free IPs
 - New `imsi_range_configs` entry covering `001010000011001` – `001010000013600`
 - These IMSIs are **not** in `imsi2sim` — each hit triggers a real first-connection
 
@@ -239,10 +261,10 @@ runs as an in-cluster K8s Job.
 # Build image (once)
 make build-radius-load-tester
 
-# Quick smoke — 30 s per tier (~4 min total)
+# Quick smoke — 30 s per tier (~1.5 min total)
 make radius-load-test-smoke
 
-# Full run — 5 min per tier (~20 min total)
+# Full run — 5 min per tier (~15 min total)
 make radius-load-test
 
 # Stream logs while running
@@ -262,7 +284,8 @@ kubectl cp -n aaa-platform \
 | `RADIUS_HOST` | `aaa-radius-server` | RADIUS server hostname |
 | `RADIUS_PORT` | `1812` | UDP port |
 | `RADIUS_SECRET` | `testing123` | Shared secret |
-| `PROMETHEUS_URL` | `http://prometheus-kube-prometheus-prometheus.monitoring.svc:9090` | Prometheus base URL |
+| `API_URL` | `http://aaa-platform-subscriber-profile-api:8080` | subscriber-profile-api base URL (for setup phase) |
+| `PROMETHEUS_URL` | `http://aaa-platform-kube-promethe-prometheus.aaa-platform.svc:9090` | Prometheus base URL |
 | `IMSI_COUNT` | `10000` | Fast-path IMSI pool size |
 | `FIRSTCONN_RPS` | `2` | First-connect rate (RPS) |
 | `FIRSTCONN_IMSI_START` | `1010000011001` | First-connect IMSI base (integer) |

@@ -24,8 +24,11 @@ first-connection allocation, then returns the allocated IP directly to the calle
 ## The Single Endpoint
 
 ```
-GET /lookup?imsi={imsi}&apn={apn}
+GET /v1/lookup?imsi={imsi}&apn={apn}[&imei={imei}][&use_case_id={use_case_id}]
+GET /lookup?imsi={imsi}&apn={apn}[&imei={imei}][&use_case_id={use_case_id}]
 ```
+
+Both paths are registered (`/v1/lookup` matches the Ingress rewrite rule; `/lookup` is the bare path for direct service calls). `imei` and `use_case_id` are optional — they are forwarded to `subscriber-profile-api` on first-connection only.
 
 This is the **only** endpoint. It handles the hot path only:
 
@@ -70,18 +73,17 @@ Input: imsi ($1), apn ($2)
 All operations on READ_REPLICA connection only.
 
 Step 1 — Execute hot-path SQL query:
-  SELECT sp.sim_id,
-         sp.status        AS sim_status,
+  SELECT sp.status           AS sim_status,
          sp.ip_resolution,
-         si.status        AS imsi_status,
-         sa.apn           AS imsi_apn,
-         sa.static_ip     AS imsi_static_ip,
-         ci.apn           AS iccid_apn,
-         ci.static_ip     AS iccid_static_ip
-  FROM        imsi2sim    si
-  JOIN        sim_profiles sp ON sp.sim_id = si.sim_id
-  LEFT JOIN   imsi_apn_ips  sa ON sa.imsi = si.imsi
-  LEFT JOIN   sim_apn_ips ci ON ci.sim_id = sp.sim_id
+         si.status           AS imsi_status,
+         sa.apn              AS imsi_apn,
+         sa.static_ip        AS imsi_static_ip,
+         ci.apn              AS iccid_apn,
+         ci.static_ip        AS iccid_static_ip
+  FROM        imsi2sim       si
+  JOIN        sim_profiles   sp ON sp.sim_id  = si.sim_id
+  LEFT JOIN   imsi_apn_ips  sa ON sa.imsi     = si.imsi
+  LEFT JOIN   sim_apn_ips   ci ON ci.sim_id   = sp.sim_id
   WHERE si.imsi = $1
 
 The two LEFT JOINs produce a Cartesian product: the query returns
@@ -252,13 +254,36 @@ and `IMSI-B, apn1.net` both resolve to `100.65.3.11` because they share the same
 
 ---
 
+## Environment Variables
+
+All configuration is loaded from environment variables at startup (see `src/Config.h`).
+
+| Variable | Default | Description |
+|---|---|---|
+| `HTTP_PORT` | `8081` | HTTP API listener port |
+| `METRICS_PORT` | `9090` | Prometheus metrics endpoint port |
+| `THREAD_COUNT` | `0` (auto) | Drogon event loop thread count; 0 = logical CPU count |
+| `DB_HOST` | `localhost` | PostgreSQL read replica hostname |
+| `DB_PORT` | `5432` | PostgreSQL port |
+| `DB_NAME` | `aaa` | Database name |
+| `DB_USER` | `aaa_ro` | Read-only DB user |
+| `DB_PASSWORD` | *(empty)* | DB password — required in production |
+| `DB_POOL_SIZE` | `8` | Connections per pod (1–100) |
+| `DB_TIMEOUT_SEC` | `1.0` | Query timeout in seconds |
+| `JWT_PUBLIC_KEY_PATH` | `/etc/jwt/public.key` | RS256 PEM public key path |
+| `JWT_SKIP_VERIFY` | `false` | Set `true` in local dev to bypass JWT validation |
+| `PROVISIONING_URL` | `http://subscriber-profile-api:8080` | Base URL for first-connection calls |
+| `LOG_LEVEL` | `info` | Spdlog level: `trace` \| `debug` \| `info` \| `warn` \| `error` |
+
+---
+
 ## DB Connection Management
 
 The service holds **one connection pool** — the local read replica only.
 
-| Connection | Used for | Pool size |
+| Variable | Used for | Default pool size |
 |---|---|---|
-| `READ_REPLICA_URL` | All hot-path lookups | 5–10 per replica |
+| `DB_HOST` / `DB_USER` / … | All hot-path lookups | 8 per pod (`DB_POOL_SIZE`) |
 
 No primary connection exists in this service. PgBouncer in transaction-mode sits
 between the service and the read replica endpoint.
@@ -271,12 +296,13 @@ between the service and the read replica endpoint.
 ┌───────────────────────────────────────────────────────────────┐
 │  Container: aaa-lookup-service                                │
 │  Language: C++20 / Drogon framework                           │
-│  Port: 8081                                                   │
-│  Replicas: 3–6 per region                                    │
-│  Deployment: co-located with AAA (aaa-radius-server) nodes          │
-│  Resources: 512MB RAM / 0.5 CPU per replica                  │
-│  DB: READ_REPLICA_URL only (local to region)                 │
-│  No primary DB connection — no writes of any kind            │
+│  Port: 8081  (HTTP API)                                       │
+│  Port: 9090  (Prometheus metrics)                             │
+│  Replicas: 3–6 per region                                     │
+│  Deployment: co-located with AAA (aaa-radius-server) nodes    │
+│  Resources: 512MB RAM / 0.5 CPU per replica                   │
+│  DB: read replica only (DB_HOST/DB_USER/DB_PASSWORD)          │
+│  No primary DB connection — no writes of any kind             │
 └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -390,11 +416,14 @@ Every `GET /lookup` call emits a structured log line:
 }
 ```
 
-Metrics (Prometheus):
-- `aaa_lookup_duration_seconds` histogram (p50, p95, p99) — full request latency including first-connection
-- `aaa_lookup_requests_total` counter by `result` label (`resolved`, `not_found`, `suspended`, `apn_not_found`, `db_error`)
+Metrics (Prometheus, exposed on port 9090):
+- `aaa_lookup_requests_total` counter by `result` label (`resolved`, `not_found`, `suspended`, `apn_not_found`, `bad_request`, `db_error`)
+- `aaa_lookup_duration_seconds` histogram (p50, p95, p99) — full request latency; buckets tuned to 15ms SLA (1ms, 3ms, 5ms, 8ms, 10ms, 15ms, 25ms, 50ms, 100ms, 500ms)
+- `aaa_in_flight_requests` gauge — number of concurrent active requests
+- `aaa_db_errors_total` counter — DB connection failures and timeouts
 - `first_connection_requests_total` counter — DB miss rate; triggers internal first-connection call
 - `first_connection_responses_total` counter by `status` (`200`, `404`, `503`, `error`) — outcomes of internal first-connection calls
+- `first_connection_duration_seconds` histogram — round-trip latency to `subscriber-profile-api`
 
 Alerts:
 - p99 > 15ms for >2 minutes → page on-call (DB hit path SLA)

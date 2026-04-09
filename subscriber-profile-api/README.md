@@ -32,6 +32,22 @@ AAA hot path — no latency SLA applies, but it must be correct and consistent.
 
 ---
 
+## Configuration (Environment Variables)
+
+| Variable | Default | Description |
+|---|---|---|
+| `PRIMARY_URL` | `postgresql://aaa_app:devpassword@localhost:5432/aaa` | PostgreSQL connection URI |
+| `HTTP_PORT` | `8080` | HTTP server listen port |
+| `METRICS_PORT` | `9091` | Prometheus metrics port (separate listener) |
+| `JWT_SKIP_VERIFY` | `false` | Set to `"true"` to bypass JWT validation (dev only) |
+| `JWT_PUBLIC_KEY` | `""` | RS256 public key PEM for token verification |
+| `JWT_ALGORITHM` | `RS256` | JWT signing algorithm |
+| `BULK_BATCH_SIZE` | `500` | Batch size for bulk upsert / provision jobs |
+| `BULK_WORKER_THREADS` | `4` | Reserved; bulk jobs run as async tasks |
+| `CORS_ORIGINS` | `""` | Comma-separated allowed CORS origins; empty = disabled |
+
+---
+
 ## Complete Endpoint Reference
 
 ### SIM Profiles
@@ -40,12 +56,12 @@ AAA hot path — no latency SLA applies, but it must be correct and consistent.
 |---|---|---|---|---|
 | `POST` | `/profiles` | Create profile | 201 `{sim_id, created_at}` | Validates ip_resolution rules before insert |
 | `GET` | `/profiles/{sim_id}` | Get full profile by UUID | 200 full profile JSON | |
-| `GET` | `/profiles?iccid={iccid}` | Find by ICCID | 200 or 404 | |
-| `GET` | `/profiles?imsi={imsi}` | Find by IMSI | 200 or 404 | Admin/debug use |
-| `GET` | `/profiles?account_name={name}&status=active&ip_resolution={mode}&pool_id={uuid}&page=1&limit=100` | Paginated list | 200 `{items[], total, page}` | Max limit=1000; `pool_id` matches profiles with any IP from that pool |
+| `GET` | `/profiles?iccid={iccid}&imsi={imsi}&account_name={name}&status=active&ip_resolution={mode}&pool_id={uuid}&imsi_prefix={prefix}&iccid_prefix={prefix}&ip={addr}&page=1&limit=100` | Paginated list | 200 `{items[], total, page}` | Max limit=1000; `pool_id` matches profiles with any IP from that pool |
+| `GET` | `/profiles/accounts` | List all distinct account names | 200 `[string, ...]` | |
+| `GET` | `/profiles/export?account_name={name}&status=active&ip_resolution={mode}&imsi_prefix={prefix}&iccid_prefix={prefix}&ip={addr}` | Export profiles in bulk-import format | 200 array | Same filters as list; response format matches CSV import structure |
 | `PUT` | `/profiles/{sim_id}` | Replace full profile | 200 | All fields replaced; sim_id immutable |
 | `PATCH` | `/profiles/{sim_id}` | Partial update (JSON Merge Patch) | 200 | Used to set iccid, change status, update metadata |
-| `DELETE` | `/profiles/{sim_id}` | Soft-delete | 204 | Sets status=terminated; data retained |
+| `DELETE` | `/profiles/{sim_id}` | Soft-delete | 204 | Sets status=terminated, iccid=NULL; IMSI and IP rows hard-deleted |
 
 ### IMSI Operations
 
@@ -130,7 +146,7 @@ may be created in the domain.
 }
 ```
 
-Algorithm: finds the smallest prefix (e.g. `/24` for `size=250`) where no existing pool overlaps, within `allowed_prefixes`. Scans up to 10,000 candidate blocks per prefix.
+Algorithm: finds the smallest prefix (e.g. `/24` for `size=250`) where no existing pool overlaps, within `allowed_prefixes`. Uses an efficient jump-scan that skips past blocking intervals — no artificial candidate limit.
 
 **Error responses:**
 - `422 no_allowed_prefixes` — domain has no `allowed_prefixes` configured (search space undefined).
@@ -180,11 +196,11 @@ Pool `routing_domain_id` is **immutable** after creation. To move a pool to a di
 
 | Method | Path | Description | Success |
 |---|---|---|---|
-| `POST` | `/range-configs` | Create standalone IMSI range config (`iccid_range_id = NULL`) | 201 `{id}` |
+| `POST` | `/range-configs` | Create standalone IMSI range config (`iccid_range_id = NULL`) | 201 `{id}` or 202 `{id, job_id}` if `provisioning_mode=immediate` |
 | `GET` | `/range-configs/{id}` | Get range config | 200 |
 | `GET` | `/range-configs?account_name={name}&status=active&pool_id={uuid}&ip_resolution={mode}` | List with filters | 200 |
 | `PATCH` | `/range-configs/{id}` | Update pool_id, status, ip_resolution | 200 |
-| `DELETE` | `/range-configs/{id}` | Delete range config | 204 |
+| `DELETE` | `/range-configs/{id}` | Delete range config | 204 | If `provisioning_mode=immediate`: cascades to delete all provisioned profiles and returns IPs to pools |
 
 ### IMSI Range Config — APN Catalog & Pool Overrides
 
@@ -214,19 +230,34 @@ IMSI gets IPs for all its APNs in the same transaction.
 ### ICCID Range Configs (Multi-IMSI SIM Provisioning)
 
 Parent table for SIM cards that carry multiple IMSIs. Each `iccid_range_configs` row
-defines a range of physical SIM cards; child `imsi_range_configs` rows define the
+defines a group of physical SIM cards; child `imsi_range_configs` rows define the
 IMSI ranges for each slot on those cards.
+
+**ICCID is optional.** `f_iccid` / `t_iccid` may both be omitted to create an
+**IMSI-only SIM group** — the cards are identified by their IMSIs alone, with no ICCID
+bounds. Profiles created from IMSI-only groups have `sim_profiles.iccid = NULL` (PostgreSQL
+`UNIQUE` allows multiple NULLs). Both `provisioning_mode` values work with IMSI-only groups:
+`first_connect` (on-demand via `/first-connection`) and `immediate` (bulk background job).
+
+**Cardinality rules:**
+- ICCID-range configs: every slot's `t_imsi - f_imsi` must equal `t_iccid - f_iccid`.
+- IMSI-only + `immediate`: all slots must have the same `t_imsi - f_imsi` (so the background
+  job knows how many cards to iterate). Validated at each `POST .../imsi-slots` call.
+- IMSI-only + `first_connect`: no cardinality constraint — each slot's range is independent.
 
 | Method | Path | Description | Success | Notes |
 |---|---|---|---|---|
-| `POST` | `/iccid-range-configs` | Create ICCID range + validate `imsi_count` | 201 `{id}` | `pool_id` is **optional** — each slot may define its own pool; parent pool is fallback |
-| `GET` | `/iccid-range-configs/{id}` | Get ICCID range + all child IMSI ranges | 200 | Nested response includes `imsi_ranges[]` |
+| `POST` | `/iccid-range-configs` | Create SIM group — ICCID range or IMSI-only | 201 `{id}` | `f_iccid`/`t_iccid` **optional**; omit both for IMSI-only. `pool_id` optional — each slot may define its own. |
+| `GET` | `/iccid-range-configs/{id}` | Get SIM group config + all child IMSI ranges | 200 | Nested response includes `imsi_ranges[]`. `f_iccid`/`t_iccid` are `null` for IMSI-only groups. |
 | `GET` | `/iccid-range-configs?account_name={name}&status=active&pool_id={uuid}&ip_resolution={mode}` | List with filters | 200 | |
 | `PATCH` | `/iccid-range-configs/{id}` | Update description, status, pool_id | 200 | Cannot change f_iccid/t_iccid after creation |
-| `DELETE` | `/iccid-range-configs/{id}` | Delete ICCID range + cascade deletes child IMSI ranges | 204 | |
-| `POST` | `/iccid-range-configs/{id}/imsi-slots` | Add a child IMSI range (one slot) | 201 `{range_config_id}` | Slot `pool_id` overrides parent; validates cardinality equality |
+| `DELETE` | `/iccid-range-configs/{id}` | Delete SIM group + cascade deletes child IMSI ranges + returns allocated IPs to pool | 204 | Full cleanup for both ICCID-range and IMSI-only groups |
+| `POST` | `/iccid-range-configs/{id}/imsi-slots` | Add a child IMSI range (one slot) | 201 `{range_config_id[, job_id]}` | Slot `pool_id` overrides parent; validates cardinality; triggers background job when last slot is added for `immediate` mode |
 | `PATCH` | `/iccid-range-configs/{id}/imsi-slots/{slot}` | Update a specific IMSI slot range | 200 | Re-validates cardinality |
-| `DELETE` | `/iccid-range-configs/{id}/imsi-slots/{slot}` | Remove a slot | 204 | Allowed only if no profiles allocated from this slot |
+| `DELETE` | `/iccid-range-configs/{id}/imsi-slots/{slot}` | Remove a slot | 204 | |
+| `GET` | `/iccid-range-configs/{id}/imsi-slots/{slot}/apn-pools` | List APN→pool overrides for one slot | 200 `{items[]}` | Used for `imsi_apn`/`iccid_apn` modes |
+| `POST` | `/iccid-range-configs/{id}/imsi-slots/{slot}/apn-pools` | Add APN→pool override for a slot `{apn, pool_id}` | 201 | |
+| `DELETE` | `/iccid-range-configs/{id}/imsi-slots/{slot}/apn-pools/{apn}` | Remove slot APN override | 204 | |
 
 ### First-Connection Allocation (aaa-radius-server Fallback)
 
@@ -259,9 +290,10 @@ pressure at failover time.
 
 | Method | Path | Description | Success |
 |---|---|---|---|
-| `POST` | `/profiles/bulk` | Upsert batch (JSON body or CSV file) | 202 `{job_id, submitted, status_url}` |
+| `POST` | `/profiles/bulk` | Upsert batch (JSON array body or CSV file) | 202 `{job_id, submitted, status_url}` |
 | `POST` | `/profiles/bulk-release-ips` | Release IPs for a batch of SIMs | 202 `{job_id, submitted, status_url}` |
 | `POST` | `/imsis/bulk-delete` | Remove a batch of IMSIs and return their IPs to pool | 202 `{job_id, submitted, status_url}` |
+| `GET` | `/jobs` | List all bulk jobs (newest first) | 200 `{jobs[]}` | Query param: `limit` (default 100) |
 | `GET` | `/jobs/{job_id}` | Poll bulk job status | 200 `{status, processed, failed, errors[]}` |
 
 **`POST /profiles/bulk-release-ips`**
@@ -350,18 +382,20 @@ These rules are applied before any DB write. Validation errors return 400.
 | `DELETE /routing-domains/{id}`: cannot delete if pools exist in the domain | 409 `domain_in_use` |
 | `GET /routing-domains/{id}/suggest-cidr`: domain must have non-empty `allowed_prefixes` | 422 `no_allowed_prefixes` |
 | `f_imsi` must be ≤ `t_imsi` in range-configs | validation_failed |
-| `f_iccid` must be ≤ `t_iccid` in iccid-range-configs | validation_failed |
-| `f_iccid` and `t_iccid` must be 19–20 digits | validation_failed |
+| `f_iccid` and `t_iccid` must **both** be present or **both** omitted in `iccid-range-configs` | validation_failed, field=f_iccid |
+| When provided, `f_iccid` / `t_iccid` must be 19–20 digits and `f_iccid` ≤ `t_iccid` | validation_failed |
 | `imsi_count` must be 1–10 | validation_failed, field=imsi_count |
 | `POST /iccid-range-configs`: `pool_id` is optional; if provided, must exist in `ip_pools` | validation_failed, field=pool_id |
 | `POST /range-configs/{id}/apn-pools`: `apn` must not be empty | validation_failed, field=apn |
 | `POST /range-configs/{id}/apn-pools`: `pool_id` must exist in `ip_pools` | validation_failed, field=pool_id |
 | `POST /range-configs/{id}/apn-pools`: duplicate `apn` for same range_config_id not allowed | validation_failed, field=apn |
-| All child IMSI slot ranges for the same `iccid_range_id` must have **identical cardinality**: `t_imsi - f_imsi` must equal `t_iccid - f_iccid` for every slot | validation_failed, detail: "imsi range cardinality N does not match iccid range cardinality M" |
+| ICCID-range configs: `t_imsi - f_imsi` must equal `t_iccid - f_iccid` for every slot | validation_failed, detail: "cardinality N does not match iccid range cardinality M" |
+| IMSI-only + `immediate`: all slots must have the same `t_imsi - f_imsi` | validation_failed, detail: "all slots must have the same cardinality for immediate provisioning without an ICCID range" |
 | Child IMSI slot `ip_resolution` must match its parent `iccid_range_configs.ip_resolution` | validation_failed, detail: "imsi slot ip_resolution 'imsi_apn' conflicts with parent iccid range ip_resolution 'imsi'" |
 | `imsi_slot` must be unique within a `iccid_range_id` group (enforced by DB UNIQUE constraint too) | validation_failed, field=imsi_slot |
 | `POST /first-connection`: `imsi` must be exactly 15 digits | 400 |
 | `POST /first-connection`: `apn` must be present | 400 |
+| `POST /first-connection` on IMSI-only group: slot 1 must be defined (`imsi_slot=1` active) | 422, error: missing_slot1 |
 | `POST /first-connection`: `use_case_id` is optional; included in logs when present | — |
 
 ---
@@ -583,10 +617,7 @@ HTTP/1.1 201 Created
 POST /v1/profiles/bulk
 Content-Type: application/json
 
-{
-  "mode": "upsert",
-  "profiles": [ ...up to 100K SIM profile objects... ]
-}
+[ ...SIM profile objects... ]
 
 HTTP/1.1 202 Accepted
 {
@@ -606,7 +637,7 @@ Content-Type: multipart/form-data; boundary=...
 Content-Disposition: form-data; name="file"; filename="batch.csv"
 Content-Type: text/csv
 
-sim_id,iccid,account_name,status,ip_resolution,...
+iccid,account_name,status,ip_resolution,imsi,apn,static_ip,pool_id
 ...
 
 HTTP/1.1 202 Accepted
@@ -631,7 +662,7 @@ HTTP/1.1 200 OK
 }
 ```
 
-### Create ICCID Range Config (Multi-IMSI SIM batch)
+### Create ICCID Range Config (Multi-IMSI SIM batch — with ICCID range)
 
 ```http
 POST /v1/iccid-range-configs
@@ -649,6 +680,62 @@ Content-Type: application/json
 
 HTTP/1.1 201 Created
 { "id": 1 }
+```
+
+### Create IMSI-Only SIM Group (no ICCID — skip f_iccid / t_iccid)
+
+Omit `f_iccid` and `t_iccid` entirely. The cards are identified by their IMSIs only;
+`sim_profiles.iccid` will be `null` for profiles created from this group.
+
+```http
+POST /v1/iccid-range-configs
+Content-Type: application/json
+
+{
+  "account_name": "Melita",
+  "pool_id": "pool-uuid-abc",
+  "ip_resolution": "iccid",
+  "imsi_count": 3,
+  "provisioning_mode": "immediate",
+  "description": "IMSI-only triple-SIM batch — no physical ICCID range"
+}
+
+HTTP/1.1 201 Created
+{ "id": 7 }
+```
+
+Add slots (all must have identical cardinality for `immediate` mode):
+
+```http
+POST /v1/iccid-range-configs/7/imsi-slots
+{ "f_imsi": "278770000000000", "t_imsi": "278770000009999", "imsi_slot": 1, "ip_resolution": "iccid" }
+# → { "range_config_id": 20 }
+
+POST /v1/iccid-range-configs/7/imsi-slots
+{ "f_imsi": "278771000000000", "t_imsi": "278771000009999", "imsi_slot": 2, "ip_resolution": "iccid" }
+# → { "range_config_id": 21 }
+
+POST /v1/iccid-range-configs/7/imsi-slots
+{ "f_imsi": "278772000000000", "t_imsi": "278772000009999", "imsi_slot": 3, "ip_resolution": "iccid" }
+# → { "range_config_id": 22, "job_id": "bulk-job-uuid-xyz" }
+# ↑ Third slot (imsi_count=3) → background job fires immediately
+```
+
+Cardinality mismatch for IMSI-only + `immediate` (all slots must have the same range size):
+
+```http
+POST /v1/iccid-range-configs/7/imsi-slots
+{ "f_imsi": "278773000000000", "t_imsi": "278773000004999", "imsi_slot": 4, ... }
+# t_imsi - f_imsi = 4999 ≠ 9999 (existing slots)
+
+HTTP/1.1 400 Bad Request
+{
+  "error": "validation_failed",
+  "details": [{
+    "field": "imsi_range",
+    "message": "all slots must have the same cardinality for immediate provisioning without an ICCID range"
+  }]
+}
 ```
 
 ### Add IMSI Slots to ICCID Range
@@ -727,12 +814,18 @@ HTTP/1.1 503 Service Unavailable
 { "error": "pool_exhausted", "pool_id": "pool-uuid-abc" }
 ```
 
-For the multi-IMSI SIM case above (`imsi_slot` match):
+For the multi-IMSI SIM case above (ICCID-range config):
 - `278770000000042` falls in slot-1 range (`278770000000000`–`278770000999999`)
 - Offset = 42
 - Derived ICCID = `8944501010000000000` + 42 = `8944501010000000042`
-- Profile created with real ICCID; sibling IMSI `278771000000042` (slot 2) pre-provisioned
+- Profile created with that ICCID; sibling IMSI `278771000000042` (slot 2) pre-provisioned
   in the same transaction — its next connection hits the fast path immediately
+
+For an IMSI-only SIM group (no f_iccid / t_iccid):
+- Offset is calculated the same way from slot-1's f_imsi
+- Card identity = slot-1's IMSI at that offset (looked up in `imsi2sim` instead of
+  `sim_profiles.iccid`)
+- Profile created with `iccid = null`; sibling pre-provisioning logic is identical
 
 ```json
 // 400 — Validation error
@@ -785,7 +878,7 @@ No separate worker process or message queue is needed at this scale.
 ```
 1. POST /profiles/bulk → validate top-level shape → write job record (status=queued)
                        → return 202 immediately
-2. Thread pool picks up job → processes profiles in batches of 1000
+2. Thread pool picks up job → processes profiles in batches of BULK_BATCH_SIZE (default 500)
    For each batch:
      a. Validate each profile (same rules as single POST)
      b. INSERT INTO sim_profiles ON CONFLICT (sim_id) DO UPDATE
@@ -906,8 +999,8 @@ comes **entirely from the range config**, not from the request body. aaa-radius-
    COMMIT
    Return 200 {"static_ip": $allocated_ip}
 
-   ── NOT NULL (Multi-IMSI SIM) ───────────────────────────────────────────────
-   offset       = numeric($imsi) - numeric(f_imsi)
+   ── NOT NULL (Multi-IMSI SIM — ICCID range) ────────────────────────────────
+   offset        = numeric($imsi) - numeric(f_imsi)
    derived_iccid = zero-pad(numeric(f_iccid) + offset, len(f_iccid))
 
    BEGIN
@@ -936,7 +1029,6 @@ comes **entirely from the range config**, not from the request body. aaa-radius-
          sibling_imsi = zero-pad(numeric(sibling.f_imsi) + offset, 15)
          INSERT imsi2sim (sibling_imsi, sim_id, priority=slot) ON CONFLICT DO NOTHING
          IF ip_resolution IN ('imsi', 'imsi_apn'):
-           -- Load APN catalog for this sibling's slot; each slot has independent overrides.
            sibling_apn_pools = _load_apn_pools(sibling.id, sibling_base_pool, ip_resolution, $apn)
            FOR each (apn_val, apn_pool) in sibling_apn_pools:
              sibling_ip = CLAIM IP from apn_pool (SELECT FOR UPDATE SKIP LOCKED)
@@ -945,7 +1037,38 @@ comes **entirely from the range config**, not from the request body. aaa-radius-
              ON CONFLICT DO NOTHING
          -- iccid / iccid_apn: sim_apn_ips rows already inserted above cover all IMSIs on the card
    COMMIT
-   Return 200 {"static_ip": $allocated_ip or $existing_ip}
+
+   ── NOT NULL (Multi-IMSI SIM — IMSI-only, f_iccid IS NULL) ─────────────────
+   -- Card identity: slot-1's IMSI at the same offset (no ICCID to derive)
+   offset           = numeric($imsi) - numeric(f_imsi)
+   slot1_primary_imsi = zero-pad(numeric(slot1.f_imsi) + offset, 15)
+
+   BEGIN
+     SELECT sim_id FROM imsi2sim
+     WHERE imsi = $slot1_primary_imsi FOR UPDATE
+
+     IF found (another slot already connected first):
+       Same as ICCID-range path above — reuse sim_id, idempotent IP return
+
+     ELSE (first slot to connect for this card):
+       Claim IP(s) from ip_pool_available (SELECT FOR UPDATE SKIP LOCKED)
+       → No IP: ROLLBACK, return 503
+
+       INSERT sim_profiles (iccid=NULL, account_name, ip_resolution=$ip_resolution)
+       -- iccid=NULL is valid; sim_profiles.iccid UNIQUE allows multiple NULLs
+
+       INSERT imsi2sim (imsi, sim_id, priority=imsi_slot)
+
+       IF ip_resolution IN ('iccid', 'iccid_apn'):
+         INSERT sim_apn_ips (sim_id, apn=NULL/'$apn', static_ip, pool_id)
+
+       FOR each sibling slot:
+         sibling_imsi = zero-pad(numeric(sibling.f_imsi) + offset, 15)
+         INSERT imsi2sim (sibling_imsi, sim_id, ...) ON CONFLICT DO NOTHING
+         IF ip_resolution IN ('imsi', 'imsi_apn'):
+           Allocate per-sibling IPs (same as ICCID-range sibling loop above)
+   COMMIT
+   Return 201/200 {"sim_id": ..., "static_ip": ...}
 ```
 
 **`ip_resolution` routing summary:**

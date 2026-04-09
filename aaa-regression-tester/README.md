@@ -4,8 +4,9 @@
 
 A standalone test suite that exercises every REST API endpoint across both services
 and verifies correct behaviour for all IP resolution modes, dynamic first-connection
-allocation, multi-IMSI SIM cards, RADIUS authentication, bulk operations,
-export/search, routing domains, CIDR finder, Grafana metrics, and failure scenarios.
+allocation, multi-IMSI SIM cards (with and without an ICCID range), IMSI-only SIM
+groups, RADIUS authentication, bulk operations, export/search, routing domains, CIDR
+finder, Grafana metrics, and failure scenarios.
 
 **Technology:** Python 3.11 · `pytest` · `httpx` (sync client, class-scoped fixtures)
 **Target environments:**
@@ -14,7 +15,7 @@ export/search, routing domains, CIDR finder, Grafana metrics, and failure scenar
 
 **Output:** JUnit XML (`/app/results/results.xml`) · console pass/fail summary · Prometheus Pushgateway metrics
 
-**Current suite result: 274 passed · 0 failed · 0 skipped · ~80 s**
+**Current suite result: 443 passed · 0 failed · 0 skipped · ~110 s**
 
 ---
 
@@ -32,36 +33,41 @@ aaa-regression-tester/
 │
 ├── fixtures/
 │   ├── pools.py                          # create_pool / delete_pool / get_pool_stats helpers
-│   ├── range_configs.py                  # create_range_config / delete_range_config helpers
+│   ├── range_configs.py                  # create_range_config / create_iccid_range_config /
+│   │                                     #   add_imsi_slot / add_imsi_slot_apn_pool helpers
 │   ├── profiles.py                       # create_profile_imsi / _imsi_apn / _iccid / delete_profile
 │   └── radius.py                         # RadiusClient, build_access_request, parse_response
 │
-├── test_01_pools.py                      # IP pool CRUD + stats                           [16 tests]
-├── test_01b_radius_warmup.py             # Single RADIUS packet to seed Prometheus early  [ 1 test ]
-├── test_01c_routing_domains.py           # Routing domain CRUD + suggest-cidr             [17 tests]
-├── test_01d_free_cidr_finder.py          # Free CIDR finder end-to-end workflow           [ 7 tests]
-├── test_02_range_configs.py              # IMSI range config CRUD                         [ 8 tests]
-├── test_03_iccid_profile.py              # ip_resolution=iccid                           [10 tests]
-├── test_04_imsi_profile.py               # ip_resolution=imsi                            [10 tests]
-├── test_05_imsi_apn_profile.py           # ip_resolution=imsi_apn                        [10 tests]
-├── test_06_imsi_ops.py                   # Add / remove IMSI, per-IMSI suspend           [ 8 tests]
-├── test_07_dynamic_alloc.py              # First-connection single-IMSI baseline         [ 9 tests]
-├── test_07b_dynamic_alloc_modes.py       # First-connection all allocation modes         [25 tests]
-├── test_07c_release_ips.py               # IP release / IMSI detach + IP return          [ 8 tests]
-├── test_07e_release_reconnect_all_modes.py  # Release + re-allocate across all 4 modes  [ 5 tests]
-├── test_08_iccid_apn_profile.py          # ip_resolution=iccid_apn                       [17 tests]
-├── test_09_migration.py                  # Migration output validation (skipped unless DB pre-seeded) [ 7 tests]
-├── test_10_errors.py                     # Validation, 404, 409, 503, auth errors        [17 tests]
-├── test_11_performance.py                # Latency assertions under load (skipped unless dataset present) [ 7 tests]
-├── test_12_radius.py                     # End-to-end RADIUS authentication (imsi mode)  [15 tests]
-├── test_12_grafana_metrics.py            # Grafana dashboard metric presence             [15 tests]
-├── test_12b_radius_modes.py              # RADIUS end-to-end for all 4 ip_resolution modes [13 tests]
+├── test_01_pools.py                      # IP pool CRUD + stats                                [16 tests]
+├── test_01b_radius_warmup.py             # Single RADIUS packet to seed Prometheus early        [ 1 test ]
+├── test_01c_routing_domains.py           # Routing domain CRUD + suggest-cidr                  [17 tests]
+├── test_01d_free_cidr_finder.py          # Free CIDR finder end-to-end workflow                [ 7 tests]
+├── test_02_range_configs.py              # IMSI range config CRUD                              [ 8 tests]
+├── test_03_iccid_profile.py              # ip_resolution=iccid                                [10 tests]
+├── test_04_imsi_profile.py               # ip_resolution=imsi                                 [10 tests]
+├── test_05_imsi_apn_profile.py           # ip_resolution=imsi_apn                             [10 tests]
+├── test_06_imsi_ops.py                   # Add / remove IMSI, per-IMSI suspend                [ 8 tests]
+├── test_07_dynamic_alloc.py              # First-connection single-IMSI baseline               [ 9 tests]
+├── test_07b_dynamic_alloc_modes.py       # First-connection all allocation modes               [25 tests]
+├── test_07c_release_ips.py               # IP release / IMSI detach + IP return               [ 8 tests]
+├── test_07e_release_reconnect_all_modes.py  # Release + re-allocate across all 4 modes        [ 5 tests]
+├── test_08_iccid_apn_profile.py          # ip_resolution=iccid_apn                            [17 tests]
+├── test_09_migration.py                  # Migration output validation (skipped unless pre-seeded) [ 7 tests]
+├── test_10_errors.py                     # Validation, 404, 409, 503, auth errors             [17 tests]
+├── test_11_performance.py                # Latency assertions under load (skipped unless dataset) [ 7 tests]
+├── test_12_radius.py                     # End-to-end RADIUS authentication (imsi mode)       [15 tests]
+├── test_12_grafana_metrics.py            # Grafana dashboard metric presence                  [15 tests]
+├── test_12b_radius_modes.py              # RADIUS end-to-end for all 4 ip_resolution modes    [13 tests]
 ├── test_13_export_and_ip_search.py       # Export CSV + IP filter + terminated SIM visibility [19 tests]
-├── test_14_export_delete_reprovision.py  # Export → delete → bulk re-import (4 SIM types) [16 tests]
-├── test_15_bulk.py                       # Bulk upsert via POST /profiles/bulk           [ 8 tests]
-├── test_15b_bulk_actions.py              # Bulk IP release + bulk IMSI delete            [ 8 tests]
-├── test_16_lookup_fast_path.py           # Fast-path gaps + cross-mode suspend           [13 tests]
-└── test_17_immediate_provisioning.py     # Immediate provisioning mode for range configs [13 tests]
+├── test_14_export_delete_reprovision.py  # Export → delete → bulk re-import (4 SIM types)    [16 tests]
+├── test_15_bulk.py                       # Bulk upsert via POST /profiles/bulk                [ 8 tests]
+├── test_15b_bulk_actions.py              # Bulk IP release + bulk IMSI delete                 [ 8 tests]
+├── test_16_lookup_fast_path.py           # Fast-path gaps + cross-mode suspend                [13 tests]
+├── test_17_immediate_provisioning.py     # Immediate provisioning for single-IMSI range configs [13 tests]
+├── test_18_nullable_slot_pool.py         # Nullable slot pool_id + per-slot APN-pool routing  [22 tests]
+├── test_19_validation_and_mgmt.py        # ICCID range config validation + IMSI-only skip mode [37 tests]
+├── test_20_imsi_only_immediate.py        # IMSI-only SIM groups: immediate bulk provisioning   [51 tests]
+└── test_21_imsi_only_first_connect.py    # IMSI-only SIM groups: first_connect provisioning   [31 tests]
 ```
 
 ---
@@ -98,7 +104,7 @@ Two intentional exceptions:
 - **test_10 tests 10.13 / 10.14** — boundary tests for missing required params; adding `use_case_id` would not change the expected 400 but would obscure the intent.
 - **test_12 pre-condition 404 checks** — raw lookups for IMSIs that do not yet exist; explicit "with vs without" coverage is already provided by tests 10.16 / 10.17.
 
-**Run order is sequential** (test_01 → test_17). Each module is self-contained: it creates
+**Run order is sequential** (test_01 → test_21). Each module is self-contained: it creates
 its own fixtures in `setup_class`, runs its cases, then tears down in `teardown_class`.
 No shared mutable state between modules.
 
@@ -587,16 +593,107 @@ return pre-allocated IPs without invoking first-connection.
 
 ---
 
+### test_18_nullable_slot_pool.py — Nullable Slot pool_id + Per-Slot APN Pool Routing
+
+**APIs validated:** `POST /iccid-range-configs` · `POST .../imsi-slots` ·
+`POST .../imsi-slots/{slot}/apn-pools` · `POST /first-connection`
+
+Covers a production bug where a multi-IMSI ICCID range with `imsi_apn` mode and
+per-slot APN pools (no default `pool_id` on the slot) caused a `500
+NotNullViolationError` when the sibling pre-provisioning loop tried to INSERT an
+`imsi_range_configs` row with `pool_id=NULL`.
+
+| Class | Scenario | Tests |
+|---|---|---|
+| TestM5_ImsiApn_NullSlotPool | `imsi_apn` — slot has no pool_id; APN pools carry the pool | 5 |
+| TestM5b_SiblingNoApnConfig | Sibling slot has no APN config at all → 422 `missing_apn_config` | 4 |
+| TestM6_Iccid_NullSlotPool | `iccid` — slot has no pool_id; card-level IP from parent pool | 4 |
+| TestM7_IccidApn_NullSlotPool | `iccid_apn` — slot has no pool_id; per-APN pools on slot-1 | 5 |
+| TestM8_Immediate_MissingApnConfig | Immediate mode job fails gracefully when APN config absent | 4 |
+
+---
+
+### test_19_validation_and_mgmt.py — ICCID Range Config Validation & Management
+
+**APIs validated:** `POST /iccid-range-configs` · `POST .../imsi-slots` ·
+`POST .../imsi-slots/{slot}/apn-pools` · `DELETE .../apn-pools/{apn}` ·
+`GET .../apn-pools` · `PATCH /iccid-range-configs/{id}`
+
+Covers field validation, duplicate-slot enforcement, cardinality checks, APN pool
+CRUD for IMSI slots, and the IMSI-only (skip-ICCID) mode.
+
+| Class | Scenario | Tests |
+|---|---|---|
+| TestIccidRangeValidation | ICCID range creation errors (bad f_iccid, t_iccid, f/t mismatch, pool not found) | 7 |
+| TestImsiSlotValidation | Slot errors: bad IMSI, duplicate slot, cardinality mismatch, ip_resolution conflict | 9 |
+| TestApnPoolManagement | Slot APN pool CRUD: create / list / delete / duplicate APN rejection | 8 |
+| TestSkipIccidRange | IMSI-only (no f_iccid/t_iccid): config created with null ICCID fields; GET returns null | 6 |
+| TestSizeAlignment | All 4 ip_resolution types with ICCID range, cardinality alignment across slots | 7 |
+
+---
+
+### test_20_imsi_only_immediate.py — IMSI-Only SIM Groups: Immediate Bulk Provisioning
+
+**APIs validated:** `POST /iccid-range-configs` · `POST .../imsi-slots` ·
+`POST .../imsi-slots/{slot}/apn-pools` · `GET /jobs/{job_id}` · `GET /lookup` ·
+`DELETE /iccid-range-configs/{id}`
+
+Verifies that ICCID range configs created without `f_iccid`/`t_iccid` and
+`provisioning_mode="immediate"` trigger the `_run_provision_imsi_job` background
+task. Profiles are created with `iccid=NULL`; IPs are pre-allocated for all four
+resolution modes. DELETE fully cleans up provisioned data.
+
+| Class | ip_resolution | Slots | Cards | IPs | Tests |
+|---|---|---|---|---|---|
+| TestImsiOnlyImmediate_IMSI | `imsi` | 3 | 5 | 15 | 9 |
+| TestImsiOnlyImmediate_IMSI_APN | `imsi_apn` | 3 | 5 | 15 per APN pool | 11 |
+| TestImsiOnlyImmediate_ICCID | `iccid` | 3 | 5 | 5 (card-level) | 8 |
+| TestImsiOnlyImmediate_ICCID_APN | `iccid_apn` | 3 | 5 | 5 per APN pool | 11 |
+| TestImsiOnlyImmediateDeletion | `imsi` | 3 | 5 | — | 8 |
+| TestImsiOnlyImmediateValidation | cross-slot cardinality mismatch → 400 | — | — | — | 4 |
+
+Key assertions:
+- Background job reaches `status=completed` with `failed=0`
+- `GET /lookup` returns allocated IP without any first-connection call
+- `DELETE /iccid-range-configs/{id}` returns all IPs to pool (verified via `GET /pools/{id}/stats`)
+- DB direct checks (when `DB_URL` is set): sim_profiles/imsi2sim/imsi_apn_ips/sim_apn_ips all cleaned up
+
+---
+
+### test_21_imsi_only_first_connect.py — IMSI-Only SIM Groups: First-Connect Provisioning
+
+**APIs validated:** `POST /iccid-range-configs` · `POST .../imsi-slots` ·
+`POST .../imsi-slots/{slot}/apn-pools` · `POST /first-connection` ·
+`GET /iccid-range-configs/{id}` · `GET /pools/{id}/stats`
+
+Exercises the fix for a latent crash in `first_connection.py` where the multi-IMSI
+path tried to compute `len(f_iccid)` on an empty string (stored as `''` for IMSI-only
+configs), raising `ValueError` for any `first_connect`-mode IMSI-only group.
+
+Now `f_iccid`/`t_iccid` are stored as `NULL`; the first-connection handler branches
+on `f_iccid IS NULL`, identifies the card by slot-1's IMSI at the same offset, and
+creates `sim_profiles` with `iccid=NULL`.
+
+| Class | ip_resolution | Slots | Cards | Tests | Key assertions |
+|---|---|---|---|---|---|
+| TestFirstConnectIMSIOnly_IMSI | `imsi` | 2 | 3 | 7 | Each slot on same card gets a distinct IP; slot-2 pre-provisioned on slot-1 connect |
+| TestFirstConnectIMSIOnly_IMSI_APN | `imsi_apn` | 2 | 1 | 6 | Both APNs provisioned in one transaction; slot-2 pre-provisioned |
+| TestFirstConnectIMSIOnly_ICCID | `iccid` | 2 | 2 | 7 | All slots on same card share one IP; pool allocates 1 IP per card |
+| TestFirstConnectIMSIOnly_ICCID_APN | `iccid_apn` | 2 | 1 | 7 | Card-level per-APN IP shared by all slots |
+| TestFirstConnectIMSIOnly_EdgeCases | error paths | — | — | 4 | `f_iccid=null` in GET response; `422 missing_slot1` when slot-1 absent |
+
+---
+
 ## Run Order & Teardown
 
 ```
 1. conftest.py setup_session: DB flush (delete from sim_profiles, ip_pools, etc.)
-2. Run test_01 → test_17 sequentially (pytest -v --junitxml=/app/results/results.xml)
+2. Run test_01 → test_21 sequentially (pytest -v --junitxml=/app/results/results.xml)
 3. Each module:  setup_class → tests → teardown_class
 4. run_all.sh pushes JUnit totals to Prometheus Pushgateway (non-fatal if push fails)
 
 Result (full suite, RADIUS enabled):
-  274 passed · 0 failed · 0 skipped · ~80 s
+  443 passed · 0 failed · 0 skipped · ~110 s
 ```
 
 ### Profile Visibility After a Run
@@ -604,8 +701,8 @@ Result (full suite, RADIUS enabled):
 **Static-provisioning modules** (test_03–test_06, test_08, test_10, test_12–test_15b)
 delete their fixtures in `teardown_class`.
 
-**Dynamic-allocation modules** (test_07, test_07b, test_07c, test_07e, test_17) leave
-profiles active after teardown. After a run:
+**Dynamic-allocation modules** (test_07, test_07b, test_07c, test_07e, test_17–test_21)
+leave profiles active after teardown. After a run:
 
 ```
 GET /profiles/export?status=active&account_name=TestAccount
@@ -709,6 +806,10 @@ IP to both (they share the card's `sim_apn_ips` rows).
 | `iccid_apn` mode, dual-IMSI + dual-APN | test_08_iccid_apn_profile: 8.2–8.8 | test_07b: M4.1–M4.4 |
 | Fast-path cache invalidation (all modes) | test_16: 16.1–16.13 | — |
 | RADIUS end-to-end (all modes) | test_12b: 12b.1–12b.13 | — |
+| IMSI-only + immediate (all 4 modes) | test_20: A–F all classes | — |
+| IMSI-only + first_connect (all 4 modes) | — | test_21: A–E all classes |
+| Nullable slot pool_id + per-slot APN routing | test_18: M5–M8 | — |
+| ICCID range validation + skip-ICCID mode | test_19: all classes | — |
 
 ---
 
@@ -719,7 +820,7 @@ IP to both (they share the card's `sim_apn_ips` rows).
 | `PROVISION_URL` | `http://localhost:8080/v1` | All modules |
 | `LOOKUP_URL` | `http://localhost:8081/v1` | test_03–07e, test_12, test_16, test_17 |
 | `TEST_JWT` | `dev-skip-verify` | All modules |
-| `DB_URL` | `postgres://aaa_app:devpassword@localhost:5432/aaa` | conftest DB flush |
+| `DB_URL` | `postgres://aaa_app:devpassword@localhost:5432/aaa` | conftest DB flush · test_20 deletion assertions (optional) · test_21 |
 | `PUSHGATEWAY_URL` | `http://localhost:9091` | run_all.sh metrics push |
 | `RADIUS_HOST` | `""` (skips test_12 / test_12b) | test_12, test_12b only |
 | `RADIUS_PORT` | `1812` | test_12, test_12b only |
