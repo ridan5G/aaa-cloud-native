@@ -4,10 +4,10 @@ via postInitApplicationSQLRefs. Runs as the app user (aaa_app) against the
 app database (aaa) after initdb completes.
 
 Contains the full AAA platform schema (Plan 2):
-  - 10 tables (including routing_domains)
+  - 11 tables (including routing_domains, range_config_apn_pools, bulk_jobs)
   - 17 indexes
   - set_updated_at() trigger function
-  - 8 BEFORE UPDATE triggers (one per mutable table)
+  - 9 BEFORE UPDATE triggers (one per mutable table)
 
 PostgreSQL 15+ required for UNIQUE NULLS NOT DISTINCT.
 */}}

@@ -3,7 +3,7 @@ name: aaa-database
 description: >
   PostgreSQL 15 cluster for the AAA platform.
   Uses CloudNativePG operator for HA PostgreSQL and PgBouncer connection pooling.
-  Bootstraps the full AAA schema (8 tables) via postInitApplicationSQLRefs.
+  Bootstraps the full AAA schema (11 tables) via postInitApplicationSQLRefs.
 type: application
 version: 1.0.0
 appVersion: "15.6"

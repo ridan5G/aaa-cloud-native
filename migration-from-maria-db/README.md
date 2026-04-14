@@ -75,8 +75,9 @@ All tables are created by the DB plan schema before migration starts.
 | `ip_pools` | `tbl_ip_pools` |
 | `ip_pool_available` | Computed from `ip_pools` minus already-allocated IPs |
 | `imsi_range_configs` | `tbl_imsi_range_config` — all rows get `iccid_range_id = NULL` (standalone/single-IMSI mode) |
-| `iccid_range_configs` | **Not populated at migration time.** Multi-IMSI SIM ranges are provisioned post-cutover by operators via `POST /iccid-range-configs` when new multi-IMSI SIM batches are ordered. `pool_id` is optional — each child IMSI slot can define its own pool. |
+| `iccid_range_configs` | **Not populated at migration time.** Multi-IMSI SIM ranges are provisioned post-cutover by operators via `POST /iccid-range-configs` when new multi-IMSI SIM batches are ordered. `pool_id` is optional — each child IMSI slot can define its own pool. `f_iccid`/`t_iccid` are nullable — omit both for IMSI-only groups with no ICCID bounds. |
 | `range_config_apn_pools` | **Not populated at migration time.** Operators add APN→pool overrides post-cutover via `POST /range-configs/{id}/apn-pools` when per-APN pool routing is needed. |
+| `bulk_jobs` | **Not populated at migration time.** Created on-demand by the API when bulk import/provisioning jobs are submitted. Empty at schema init. |
 
 ---
 
@@ -84,7 +85,7 @@ All tables are created by the DB plan schema before migration starts.
 
 Complete every item before starting Step 1.
 
-- [ ] PostgreSQL 15+ deployed, schema applied (all 9 tables, indexes, triggers, constraints)
+- [ ] PostgreSQL 15+ deployed, schema applied (all 11 tables, indexes, triggers, constraints)
 - [ ] Both application containers (`subscriber-profile-api`, `aaa-lookup-service`) deployed and `/health` returning 200
 - [ ] Regression test suite passing against the empty PostgreSQL instance
 - [ ] All 7 MariaDB dump files available and MD5-checksummed
@@ -337,11 +338,12 @@ CREATE TEMP TABLE staging_ranges (
 
 INSERT INTO imsi_range_configs
     (account_name, f_imsi, t_imsi, pool_id, ip_resolution,
-     iccid_range_id, imsi_slot, description, status)
+     iccid_range_id, imsi_slot, description, status, provisioning_mode)
 SELECT  account_name, f_imsi, t_imsi, pool_id, 'imsi',
-        NULL,   -- iccid_range_id: standalone mode (no multi-IMSI SIM parent)
-        1,      -- imsi_slot: default primary slot; irrelevant when iccid_range_id IS NULL
-        description, 'active'
+        NULL,             -- iccid_range_id: standalone mode (no multi-IMSI SIM parent)
+        1,                -- imsi_slot: default primary slot; irrelevant when iccid_range_id IS NULL
+        description, 'active',
+        'first_connect'   -- all migrated ranges use first-connection dynamic allocation
 FROM    staging_ranges
 ON CONFLICT DO NOTHING;
 ```
@@ -427,6 +429,7 @@ SELECT COUNT(*) FROM ip_pools;
 SELECT COUNT(*) FROM imsi_range_configs;     -- expect: ~328
 SELECT COUNT(*) FROM iccid_range_configs;    -- expect: 0 (not populated at migration time)
 SELECT COUNT(*) FROM range_config_apn_pools; -- expect: 0 (populated post-cutover by operators)
+SELECT COUNT(*) FROM bulk_jobs;              -- expect: 0 (populated at runtime by API only)
 
 -- Confirm all migrated range configs are in standalone mode
 SELECT COUNT(*) FROM imsi_range_configs WHERE iccid_range_id IS NOT NULL;
@@ -548,6 +551,9 @@ SELECT COUNT(*) FROM sim_profiles WHERE sim_id IS NULL;  -- expect 0
 -- Confirm all migrated range configs remain in standalone mode
 SELECT COUNT(*) FROM imsi_range_configs WHERE iccid_range_id IS NOT NULL;  -- expect 0
 
+-- Confirm no stale provisioning modes from migration
+SELECT COUNT(*) FROM imsi_range_configs WHERE provisioning_mode != 'first_connect';  -- expect 0
+
 -- Check aaa-lookup-service metrics
 -- lookup_result_total{result="not_found"} < pre-cutover baseline
 -- lookup_latency_ms p99 < 15ms
@@ -664,6 +670,8 @@ These are the automated checks the regression suite runs against migration outpu
 | 9.8 | All migrated range-configs have iccid_range_id = NULL | SELECT COUNT(*) FROM imsi_range_configs WHERE iccid_range_id IS NOT NULL = 0 |
 | 9.9 | iccid_range_configs table is empty post-migration | SELECT COUNT(*) FROM iccid_range_configs = 0 |
 | 9.10 | Pool stats after load | available = total IPs − allocated; allocated + available = total |
+| 9.13 | bulk_jobs table is empty post-migration | SELECT COUNT(*) FROM bulk_jobs = 0 |
+| 9.14 | All migrated imsi_range_configs have provisioning_mode = 'first_connect' | SELECT COUNT(*) FROM imsi_range_configs WHERE provisioning_mode != 'first_connect' = 0 |
 | 9.11 | GET /lookup?imsi={migrated_imsi}&apn=any via aaa-lookup-service | 200, correct static_ip |
 | 9.12 | GET /lookup?imsi={range_config_imsi_not_in_profiles}&apn=any → 404 from aaa-lookup-service, then POST /first-connection (via aaa-radius-server two-stage) | 200, new IP allocated from pool; profile permanently created |
 

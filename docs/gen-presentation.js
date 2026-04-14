@@ -153,8 +153,8 @@ function sectionLine(slide, y) {
     const y = 0.95 + row * 2.05;
     s.addShape(pres.shapes.RECTANGLE, { x, y, w: 4.4, h: 1.8, fill: { color: "172055" }, line: { color: C.blue, width: 0.5 } });
     s.addShape(pres.shapes.RECTANGLE, { x, y, w: 0.06, h: 1.8, fill: { color: C.amber }, line: { color: C.amber } });
-    s.addText(p.t, { x: x + 0.14, y: y + 0.1, w: 4.1, h: 0.3, fontSize: 13, bold: true, color: C.white, margin: 0 });
-    s.addText(p.d, { x: x + 0.14, y: y + 0.42, w: 4.1, h: 1.25, fontSize: 11.5, color: C.skyBlue, margin: 0 });
+    s.addText(p.t, { x: x + 0.14, y: y + 0.1, w: 4.1, h: 0.3, fontSize: 16, bold: true, color: C.white, margin: 0 });
+    s.addText(p.d, { x: x + 0.14, y: y + 0.42, w: 4.1, h: 1.25, fontSize: 14, color: C.skyBlue, margin: 0 });
   });
 }
 
@@ -175,12 +175,12 @@ function sectionLine(slide, y) {
   // Arrow down-left to lookup
   s.addShape(pres.shapes.LINE, { x: 3.15, y: 1.87, w: 0, h: 0.48, line: { color: C.blue, width: 1.5 } });
   s.addShape(pres.shapes.LINE, { x: 1.9, y: 2.35, w: 1.25, h: 0, line: { color: C.blue, width: 1.5 } });
-  s.addText("Stage 1: GET /lookup (every request)", { x: 0.4, y: 2.1, w: 2.6, h: 0.35, fontSize: 8.5, color: C.blue, italic: true, align: "center" });
+  s.addText("Stage 1: GET /lookup (every request)", { x: 0.4, y: 2.1, w: 2.6, h: 0.35, fontSize: 10, color: C.blue, italic: true, align: "center" });
 
   // Arrow down-right to profile-api
   s.addShape(pres.shapes.LINE, { x: 6.85, y: 1.87, w: 0, h: 0.48, line: { color: C.amber, width: 1.5 } });
   s.addShape(pres.shapes.LINE, { x: 6.85, y: 2.35, w: 1.25, h: 0, line: { color: C.amber, width: 1.5 } });
-  s.addText("POST /first-connection (called by lookup pod internally, on DB miss)", { x: 7.0, y: 2.1, w: 2.8, h: 0.35, fontSize: 8.5, color: C.amber, italic: true, align: "center" });
+  s.addText("POST /first-connection (called by lookup pod internally, on DB miss)", { x: 7.0, y: 2.1, w: 2.8, h: 0.35, fontSize: 10, color: C.amber, italic: true, align: "center" });
 
   // Central separator below the top box
   s.addShape(pres.shapes.LINE, { x: W / 2, y: 2.4, w: 0, h: H - 2.7, line: { color: C.iceBlue, width: 1, dashType: "dash" } });
@@ -998,8 +998,8 @@ function sectionLine(slide, y) {
     const y = 1.05 + row * 2.1;
     s.addShape(pres.shapes.RECTANGLE, { x, y, w: 4.5, h: 1.9, fill: { color: "172055" }, line: { color: t.color, width: 1 } });
     s.addShape(pres.shapes.RECTANGLE, { x, y, w: 4.5, h: 0.06, fill: { color: t.color }, line: { color: t.color } });
-    s.addText(t.title, { x: x + 0.14, y: y + 0.14, w: 4.2, h: 0.36, fontSize: 13, bold: true, color: C.white, margin: 0 });
-    s.addText(t.body, { x: x + 0.14, y: y + 0.55, w: 4.2, h: 1.25, fontSize: 11.5, color: C.skyBlue, margin: 0 });
+    s.addText(t.title, { x: x + 0.14, y: y + 0.14, w: 4.2, h: 0.36, fontSize: 16, bold: true, color: C.white, margin: 0 });
+    s.addText(t.body, { x: x + 0.14, y: y + 0.55, w: 4.2, h: 1.25, fontSize: 14, color: C.skyBlue, margin: 0 });
   });
 
   s.addShape(pres.shapes.LINE, { x: 0.3, y: 5.22, w: W - 0.6, h: 0, line: { color: C.darkGray, width: 0.5 } });

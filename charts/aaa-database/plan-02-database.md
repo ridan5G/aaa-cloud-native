@@ -16,7 +16,7 @@
 
 ---
 
-## Schema — 10 Tables
+## Schema — 11 Tables
 
 ### Table 1: sim_profiles
 
@@ -256,21 +256,23 @@ conflicting resolution modes. The API rejects any child slot addition or update 
 CREATE TABLE iccid_range_configs (
     id              BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     account_name    TEXT,
-    f_iccid         TEXT        NOT NULL,   -- from ICCID (inclusive, 19-20 digits)
-    t_iccid         TEXT        NOT NULL,   -- to ICCID (inclusive, 19-20 digits)
-    pool_id         UUID        REFERENCES ip_pools (pool_id),  -- nullable: each slot may define its own pool
+    f_iccid         TEXT,       -- nullable: NULL = IMSI-only group (no ICCID bounds)
+    t_iccid         TEXT,       -- nullable: NULL = IMSI-only group
+    pool_id         UUID        REFERENCES ip_pools (pool_id),  -- nullable: slots may each define their own pool
     ip_resolution   TEXT        NOT NULL DEFAULT 'imsi',
     imsi_count      SMALLINT    NOT NULL DEFAULT 1,  -- number of IMSIs per card (1–10)
     description     TEXT,
     status          TEXT        NOT NULL DEFAULT 'active',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT chk_iccid_range_status CHECK (status IN ('active', 'suspended')),
+    CONSTRAINT chk_iccid_range_status CHECK (status IN ('active', 'suspended', 'provisioned')),
     CONSTRAINT chk_iccid_range_ip_res CHECK (ip_resolution IN ('imsi','imsi_apn','iccid','iccid_apn')),
-    CONSTRAINT chk_f_iccid_format CHECK (f_iccid ~ '^\d{19,20}$'),
-    CONSTRAINT chk_t_iccid_format CHECK (t_iccid ~ '^\d{19,20}$'),
-    CONSTRAINT chk_iccid_range_order CHECK (f_iccid <= t_iccid),
-    CONSTRAINT chk_imsi_count CHECK (imsi_count BETWEEN 1 AND 10)
+    CONSTRAINT chk_f_iccid_format CHECK (f_iccid IS NULL OR f_iccid ~ '^\d{19,20}$'),
+    CONSTRAINT chk_t_iccid_format CHECK (t_iccid IS NULL OR t_iccid ~ '^\d{19,20}$'),
+    CONSTRAINT chk_iccid_range_order CHECK (f_iccid IS NULL OR f_iccid <= t_iccid),
+    CONSTRAINT chk_imsi_count CHECK (imsi_count BETWEEN 1 AND 10),
+    provisioning_mode TEXT        NOT NULL DEFAULT 'first_connect',
+    CONSTRAINT chk_iccid_range_prov_mode CHECK (provisioning_mode IN ('first_connect', 'immediate'))
 );
 
 CREATE INDEX idx_iccid_rc_account   ON iccid_range_configs (account_name);
@@ -309,14 +311,16 @@ CREATE TABLE imsi_range_configs (
     status          TEXT        NOT NULL DEFAULT 'active',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT chk_range_status CHECK (status IN ('active', 'suspended')),
+    CONSTRAINT chk_range_status CHECK (status IN ('active', 'suspended', 'provisioned')),
     CONSTRAINT chk_range_ip_resolution CHECK (ip_resolution IN ('imsi','imsi_apn','iccid','iccid_apn')),
     CONSTRAINT chk_f_imsi_15 CHECK (f_imsi ~ '^\d{15}$'),
     CONSTRAINT chk_t_imsi_15 CHECK (t_imsi ~ '^\d{15}$'),
     CONSTRAINT chk_range_order CHECK (f_imsi <= t_imsi),
     CONSTRAINT chk_imsi_slot CHECK (imsi_slot BETWEEN 1 AND 10),
     -- Within a multi-IMSI group, each slot number must be unique
-    CONSTRAINT uq_iccid_range_slot UNIQUE (iccid_range_id, imsi_slot)
+    CONSTRAINT uq_iccid_range_slot UNIQUE (iccid_range_id, imsi_slot),
+    provisioning_mode TEXT        NOT NULL DEFAULT 'first_connect',
+    CONSTRAINT chk_imsi_range_prov_mode CHECK (provisioning_mode IN ('first_connect', 'immediate'))
 );
 
 CREATE INDEX idx_irc_account       ON imsi_range_configs (account_name);
@@ -391,6 +395,30 @@ CREATE INDEX idx_rcap_range_config ON range_config_apn_pools (range_config_id);
 
 ---
 
+### Table 11: bulk_jobs
+
+Tracks async bulk import/provisioning jobs submitted via the API. Owned by this
+schema so that fresh-cluster installs and migration Job installs share the same
+definition.
+
+```sql
+CREATE TABLE bulk_jobs (
+    job_id          UUID        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+    status          TEXT        NOT NULL DEFAULT 'queued',
+    submitted       INT         NOT NULL DEFAULT 0,
+    processed       INT         NOT NULL DEFAULT 0,
+    failed          INT         NOT NULL DEFAULT 0,
+    errors          JSONB,
+    range_config_id BIGINT      REFERENCES iccid_range_configs (id) ON DELETE SET NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT chk_bulk_job_status
+        CHECK (status IN ('queued', 'running', 'completed', 'completed_with_errors', 'failed'))
+);
+```
+
+---
+
 ### Auto-Update Trigger (all tables)
 
 ```sql
@@ -398,14 +426,15 @@ CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN NEW.updated_at = now(); RETURN NEW; END; $$;
 
-CREATE TRIGGER trg_sp_updated_at      BEFORE UPDATE ON sim_profiles         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_si_updated_at      BEFORE UPDATE ON imsi2sim             FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_sai_updated_at     BEFORE UPDATE ON imsi_apn_ips         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_sii_updated_at     BEFORE UPDATE ON sim_apn_ips          FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_rd_updated_at      BEFORE UPDATE ON routing_domains      FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_pools_updated_at   BEFORE UPDATE ON ip_pools             FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_iccid_rc_updated_at BEFORE UPDATE ON iccid_range_configs FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-CREATE TRIGGER trg_irc_updated_at     BEFORE UPDATE ON imsi_range_configs   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_sp_updated_at       BEFORE UPDATE ON sim_profiles         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_si_updated_at       BEFORE UPDATE ON imsi2sim             FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_sai_updated_at      BEFORE UPDATE ON imsi_apn_ips         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_sii_updated_at      BEFORE UPDATE ON sim_apn_ips          FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_rd_updated_at       BEFORE UPDATE ON routing_domains      FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_pools_updated_at    BEFORE UPDATE ON ip_pools             FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_iccid_rc_updated_at BEFORE UPDATE ON iccid_range_configs  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_irc_updated_at      BEFORE UPDATE ON imsi_range_configs   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_bj_updated_at       BEFORE UPDATE ON bulk_jobs            FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 ```
 
 ---
