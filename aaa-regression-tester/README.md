@@ -114,7 +114,7 @@ No shared mutable state between modules.
 
 ---
 
-### test_01_pools.py — IP Pool CRUD + Stats
+### [test_01_pools.py](../aio%20test%20description/test_01_pools.md) — IP Pool CRUD + Stats
 
 **APIs validated:** `POST /pools` · `GET /pools/{id}` · `GET /pools/{id}/stats` ·
 `PATCH /pools/{id}` · `GET /pools` · `DELETE /pools/{id}`
@@ -132,7 +132,7 @@ No shared mutable state between modules.
 
 ---
 
-### test_01b_radius_warmup.py — RADIUS Warmup
+### [test_01b_radius_warmup.py](../aio%20test%20description/test_01b_radius_warmup.md) — RADIUS Warmup
 
 Sends a single RADIUS Access-Request immediately after test_01_pools so that
 `radius_requests_total` and `radius_request_duration_ms` timeseries appear in
@@ -140,7 +140,7 @@ Prometheus from the very start of the run (useful for Grafana metric tests).
 
 ---
 
-### test_01c_routing_domains.py — Routing Domain CRUD + suggest-cidr
+### [test_01c_routing_domains.py](../aio%20test%20description/test_01c_routing_domains.md) — Routing Domain CRUD + suggest-cidr
 
 **APIs validated:** `POST /routing-domains` · `GET /routing-domains/{id}` ·
 `PATCH /routing-domains/{id}` · `DELETE /routing-domains/{id}` ·
@@ -159,7 +159,7 @@ Prometheus from the very start of the run (useful for Grafana metric tests).
 
 ---
 
-### test_01d_free_cidr_finder.py — Free CIDR Finder
+### [test_01d_free_cidr_finder.py](../aio%20test%20description/test_01d_free_cidr_finder.md) — Free CIDR Finder
 
 **APIs validated:** `POST /routing-domains/{id}/suggest-cidr` · `POST /pools`
 
@@ -178,7 +178,7 @@ call `suggest-cidr` → create pool with the returned CIDR.
 
 ---
 
-### test_02_range_configs.py — IMSI Range Config CRUD
+### [test_02_range_configs.py](../aio%20test%20description/test_02_range_configs.md) — IMSI Range Config CRUD
 
 **APIs validated:** `POST /range-configs` · `GET /range-configs/{id}` · `GET /range-configs` ·
 `PATCH /range-configs/{id}` · `DELETE /range-configs/{id}`
@@ -196,7 +196,7 @@ call `suggest-cidr` → create pool with the returned CIDR.
 
 ---
 
-### test_03_iccid_profile.py — `ip_resolution = "iccid"`
+### [test_03_iccid_profile.py](../aio%20test%20description/test_03_iccid_profile.md) — `ip_resolution = "iccid"`
 
 In `iccid` mode the APN is ignored — all IMSIs on the SIM card share a single card-level
 static IP.
@@ -216,7 +216,7 @@ static IP.
 
 ---
 
-### test_04_imsi_profile.py — `ip_resolution = "imsi"`
+### [test_04_imsi_profile.py](../aio%20test%20description/test_04_imsi_profile.md) — `ip_resolution = "imsi"`
 
 In `imsi` mode each IMSI has its own static IP and APN is ignored.
 
@@ -235,7 +235,7 @@ In `imsi` mode each IMSI has its own static IP and APN is ignored.
 
 ---
 
-### test_05_imsi_apn_profile.py — `ip_resolution = "imsi_apn"`
+### [test_05_imsi_apn_profile.py](../aio%20test%20description/test_05_imsi_apn_profile.md) — `ip_resolution = "imsi_apn"`
 
 In `imsi_apn` mode each IMSI×APN pair has its own static IP.
 
@@ -254,7 +254,7 @@ In `imsi_apn` mode each IMSI×APN pair has its own static IP.
 
 ---
 
-### test_06_imsi_ops.py — IMSI Add / Remove
+### [test_06_imsi_ops.py](../aio%20test%20description/test_06_imsi_ops.md) — IMSI Add / Remove
 
 **APIs validated:** `GET /profiles/{sim_id}/imsis` · `POST /profiles/{sim_id}/imsis` ·
 `DELETE /profiles/{sim_id}/imsis/{imsi}` · `GET /lookup`
@@ -272,7 +272,7 @@ In `imsi_apn` mode each IMSI×APN pair has its own static IP.
 
 ---
 
-### test_07_dynamic_alloc.py — First-Connection Allocation (Single-IMSI Baseline)
+### [test_07_dynamic_alloc.py](../aio%20test%20description/test_07_dynamic_alloc.md) — First-Connection Allocation (Single-IMSI Baseline)
 
 Allocation is transparent: `GET /lookup` triggers inline allocation when no profile
 exists for the IMSI. Tests idempotency, pool exhaustion, concurrent allocation,
@@ -292,7 +292,7 @@ and suspended ranges.
 
 ---
 
-### test_07b_dynamic_alloc_modes.py — First-Connection All Allocation Modes
+### [test_07b_dynamic_alloc_modes.py](../aio%20test%20description/test_07b_dynamic_alloc_modes.md) — First-Connection All Allocation Modes
 
 Tests all seven allocation mode combinations at first-connection time — four
 single-IMSI modes (S1–S4) and four multi-IMSI modes (M1–M4).
@@ -352,7 +352,7 @@ single-IMSI modes (S1–S4) and four multi-IMSI modes (M1–M4).
 
 ---
 
-### test_07c_release_ips.py — IP Release & IMSI Detach
+### [test_07c_release_ips.py](../aio%20test%20description/test_07c_release_ips.md) — IP Release & IMSI Detach
 
 **APIs validated:** `POST /profiles/{sim_id}/release-ips` · `DELETE /profiles/{sim_id}/imsis/{imsi}` ·
 `GET /pools/{id}/stats`
@@ -370,7 +370,7 @@ single-IMSI modes (S1–S4) and four multi-IMSI modes (M1–M4).
 
 ---
 
-### test_07e_release_reconnect_all_modes.py — Release + Re-allocate (All Modes)
+### [test_07e_release_reconnect_all_modes.py](../aio%20test%20description/test_07e_release_reconnect_all_modes.md) — Release + Re-allocate (All Modes)
 
 Guards against a regression where `release-ips` + `first-connection` produced
 duplicate or incorrect IPs across all four `ip_resolution` modes.
@@ -385,7 +385,7 @@ duplicate or incorrect IPs across all four `ip_resolution` modes.
 
 ---
 
-### test_08_iccid_apn_profile.py — `ip_resolution = "iccid_apn"`
+### [test_08_iccid_apn_profile.py](../aio%20test%20description/test_08_iccid_apn_profile.md) — `ip_resolution = "iccid_apn"`
 
 All IMSIs on a physical SIM card share a set of card-level IPs, one per APN.
 APN resolution follows lookup order: exact match → wildcard → 404.
@@ -402,14 +402,14 @@ APN resolution follows lookup order: exact match → wildcard → 404.
 
 ---
 
-### test_09_migration.py — Migration Validation
+### [test_09_migration.py](../aio%20test%20description/test_09_migration.md) — Migration Validation
 
 Validates migration output via subscriber-profile-api. Runs **only** when a
 pre-migrated DB is available (skipped otherwise).
 
 ---
 
-### test_10_errors.py — Validation & Error Handling
+### [test_10_errors.py](../aio%20test%20description/test_10_errors.md) — Validation & Error Handling
 
 Exhaustively covers all 400/404/409/503 error paths and validates field-level
 error detail.
@@ -436,14 +436,14 @@ error detail.
 
 ---
 
-### test_11_performance.py — Latency Under Load
+### [test_11_performance.py](../aio%20test%20description/test_11_performance.md) — Latency Under Load
 
 Runs **only** when a pre-seeded dataset of ≥300 000 profiles is present (skipped otherwise).
 Asserts p99 lookup latency under concurrent load.
 
 ---
 
-### test_12_radius.py — End-to-End RADIUS (imsi mode)
+### [test_12_radius.py](../aio%20test%20description/test_12_radius.md) — End-to-End RADIUS (imsi mode)
 
 Sends real UDP RADIUS Access-Request packets to `aaa-radius-server` and validates
 the two-stage AAA flow:
@@ -473,7 +473,7 @@ the two-stage AAA flow:
 
 ---
 
-### test_12_grafana_metrics.py — Grafana Dashboard Metric Presence
+### [test_12_grafana_metrics.py](../aio%20test%20description/test_12_grafana_metrics.md) — Grafana Dashboard Metric Presence
 
 Verifies that every metric panel in the Grafana "Platform Overview" dashboard is fed by
 a real counter/gauge/histogram emitted by the services. Queries Prometheus directly and
@@ -481,7 +481,7 @@ asserts all expected series exist with non-zero samples.
 
 ---
 
-### test_12b_radius_modes.py — RADIUS End-to-End (All 4 ip_resolution Modes)
+### [test_12b_radius_modes.py](../aio%20test%20description/test_12b_radius_modes.md) — RADIUS End-to-End (All 4 ip_resolution Modes)
 
 Extends test_12_radius.py. Sends real RADIUS packets for all four resolution modes
 and verifies correct Framed-IP-Address in Accept responses.
@@ -495,7 +495,7 @@ and verifies correct Framed-IP-Address in Accept responses.
 
 ---
 
-### test_13_export_and_ip_search.py — Export CSV + IP Filter + Terminated SIM Visibility
+### [test_13_export_and_ip_search.py](../aio%20test%20description/test_13_export_and_ip_search.md) — Export CSV + IP Filter + Terminated SIM Visibility
 
 Covers three behaviours:
 1. **Export** — `GET /profiles/export` returns one row per IMSI or IMSI×APN pair in the 9-column bulk import format.
@@ -520,7 +520,7 @@ Covers three behaviours:
 
 ---
 
-### test_14_export_delete_reprovision.py — Export → Delete → Bulk Re-import
+### [test_14_export_delete_reprovision.py](../aio%20test%20description/test_14_export_delete_reprovision.md) — Export → Delete → Bulk Re-import
 
 Full SIM lifecycle for all four `ip_resolution` modes (one pytest class per type,
 4 tests each = 16 tests):
@@ -536,7 +536,7 @@ Full SIM lifecycle for all four `ip_resolution` modes (one pytest class per type
 
 ---
 
-### test_15_bulk.py — Bulk Upsert
+### [test_15_bulk.py](../aio%20test%20description/test_15_bulk.md) — Bulk Upsert
 
 **APIs validated:** `POST /profiles/bulk` · `GET /jobs/{job_id}` · `GET /profiles/{sim_id}` · `GET /lookup`
 
@@ -553,7 +553,7 @@ Full SIM lifecycle for all four `ip_resolution` modes (one pytest class per type
 
 ---
 
-### test_15b_bulk_actions.py — Bulk IP Release + Bulk IMSI Delete
+### [test_15b_bulk_actions.py](../aio%20test%20description/test_15b_bulk_actions.md) — Bulk IP Release + Bulk IMSI Delete
 
 **APIs validated:** `POST /profiles/bulk-release-ips` · `POST /profiles/bulk-delete-imsis`
 
@@ -564,7 +564,7 @@ Full SIM lifecycle for all four `ip_resolution` modes (one pytest class per type
 
 ---
 
-### test_16_lookup_fast_path.py — Lookup Fast-Path & Cross-Mode Suspend
+### [test_16_lookup_fast_path.py](../aio%20test%20description/test_16_lookup_fast_path.md) — Lookup Fast-Path & Cross-Mode Suspend
 
 Covers gaps not addressed by existing profile-type tests: fast-path cache invalidation
 on suspend/resume, and cross-mode suspend behaviour.
@@ -577,7 +577,7 @@ on suspend/resume, and cross-mode suspend behaviour.
 
 ---
 
-### test_17_immediate_provisioning.py — Immediate Provisioning Mode
+### [test_17_immediate_provisioning.py](../aio%20test%20description/test_17_immediate_provisioning.md) — Immediate Provisioning Mode
 
 Verifies that `POST /range-configs` with `provisioning_mode="immediate"` triggers
 bulk pre-provisioning of all IMSIs in the range, and that subsequent lookups
@@ -593,7 +593,7 @@ return pre-allocated IPs without invoking first-connection.
 
 ---
 
-### test_18_nullable_slot_pool.py — Nullable Slot pool_id + Per-Slot APN Pool Routing
+### [test_18_nullable_slot_pool.py](../aio%20test%20description/test_18_nullable_slot_pool.md) — Nullable Slot pool_id + Per-Slot APN Pool Routing
 
 **APIs validated:** `POST /iccid-range-configs` · `POST .../imsi-slots` ·
 `POST .../imsi-slots/{slot}/apn-pools` · `POST /first-connection`
@@ -613,7 +613,7 @@ NotNullViolationError` when the sibling pre-provisioning loop tried to INSERT an
 
 ---
 
-### test_19_validation_and_mgmt.py — ICCID Range Config Validation & Management
+### [test_19_validation_and_mgmt.py](../aio%20test%20description/test_19_validation_and_mgmt.md) — ICCID Range Config Validation & Management
 
 **APIs validated:** `POST /iccid-range-configs` · `POST .../imsi-slots` ·
 `POST .../imsi-slots/{slot}/apn-pools` · `DELETE .../apn-pools/{apn}` ·
@@ -632,7 +632,7 @@ CRUD for IMSI slots, and the IMSI-only (skip-ICCID) mode.
 
 ---
 
-### test_20_imsi_only_immediate.py — IMSI-Only SIM Groups: Immediate Bulk Provisioning
+### [test_20_imsi_only_immediate.py](../aio%20test%20description/test_20_imsi_only_immediate.md) — IMSI-Only SIM Groups: Immediate Bulk Provisioning
 
 **APIs validated:** `POST /iccid-range-configs` · `POST .../imsi-slots` ·
 `POST .../imsi-slots/{slot}/apn-pools` · `GET /jobs/{job_id}` · `GET /lookup` ·
@@ -660,7 +660,7 @@ Key assertions:
 
 ---
 
-### test_21_imsi_only_first_connect.py — IMSI-Only SIM Groups: First-Connect Provisioning
+### [test_21_imsi_only_first_connect.py](../aio%20test%20description/test_21_imsi_only_first_connect.md) — IMSI-Only SIM Groups: First-Connect Provisioning
 
 **APIs validated:** `POST /iccid-range-configs` · `POST .../imsi-slots` ·
 `POST .../imsi-slots/{slot}/apn-pools` · `POST /first-connection` ·
