@@ -487,7 +487,8 @@ class TestSkipIccidRange:
             f"/iccid-range-configs/{TestSkipIccidRange.range_id}/imsi-slots",
             json={
                 "f_imsi":    make_imsi(MODULE, 500),
-                "t_imsi":    make_imsi(MODULE, 507),   # 8 IMSIs — no constraint
+            #   "t_imsi":    make_imsi(MODULE, 507),   # 8 IMSIs — no constraint
+                "t_imsi":    make_imsi(MODULE, 599),   # was 507
                 "imsi_slot": 1,
                 "pool_id":   TestSkipIccidRange.pool_id,
             },
@@ -497,7 +498,8 @@ class TestSkipIccidRange:
     # D.4 ─────────────────────────────────────────────────────────────────────
     def test_04_first_connection_by_imsi_works(self, http: httpx.Client):
         """POST /first-connection with an IMSI in the skip-ICCID slot → 201, IP allocated."""
-        resp = _fc(http, make_imsi(MODULE, 503))
+       #resp = _fc(http, make_imsi(MODULE, 500))
+        resp = _fc(http, make_imsi(MODULE, 550))  # was 500
         assert resp.status_code == 201, resp.text
         assert resp.json().get("static_ip") is not None
 

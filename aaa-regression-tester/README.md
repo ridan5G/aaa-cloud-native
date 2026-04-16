@@ -58,6 +58,7 @@ aaa-regression-tester/
 ├── test_12_radius.py                     # End-to-end RADIUS authentication (imsi mode)       [15 tests]
 ├── test_12_grafana_metrics.py            # Grafana dashboard metric presence                  [15 tests]
 ├── test_12b_radius_modes.py              # RADIUS end-to-end for all 4 ip_resolution modes    [13 tests]
+├── test_12c_radius_3imsi_modes.py        # RADIUS all 4 modes, 3 IMSIs/SIM, sibling FC        [41 tests]
 ├── test_13_export_and_ip_search.py       # Export CSV + IP filter + terminated SIM visibility [19 tests]
 ├── test_14_export_delete_reprovision.py  # Export → delete → bulk re-import (4 SIM types)    [16 tests]
 ├── test_15_bulk.py                       # Bulk upsert via POST /profiles/bulk                [ 8 tests]
@@ -492,6 +493,23 @@ and verifies correct Framed-IP-Address in Accept responses.
 | 12b.4–6 | imsi_apn mode: APN-specific IP in Accept | Accept |
 | 12b.7–9 | iccid mode: card-level IP | Accept |
 | 12b.10–13 | iccid_apn mode: card-level per-APN IP | Accept |
+
+---
+
+### [test_12c_radius_3imsi_modes.py](test_12c_radius_3imsi_modes.py) · [description](../aio%20test%20description/test_12c_radius_3imsi_modes.md) — RADIUS: All 4 Modes, 3-IMSI SIMs, Sibling First-Connection
+
+Extends test_12b with 3 IMSIs per SIM and per-slot first-connection via ICCID range configs.
+Both `smf1` and `smf2` APNs are exercised in APN-aware modes.
+
+| # | Test | Expected |
+|---|---|---|
+| A (01–11) | imsi mode: 3 IMSIs, per-IMSI IPs, APN-agnostic, FC sibling pre-provisioning | each slot gets a distinct IP |
+| B (12–19) | iccid mode: 3 IMSIs share card IP, FC all slots return same card IP | card IP shared |
+| C (20–30) | imsi_apn mode: 3 IMSIs × smf1+smf2, per-slot per-APN FC, idempotency | 6 unique IPs |
+| D (31–39) | iccid_apn mode: card-level smf1+smf2, all slots return same card IPs | same per-APN IPs |
+| E (40–41) | RFC 2865 ResponseAuth · Reject has no Framed-IP-Address | RFC compliance |
+
+See [full description](../aio%20test%20description/test_12c_radius_3imsi_modes.md).
 
 ---
 
