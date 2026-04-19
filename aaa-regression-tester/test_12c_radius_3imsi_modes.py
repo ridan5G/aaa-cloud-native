@@ -86,9 +86,9 @@ import pytest
 from conftest import (
     ACCOUNT_NAME, PROVISION_BASE, JWT_TOKEN,
     RADIUS_HOST, RADIUS_PORT, RADIUS_SECRET,
-    make_imsi, make_iccid,
+    make_imsi, make_iccid, make_imsi_range, make_iccid_range,
 )
-from fixtures.pools import create_pool, delete_pool, _force_clear_range_profiles
+from fixtures.pools import create_pool, delete_pool, _force_clear_range_profiles, _force_clear_pool_ips
 from fixtures.profiles import (
     create_profile_imsi,
     create_profile_iccid,
@@ -154,57 +154,46 @@ IP_ICAPN_SMF1 = "100.178.244.33"
 IP_ICAPN_SMF2 = "100.178.244.41"
 
 # ── FC imsi: 3-slot ICCID range config, each slot has its own pool ────────────
-F_ICCID_FC_IMSI    = make_iccid(MODULE, 101)
-T_ICCID_FC_IMSI    = make_iccid(MODULE, 199)
-F_IMSI_FC_IMSI_S1  = make_imsi(MODULE, 1001)
-T_IMSI_FC_IMSI_S1  = make_imsi(MODULE, 1099)
-F_IMSI_FC_IMSI_S2  = make_imsi(MODULE, 2001)
-T_IMSI_FC_IMSI_S2  = make_imsi(MODULE, 2099)
-F_IMSI_FC_IMSI_S3  = make_imsi(MODULE, 3001)
-T_IMSI_FC_IMSI_S3  = make_imsi(MODULE, 3099)
+# Single source of truth for cardinality — change _FC_IMSI_SIZE and all bounds update.
+_FC_IMSI_SIZE      = 99
+F_ICCID_FC_IMSI,   T_ICCID_FC_IMSI   = make_iccid_range(MODULE, 101,   _FC_IMSI_SIZE)
+F_IMSI_FC_IMSI_S1, T_IMSI_FC_IMSI_S1 = make_imsi_range( MODULE, 1001,  _FC_IMSI_SIZE)
+F_IMSI_FC_IMSI_S2, T_IMSI_FC_IMSI_S2 = make_imsi_range( MODULE, 2001,  _FC_IMSI_SIZE)
+F_IMSI_FC_IMSI_S3, T_IMSI_FC_IMSI_S3 = make_imsi_range( MODULE, 3001,  _FC_IMSI_SIZE)
 # Representative test IMSIs (first in each slot range)
-IMSI_FC_IMSI_S1    = make_imsi(MODULE, 1001)
-IMSI_FC_IMSI_S2    = make_imsi(MODULE, 2001)
-IMSI_FC_IMSI_S3    = make_imsi(MODULE, 3001)
+IMSI_FC_IMSI_S1    = F_IMSI_FC_IMSI_S1
+IMSI_FC_IMSI_S2    = F_IMSI_FC_IMSI_S2
+IMSI_FC_IMSI_S3    = F_IMSI_FC_IMSI_S3
 
 # ── FC imsi_apn: 3-slot ICCID range config, per-slot per-APN pools ───────────
-F_ICCID_FC_IAPN    = make_iccid(MODULE, 201)
-T_ICCID_FC_IAPN    = make_iccid(MODULE, 299)
-F_IMSI_FC_IAPN_S1  = make_imsi(MODULE, 4001)
-T_IMSI_FC_IAPN_S1  = make_imsi(MODULE, 4099)
-F_IMSI_FC_IAPN_S2  = make_imsi(MODULE, 5001)
-T_IMSI_FC_IAPN_S2  = make_imsi(MODULE, 5099)
-F_IMSI_FC_IAPN_S3  = make_imsi(MODULE, 6001)
-T_IMSI_FC_IAPN_S3  = make_imsi(MODULE, 6099)
-IMSI_FC_IAPN_S1    = make_imsi(MODULE, 4001)
-IMSI_FC_IAPN_S2    = make_imsi(MODULE, 5001)
-IMSI_FC_IAPN_S3    = make_imsi(MODULE, 6001)
+_FC_IAPN_SIZE      = 99
+F_ICCID_FC_IAPN,   T_ICCID_FC_IAPN   = make_iccid_range(MODULE, 201,   _FC_IAPN_SIZE)
+F_IMSI_FC_IAPN_S1, T_IMSI_FC_IAPN_S1 = make_imsi_range( MODULE, 4001,  _FC_IAPN_SIZE)
+F_IMSI_FC_IAPN_S2, T_IMSI_FC_IAPN_S2 = make_imsi_range( MODULE, 5001,  _FC_IAPN_SIZE)
+F_IMSI_FC_IAPN_S3, T_IMSI_FC_IAPN_S3 = make_imsi_range( MODULE, 6001,  _FC_IAPN_SIZE)
+IMSI_FC_IAPN_S1    = F_IMSI_FC_IAPN_S1
+IMSI_FC_IAPN_S2    = F_IMSI_FC_IAPN_S2
+IMSI_FC_IAPN_S3    = F_IMSI_FC_IAPN_S3
 
 # ── FC iccid: 3-slot ICCID range config, single shared card pool ──────────────
-F_ICCID_FC_ICCID    = make_iccid(MODULE, 301)
-T_ICCID_FC_ICCID    = make_iccid(MODULE, 399)
-F_IMSI_FC_ICCID_S1  = make_imsi(MODULE, 7001)
-T_IMSI_FC_ICCID_S1  = make_imsi(MODULE, 7099)
-F_IMSI_FC_ICCID_S2  = make_imsi(MODULE, 8001)
-T_IMSI_FC_ICCID_S2  = make_imsi(MODULE, 8099)
-F_IMSI_FC_ICCID_S3  = make_imsi(MODULE, 9001)
-T_IMSI_FC_ICCID_S3  = make_imsi(MODULE, 9099)
-IMSI_FC_ICCID_S1    = make_imsi(MODULE, 7001)
-IMSI_FC_ICCID_S2    = make_imsi(MODULE, 8001)
-IMSI_FC_ICCID_S3    = make_imsi(MODULE, 9001)
+_FC_ICCID_SIZE      = 99
+F_ICCID_FC_ICCID,   T_ICCID_FC_ICCID   = make_iccid_range(MODULE, 301,   _FC_ICCID_SIZE)
+F_IMSI_FC_ICCID_S1, T_IMSI_FC_ICCID_S1 = make_imsi_range( MODULE, 7001,  _FC_ICCID_SIZE)
+F_IMSI_FC_ICCID_S2, T_IMSI_FC_ICCID_S2 = make_imsi_range( MODULE, 8001,  _FC_ICCID_SIZE)
+F_IMSI_FC_ICCID_S3, T_IMSI_FC_ICCID_S3 = make_imsi_range( MODULE, 9001,  _FC_ICCID_SIZE)
+IMSI_FC_ICCID_S1    = F_IMSI_FC_ICCID_S1
+IMSI_FC_ICCID_S2    = F_IMSI_FC_ICCID_S2
+IMSI_FC_ICCID_S3    = F_IMSI_FC_ICCID_S3
 
 # ── FC iccid_apn: 3-slot ICCID range config, shared card-level APN pools ──────
-F_ICCID_FC_ICAPN    = make_iccid(MODULE, 401)
-T_ICCID_FC_ICAPN    = make_iccid(MODULE, 499)
-F_IMSI_FC_ICAPN_S1  = make_imsi(MODULE, 10001)
-T_IMSI_FC_ICAPN_S1  = make_imsi(MODULE, 10099)
-F_IMSI_FC_ICAPN_S2  = make_imsi(MODULE, 20001)
-T_IMSI_FC_ICAPN_S2  = make_imsi(MODULE, 20099)
-F_IMSI_FC_ICAPN_S3  = make_imsi(MODULE, 30001)
-T_IMSI_FC_ICAPN_S3  = make_imsi(MODULE, 30099)
-IMSI_FC_ICAPN_S1    = make_imsi(MODULE, 10001)
-IMSI_FC_ICAPN_S2    = make_imsi(MODULE, 20001)
-IMSI_FC_ICAPN_S3    = make_imsi(MODULE, 30001)
+_FC_ICAPN_SIZE      = 99
+F_ICCID_FC_ICAPN,   T_ICCID_FC_ICAPN   = make_iccid_range(MODULE, 401,   _FC_ICAPN_SIZE)
+F_IMSI_FC_ICAPN_S1, T_IMSI_FC_ICAPN_S1 = make_imsi_range( MODULE, 10001, _FC_ICAPN_SIZE)
+F_IMSI_FC_ICAPN_S2, T_IMSI_FC_ICAPN_S2 = make_imsi_range( MODULE, 20001, _FC_ICAPN_SIZE)
+F_IMSI_FC_ICAPN_S3, T_IMSI_FC_ICAPN_S3 = make_imsi_range( MODULE, 30001, _FC_ICAPN_SIZE)
+IMSI_FC_ICAPN_S1    = F_IMSI_FC_ICAPN_S1
+IMSI_FC_ICAPN_S2    = F_IMSI_FC_ICAPN_S2
+IMSI_FC_ICAPN_S3    = F_IMSI_FC_ICAPN_S3
 
 # ── Out-of-range IMSI (module 99 — deliberately outside all module-22 configs) ─
 IMSI_OOB = "278779900000001"   # module-99 prefix: no range configs exist for it
@@ -623,34 +612,39 @@ class TestRadius3ImsiModes:
 
     @classmethod
     def teardown_class(cls):
+        # Force-delete all profiles by IMSI range so teardown is robust against
+        # tests that failed before capturing a sim_id, and against FC paths that
+        # auto-create sibling profiles not tracked in cls.*_sim_id attributes.
+        _force_clear_range_profiles(IMSI_IMSI_A,       IMSI_IMSI_C)
+        _force_clear_range_profiles(IMSI_ICCID_A,      IMSI_ICCID_C)
+        _force_clear_range_profiles(IMSI_IAPN_A,       IMSI_IAPN_C)
+        _force_clear_range_profiles(IMSI_ICAPN_A,      IMSI_ICAPN_C)
+        _force_clear_range_profiles(F_IMSI_FC_IMSI_S1,  T_IMSI_FC_IMSI_S3)
+        _force_clear_range_profiles(F_IMSI_FC_IAPN_S1,  T_IMSI_FC_IAPN_S3)
+        _force_clear_range_profiles(F_IMSI_FC_ICCID_S1, T_IMSI_FC_ICCID_S3)
+        _force_clear_range_profiles(F_IMSI_FC_ICAPN_S1, T_IMSI_FC_ICAPN_S3)
+
         with httpx.Client(
             base_url=PROVISION_BASE,
             headers={"Authorization": f"Bearer {JWT_TOKEN}"},
             timeout=30.0,
         ) as c:
-            # Delete all profiles (static + auto-created by FC)
-            for sim_id in filter(None, [
-                cls.imsi_sim_id, cls.iccid_sim_id,
-                cls.iapn_sim_id, cls.icapn_sim_id,
-                cls.fc_imsi_sim_id, cls.fc_iapn_sim_id,
-                cls.fc_iccid_sim_id, cls.fc_icapn_sim_id,
-            ]):
-                try:
-                    c.delete(f"/profiles/{sim_id}")
-                except Exception:
-                    pass
-
-            # Delete ICCID range configs (cascades to imsi slots and their APN-pool entries)
+            # Delete ICCID range configs (cascades to imsi slots and APN-pool entries).
             for rc_id in filter(None, [
                 cls.fc_imsi_rc_id, cls.fc_iapn_rc_id,
                 cls.fc_iccid_rc_id, cls.fc_icapn_rc_id,
             ]):
                 delete_iccid_range_config(c, rc_id)
 
-            # Delete pools last
+            # Force-clear any remaining IP allocations before deleting pools so
+            # DELETE /pools never silently fails with 409 and strands the subnet.
             for pool_id in cls.pool_ids.values():
                 if pool_id:
-                    delete_pool(c, pool_id)
+                    _force_clear_pool_ips(pool_id)
+                    resp = c.delete(f"/pools/{pool_id}")
+                    assert resp.status_code in (204, 404), (
+                        f"delete_pool({pool_id}) returned {resp.status_code}: {resp.text}"
+                    )
 
     @pytest.fixture(autouse=True)
     def rc(self) -> RadiusClient:
