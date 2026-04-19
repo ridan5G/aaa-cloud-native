@@ -1,5 +1,28 @@
 # Plan 6 — Migration: MariaDB → PostgreSQL
 
+## Assumptions
+
+- Each regional MariaDB/Galera cluster maps to its own **routing domain**, named after
+  the cluster in lowercase (derived by stripping `_aaa_dump.sql` from the dump filename):
+
+  | Region     | Routing domain name |
+  |---|---|
+  | Athens     | `athens`     |
+  | Miami      | `miami`      |
+  | Singapore  | `singapore`  |
+  | Telefonica | `telefonica` |
+  | TIS        | `tis`        |
+  | _(+2 TBD)_ | Confirm names with operator before Step 1 |
+
+- IP pools extracted from a given regional dump are assigned to that region's routing
+  domain during Step 3A. This isolates each region's subnet space — two regions may
+  reuse the same subnet range without conflict.
+
+- The routing domains are created in Step 3A (before pools are inserted) using the
+  domain names derived from the dump filenames.
+
+---
+
 ## Purpose
 
 This document is the sole reference for the one-time migration from the 7 regional
@@ -72,6 +95,7 @@ All tables are created by the DB plan schema before migration starts.
 | `imsi2sim` | Transform output of `tbl_clients_ips` |
 | `imsi_apn_ips` | Transform output of `tbl_clients_ips` |
 | `sim_apn_ips` | Empty at migration time; populated post-cutover if Profile A is adopted |
+| `routing_domains` | One row per regional MariaDB cluster, created in Step 3A (`athens`, `miami`, `singapore`, `telefonica`, `tis`, +2 TBD); each regional pool is assigned to its cluster's domain |
 | `ip_pools` | `tbl_ip_pools` |
 | `ip_pool_available` | Computed from `ip_pools` minus already-allocated IPs |
 | `imsi_range_configs` | `tbl_imsi_range_config` — all rows get `iccid_range_id = NULL` (standalone/single-IMSI mode) |
@@ -119,8 +143,10 @@ FROM    tbl_clients;
 
 ```sql
 -- tbl_ip_pools → staging_pools.csv
+-- Replace 'athens' below with the actual region name (derived from dump filename) for each run.
 SELECT  id          AS old_pool_id,
         client_id   AS old_client_id,
+        'athens'    AS source_region,   -- set per-dump: athens|miami|singapore|telefonica|tis|…
         name        AS pool_name,
         start_ip,
         subnet,
@@ -154,7 +180,7 @@ FROM    tbl_imsi_range_config;
 
 **Output files after Step 1:**
 - `client_id_map.csv` — merged, deduplicated across all dumps
-- `staging_pools.csv` — one row per pool per dump
+- `staging_pools.csv` — one row per pool per dump; includes `source_region` column for routing domain assignment in Step 3A
 - `core_extract.csv` — all non-NULL IMSI rows, tagged with source_file
 - `staging_ranges.csv` — all range config rows
 
@@ -266,7 +292,7 @@ for each (card_key, imsi_groups) in groups:
 | `out_imsi2sim.csv` | One row per IMSI |
 | `out_imsi_apn_ips.csv` | One row per IMSI+APN IP entry |
 | `out_sim_apn_ips.csv` | Empty — populated post-cutover if Profile A adopted |
-| `out_ip_pools.csv` | Transformed pool definitions |
+| `out_ip_pools.csv` | Transformed pool definitions; includes `routing_domain_name` column (= `source_region` from Step 1) |
 | `out_pool_map.csv` | old_pool_id → new UUID mapping (used in Step 3 and post-cutover) |
 | `out_imsi_range_configs.csv` | Range configs with resolved pool_ids |
 | `migration_audit.log` | Per-row decisions: deduplication, pgw label assignments, skips |
@@ -291,26 +317,38 @@ for each (card_key, imsi_groups) in groups:
 
 ```sql
 CREATE TEMP TABLE staging_ip_pools (
-    old_pool_id     TEXT,
-    old_client_id   TEXT,
-    account_name    TEXT,
-    pool_name       TEXT,
-    pool_name_new   TEXT,
-    subnet          TEXT,
-    start_ip        TEXT,
-    end_ip          TEXT
+    old_pool_id          TEXT,
+    old_client_id        TEXT,
+    account_name         TEXT,
+    pool_name            TEXT,
+    pool_name_new        TEXT,
+    subnet               TEXT,
+    start_ip             TEXT,
+    end_ip               TEXT,
+    routing_domain_name  TEXT   -- regional cluster name: athens|miami|singapore|telefonica|tis|…
 );
 \COPY staging_ip_pools FROM 'out_ip_pools.csv' WITH (FORMAT csv, HEADER true);
 
-INSERT INTO ip_pools (pool_id, account_name, pool_name, subnet, start_ip, end_ip, status)
+-- Create one routing domain per regional cluster (idempotent)
+INSERT INTO routing_domains (name, description)
+SELECT DISTINCT
+       routing_domain_name,
+       routing_domain_name || ' regional AAA cluster'
+FROM   staging_ip_pools
+ON CONFLICT (name) DO NOTHING;
+
+-- Load pools, assigning each to its regional routing domain
+INSERT INTO ip_pools (pool_id, account_name, pool_name, routing_domain_id, subnet, start_ip, end_ip, status)
 SELECT  gen_random_uuid(),
-        account_name,
-        pool_name,
-        subnet::CIDR,
-        start_ip::INET,
-        end_ip::INET,
+        sp.account_name,
+        sp.pool_name,
+        rd.id,
+        sp.subnet::CIDR,
+        sp.start_ip::INET,
+        sp.end_ip::INET,
         'active'
-FROM    staging_ip_pools
+FROM    staging_ip_pools sp
+JOIN    routing_domains  rd ON rd.name = sp.routing_domain_name
 ON CONFLICT DO NOTHING;
 
 -- Pre-populate ip_pool_available
@@ -422,6 +460,7 @@ ON CONFLICT DO NOTHING;
 **Post-load verification queries:**
 ```sql
 -- Row counts
+SELECT COUNT(*) FROM routing_domains;        -- expect: 7 (one per regional cluster; confirm +2 TBD names)
 SELECT COUNT(*) FROM sim_profiles;    -- expect: card count from transform
 SELECT COUNT(*) FROM imsi2sim;       -- expect: ~650K
 SELECT COUNT(*) FROM imsi_apn_ips;     -- expect: ~650K + extra for pgw1/pgw2 profiles
@@ -672,6 +711,7 @@ These are the automated checks the regression suite runs against migration outpu
 | 9.10 | Pool stats after load | available = total IPs − allocated; allocated + available = total |
 | 9.13 | bulk_jobs table is empty post-migration | SELECT COUNT(*) FROM bulk_jobs = 0 |
 | 9.14 | All migrated imsi_range_configs have provisioning_mode = 'first_connect' | SELECT COUNT(*) FROM imsi_range_configs WHERE provisioning_mode != 'first_connect' = 0 |
+| 9.15 | routing_domains has one row per regional cluster; every migrated ip_pools row references a routing domain | SELECT COUNT(*) FROM routing_domains = 7; SELECT COUNT(*) FROM ip_pools WHERE routing_domain_id IS NULL = 0 |
 | 9.11 | GET /lookup?imsi={migrated_imsi}&apn=any via aaa-lookup-service | 200, correct static_ip |
 | 9.12 | GET /lookup?imsi={range_config_imsi_not_in_profiles}&apn=any → 404 from aaa-lookup-service, then POST /first-connection (via aaa-radius-server two-stage) | 200, new IP allocated from pool; profile permanently created |
 
