@@ -35,7 +35,7 @@ import httpx
 import pytest
 
 from conftest import PROVISION_BASE, JWT_TOKEN, USE_CASE_ID, make_imsi, make_iccid
-from fixtures.pools import create_pool, delete_pool
+from fixtures.pools import create_pool, delete_pool, _force_clear_range_profiles
 from fixtures.range_configs import (
     create_iccid_range_config,
     add_imsi_slot,
@@ -453,8 +453,14 @@ class TestSkipIccidRange:
     pool_id:  str | None = None
     range_id: int | None = None
 
+    # IMSI slot range used by this class (any cardinality is valid for skip-ICCID configs)
+    _F_SLOT_IMSI = make_imsi(MODULE, 500)
+    _T_SLOT_IMSI = make_imsi(MODULE, 507)
+
     @classmethod
     def setup_class(cls):
+        # Remove stale profiles from any prior interrupted run before provisioning.
+        _force_clear_range_profiles(cls._F_SLOT_IMSI, cls._T_SLOT_IMSI)
         with _new_client() as c:
             p = create_pool(c, subnet="100.65.220.48/28",
                             pool_name="t19d-pool", replace_on_conflict=True)
@@ -462,6 +468,8 @@ class TestSkipIccidRange:
 
     @classmethod
     def teardown_class(cls):
+        # Delete auto-created sim_profiles so re-runs get 201 instead of 200.
+        _force_clear_range_profiles(cls._F_SLOT_IMSI, cls._T_SLOT_IMSI)
         with _new_client() as c:
             if cls.range_id:
                 delete_iccid_range_config(c, cls.range_id)
@@ -487,8 +495,7 @@ class TestSkipIccidRange:
             f"/iccid-range-configs/{TestSkipIccidRange.range_id}/imsi-slots",
             json={
                 "f_imsi":    make_imsi(MODULE, 500),
-            #   "t_imsi":    make_imsi(MODULE, 507),   # 8 IMSIs — no constraint
-                "t_imsi":    make_imsi(MODULE, 599),   # was 507
+                "t_imsi":    make_imsi(MODULE, 507),   # 8 IMSIs — no cardinality constraint
                 "imsi_slot": 1,
                 "pool_id":   TestSkipIccidRange.pool_id,
             },
@@ -498,8 +505,7 @@ class TestSkipIccidRange:
     # D.4 ─────────────────────────────────────────────────────────────────────
     def test_04_first_connection_by_imsi_works(self, http: httpx.Client):
         """POST /first-connection with an IMSI in the skip-ICCID slot → 201, IP allocated."""
-       #resp = _fc(http, make_imsi(MODULE, 500))
-        resp = _fc(http, make_imsi(MODULE, 550))  # was 500
+        resp = _fc(http, make_imsi(MODULE, 500))
         assert resp.status_code == 201, resp.text
         assert resp.json().get("static_ip") is not None
 

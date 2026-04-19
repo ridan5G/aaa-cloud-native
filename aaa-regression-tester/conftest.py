@@ -121,6 +121,17 @@ def make_iccid(module: int, seq: int) -> str:
 def make_ip(third: int, fourth: int) -> str:
     return f"100.65.{third}.{fourth}"
 
+def make_imsi_range(module: int, base: int, size: int) -> tuple[str, str]:
+    """Return (f_imsi, t_imsi) for a contiguous range of *size* IMSIs starting at *base*."""
+    return make_imsi(module, base), make_imsi(module, base + size - 1)
+
+def make_iccid_range(module: int, base: int, size: int) -> tuple[str, str]:
+    """Return (f_iccid, t_iccid) for a contiguous range of *size* ICCIDs starting at *base*.
+
+    Pass the same *size* to make_imsi_range to guarantee equal cardinality.
+    """
+    return make_iccid(module, base), make_iccid(module, base + size - 1)
+
 
 # ── HTTP client fixtures ──────────────────────────────────────────────────────
 
