@@ -201,7 +201,10 @@ build-ui:                       ## Build just the aaa-management-ui image (dev, 
 	docker build -t aaa/aaa-management-ui:dev ./aaa-management-ui/
 
 # ── Deploy ────────────────────────────────────────────────────
-deploy: package-charts radius-secret test-secret ## Deploy/upgrade umbrella chart (re-packages local sub-charts, creates required secrets, then applies chart); radiusPCAP=true adds tcpdump sidecar to radius-server
+create-namespace:               ## Ensure the aaa-platform namespace exists before secrets are applied
+	kubectl create namespace $(NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
+
+deploy: package-charts create-namespace radius-secret test-secret ## Deploy/upgrade umbrella chart (re-packages local sub-charts, creates required secrets, then applies chart); radiusPCAP=true adds tcpdump sidecar to radius-server
 	helm upgrade --install $(RELEASE) $(CHART_DIR) \
 	  --namespace $(NAMESPACE) --create-namespace \
 	  -f $(CHART_DIR)/values-dev.yaml \
@@ -209,7 +212,7 @@ deploy: package-charts radius-secret test-secret ## Deploy/upgrade umbrella char
 	  --timeout 10m
 	$(MAKE) db-init
 
-deploy-ha: package-charts radius-secret test-secret ## Deploy/upgrade with HA (anti-affinity, PDBs, 3 pooler replicas); radiusPCAP=true adds tcpdump sidecar
+deploy-ha: package-charts create-namespace radius-secret test-secret ## Deploy/upgrade with HA (anti-affinity, PDBs, 3 pooler replicas); radiusPCAP=true adds tcpdump sidecar
 	helm upgrade --install $(RELEASE) $(CHART_DIR) \
 	  --namespace $(NAMESPACE) --create-namespace \
 	  -f $(CHART_DIR)/values-ha.yaml \

@@ -56,6 +56,7 @@ N_MIGRATION=$(collect_count "migration")
 N_NOAUTH=$(collect_count "noauth")
 
 # ── Run the suite ─────────────────────────────────────────────────────────────
+SUITE_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 EXIT_CODE=0
 python -m pytest \
   --junitxml="${JUNIT_XML}" \
@@ -102,7 +103,7 @@ check_pod_exceptions() {
     for pod in ${pods}; do
       echo -n "  ${pod}: "
       local hits
-      hits=$(kubectl logs -n "${namespace}" "${pod}" 2>/dev/null \
+      hits=$(kubectl logs -n "${namespace}" "${pod}" --since-time="${SUITE_START_TIME}" 2>/dev/null \
              | grep -i "exception" || true)
       if [ -n "${hits}" ]; then
         echo "EXCEPTIONS FOUND:"

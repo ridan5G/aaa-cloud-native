@@ -35,9 +35,13 @@ timing.csv
 .dockerignore
 
 # ── Helm ────────────────────────────────────────────────────────
-charts/*/charts/
-*.tgz
-
+# Local sub-charts are rebuilt by `make package-charts` — don't commit
+charts/aaa-platform/charts/aaa-*.tgz
+charts/aaa-platform/charts/subscriber-profile-api-*.tgz
+charts/aaa-platform/charts/aaa-regression-tester-*.tgz
+# External charts are vendored — DO commit
+# kube-prometheus-stack-*.tgz  ← tracked
+# prometheus-pushgateway-*.tgz ← tracked
 # ── IDE / OS ────────────────────────────────────────────────────
 .idea/
 .vscode/
