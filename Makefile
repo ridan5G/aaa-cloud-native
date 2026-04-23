@@ -39,6 +39,7 @@ radiusPCAP  ?= false# set to true to attach a tcpdump sidecar to radius-server: 
         hosts bootstrap setup helm-unlock \
         package-charts deploy deploy-dry-run deploy-migration db-init db-flush-stale \
         test test-secret radius-secret pcap-get pcap-get-radius \
+        test-ui test-ui-headed test-ui-report \
         port-forward-lookup port-forward-api port-forward-db port-forward-ui \
         port-forward-grafana port-forward-prometheus port-forward-pgbouncer \
         grafana-dashboard-reload grafana-open \
@@ -307,6 +308,17 @@ test:                           ## Run regression suite (append PCAP=true to cap
 	  echo " Open :  wireshark ./test.pcap"; \
 	  echo "══════════════════════════════════════════════════════════════"; \
 	fi
+
+## Run UI E2E regression tests (requires: make port-forward-ui running in another terminal)
+## Override base URL: UI_BASE_URL=http://localhost:5173 make test-ui  (for npm run dev)
+test-ui:
+	cd aaa-ui-e2e && npx playwright test
+
+test-ui-headed:                 ## Run UI E2E tests with browser window visible
+	cd aaa-ui-e2e && npx playwright test --headed
+
+test-ui-report:                 ## Open the last UI E2E test HTML report
+	cd aaa-ui-e2e && npx playwright show-report
 
 pcap-get:                       ## Copy test.pcap from the PCAP=true PVC to ./test.pcap (works after pod exits)
 	bash scripts/pcap-get.sh $(NAMESPACE) aaa-regression-tester-pcap ./test.pcap
