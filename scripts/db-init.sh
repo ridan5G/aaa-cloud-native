@@ -247,20 +247,30 @@ echo "Applying Gen-4 migration (provisioning_mode columns)..."
 kubectl exec -i "${PRIMARY_POD}" \
   -n "${NAMESPACE}" \
   -- psql -U postgres -d "${DB_NAME}" <<'SQL'
-ALTER TABLE imsi_range_configs
-    ADD COLUMN IF NOT EXISTS provisioning_mode TEXT NOT NULL DEFAULT 'first_connect';
-ALTER TABLE iccid_range_configs
-    ADD COLUMN IF NOT EXISTS provisioning_mode TEXT NOT NULL DEFAULT 'first_connect';
 DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='chk_imsi_range_prov_mode') THEN
-        ALTER TABLE imsi_range_configs ADD CONSTRAINT chk_imsi_range_prov_mode
-            CHECK (provisioning_mode IN ('first_connect', 'immediate'));
+    IF NOT EXISTS (SELECT 1 FROM information_schema.tables
+                   WHERE table_schema='public' AND table_name='imsi_range_configs') THEN
+        RAISE NOTICE 'Gen-4: imsi_range_configs does not exist yet — skipped';
+    ELSE
+        ALTER TABLE imsi_range_configs
+            ADD COLUMN IF NOT EXISTS provisioning_mode TEXT NOT NULL DEFAULT 'first_connect';
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='chk_imsi_range_prov_mode') THEN
+            ALTER TABLE imsi_range_configs ADD CONSTRAINT chk_imsi_range_prov_mode
+                CHECK (provisioning_mode IN ('first_connect', 'immediate'));
+        END IF;
     END IF;
 END $$;
 DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='chk_iccid_range_prov_mode') THEN
-        ALTER TABLE iccid_range_configs ADD CONSTRAINT chk_iccid_range_prov_mode
-            CHECK (provisioning_mode IN ('first_connect', 'immediate'));
+    IF NOT EXISTS (SELECT 1 FROM information_schema.tables
+                   WHERE table_schema='public' AND table_name='iccid_range_configs') THEN
+        RAISE NOTICE 'Gen-4: iccid_range_configs does not exist yet — skipped';
+    ELSE
+        ALTER TABLE iccid_range_configs
+            ADD COLUMN IF NOT EXISTS provisioning_mode TEXT NOT NULL DEFAULT 'first_connect';
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='chk_iccid_range_prov_mode') THEN
+            ALTER TABLE iccid_range_configs ADD CONSTRAINT chk_iccid_range_prov_mode
+                CHECK (provisioning_mode IN ('first_connect', 'immediate'));
+        END IF;
     END IF;
 END $$;
 SQL
@@ -299,7 +309,10 @@ kubectl exec -i "${PRIMARY_POD}" \
   -n "${NAMESPACE}" \
   -- psql -U postgres -d "${DB_NAME}" <<'SQL'
 DO $$ BEGIN
-    IF NOT EXISTS (
+    IF NOT EXISTS (SELECT 1 FROM information_schema.tables
+                   WHERE table_schema='public' AND table_name='bulk_jobs') THEN
+        RAISE NOTICE 'Gen-6: bulk_jobs does not exist yet — skipped';
+    ELSIF NOT EXISTS (
         SELECT 1 FROM information_schema.check_constraints
         WHERE constraint_name = 'chk_bulk_job_status'
           AND check_clause LIKE '%completed_with_errors%'

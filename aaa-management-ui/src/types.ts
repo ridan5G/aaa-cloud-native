@@ -123,11 +123,12 @@ export interface ImsiSlot {
 }
 
 export interface BulkJob {
-  job_id:     string
-  status:     JobStatus
-  submitted:  number
-  processed:  number
-  failed:     number
-  created_at: string
-  errors?:    Array<{ row: number; field: string; message: string; value: string }>
+  job_id:          string
+  status:          JobStatus
+  submitted:       number
+  processed:       number
+  failed:          number
+  created_at:      string
+  range_config_id: number | null
+  errors?:         Array<{ row: number; field: string; message: string; value: string }>
 }

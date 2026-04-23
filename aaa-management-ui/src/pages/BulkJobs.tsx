@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { apiClient } from '../apiClient'
 import StatusBadge from '../components/StatusBadge'
 import type { BulkJob } from '../types'
@@ -9,7 +10,11 @@ function fmtDate(s: string) {
 
 // ─── Drawer ───────────────────────────────────────────────────────────────────
 function JobDrawer({ job, onClose }: { job: BulkJob; onClose: () => void }) {
-  const pct = job.submitted > 0 ? Math.round((job.processed / job.submitted) * 100) : 0
+  // submitted = SIM cards × IMSI slots; processed = SIM cards done
+  // Progress is SIMs done vs total SIMs, not IMSIs vs IMSIs
+  const isTerminal = job.status === 'completed'
+  const pct = isTerminal ? 100
+    : job.submitted > 0 ? Math.round((job.processed / job.submitted) * 100) : 0
 
   function downloadErrors() {
     if (!job.errors?.length) return
@@ -38,18 +43,32 @@ function JobDrawer({ job, onClose }: { job: BulkJob; onClose: () => void }) {
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-5">
+          {/* Range config link */}
+          {job.range_config_id != null && (
+            <div className="flex items-center gap-1.5 text-xs text-gray-500">
+              <span>SIM Range Config:</span>
+              <Link
+                to={`/iccid-range-configs/${job.range_config_id}`}
+                className="text-primary hover:underline font-medium"
+              >
+                #{job.range_config_id} →
+              </Link>
+            </div>
+          )}
+
           {/* Summary cards */}
           <div className="grid grid-cols-3 gap-3">
             {[
-              { label: 'Submitted', value: job.submitted.toLocaleString() },
-              { label: 'Processed', value: job.processed.toLocaleString() },
-              { label: 'Failed',    value: job.failed.toLocaleString()    },
+              { label: 'IMSI Assignments', sub: 'SIM cards × slots',  value: job.submitted.toLocaleString() },
+              { label: 'SIMs Provisioned', sub: 'cards with IPs',   value: job.processed.toLocaleString() },
+              { label: 'Failed',           sub: 'see errors below', value: job.failed.toLocaleString()    },
             ].map(s => (
               <div key={s.label} className="card p-3 text-center">
-                <p className="text-xs text-gray-400 uppercase tracking-wide">{s.label}</p>
+                <p className="text-xs text-gray-400 uppercase tracking-wide leading-tight">{s.label}</p>
                 <p className={`text-xl font-bold mt-0.5 tabular-nums ${
                   s.label === 'Failed' && job.failed > 0 ? 'text-red-600' : 'text-gray-900'
                 }`}>{s.value}</p>
+                <p className="text-[10px] text-gray-300 mt-0.5">{s.sub}</p>
               </div>
             ))}
           </div>

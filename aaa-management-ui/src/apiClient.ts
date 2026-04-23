@@ -86,6 +86,27 @@ if (typeof window !== 'undefined') {
 }
 
 // ---------------------------------------------------------------------------
+// API error extraction — pulls a human-readable reason from structured 4xx bodies
+// ---------------------------------------------------------------------------
+function extractApiReason(data: unknown): string | null {
+  if (!data || typeof data !== 'object') return null
+  const d = data as Record<string, unknown>
+  // {error: "validation_failed", details: [{field, message}, ...]}
+  if (Array.isArray(d.details) && d.details.length > 0) {
+    const msg = (d.details as Array<Record<string, unknown>>)
+      .filter(e => e.message)
+      .map(e => e.field ? `${e.field}: ${e.message}` : String(e.message))
+      .join('; ')
+    if (msg) return msg
+  }
+  // {detail: "plain string"}
+  if (typeof d.detail === 'string') return d.detail
+  // {error: "pool_exhausted"} — humanise the code as last resort
+  if (typeof d.error === 'string') return d.error.replace(/_/g, ' ')
+  return null
+}
+
+// ---------------------------------------------------------------------------
 // Request timing interceptor — stamps _t0 on every outgoing request
 // ---------------------------------------------------------------------------
 type TimedConfig = InternalAxiosRequestConfig & { _t0?: number }
@@ -115,7 +136,13 @@ apiClient.interceptors.response.use(
       recordRum(cfg.url, performance.now() - cfg._t0, true)
     }
 
-    if (err.response?.status !== 429) return Promise.reject(err)
+    if (err.response?.status !== 429) {
+      if (err.response && err.response.status >= 400) {
+        const reason = extractApiReason(err.response.data)
+        if (reason) err.message = reason
+      }
+      return Promise.reject(err)
+    }
 
     cfg._retryCount = (cfg._retryCount ?? 0) + 1
     if (cfg._retryCount > 3) return Promise.reject(err)
