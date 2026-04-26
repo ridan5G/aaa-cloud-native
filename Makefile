@@ -26,7 +26,8 @@ DB_URL      ?= postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_N
 # aaa-radius-server and aaa-regression-tester both read from the same
 # K8s secret (aaa-radius-secret). Override at the CLI if rotating:
 #   make deploy RADIUS_SECRET=new-value
-RADIUS_SECRET ?= testing123
+RADIUS_SECRET  ?= testing123
+RADIUS_NODEPORT ?= 31812  # UDP NodePort for dev/WSL RADIUS access (30000–32767); override: make deploy RADIUS_NODEPORT=31900
 
 SCRIPT      ?= load.js   # override: make load-test-k8s SCRIPT=stress.js
 PCAP        ?= false# set to true to attach a tcpdump sidecar: make test PCAP=true
@@ -41,7 +42,8 @@ radiusPCAP  ?= false# set to true to attach a tcpdump sidecar to radius-server: 
         test test-secret radius-secret pcap-get pcap-get-radius \
         test-ui test-ui-headed test-ui-report \
         port-forward-lookup port-forward-api port-forward-db port-forward-ui \
-        port-forward-grafana port-forward-prometheus port-forward-pgbouncer \
+        port-forward-grafana port-forward-prometheus port-forward-pgbouncer port-forward-radius \
+        radius-access \
         grafana-dashboard-reload grafana-open \
         logs logs-lookup logs-api logs-ui \
         status uninstall clean \
@@ -205,11 +207,12 @@ build-ui:                       ## Build just the aaa-management-ui image (dev, 
 create-namespace:               ## Ensure the aaa-platform namespace exists before secrets are applied
 	kubectl create namespace $(NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -
 
-deploy: package-charts create-namespace radius-secret test-secret ## Deploy/upgrade umbrella chart (re-packages local sub-charts, creates required secrets, then applies chart); radiusPCAP=true adds tcpdump sidecar to radius-server
+deploy: package-charts create-namespace radius-secret test-secret ## Deploy/upgrade umbrella chart (re-packages local sub-charts, creates required secrets, then applies chart); radiusPCAP=true adds tcpdump sidecar; RADIUS_NODEPORT=31812 sets UDP NodePort
 	helm upgrade --install $(RELEASE) $(CHART_DIR) \
 	  --namespace $(NAMESPACE) --create-namespace \
 	  -f $(CHART_DIR)/values-dev.yaml \
 	  --set "aaa-radius-server.pcap.enabled=$(radiusPCAP)" \
+	  --set "aaa-radius-server.service.nodePort=$(RADIUS_NODEPORT)" \
 	  --timeout 10m
 	$(MAKE) db-init
 
@@ -375,6 +378,25 @@ grafana-open:                   ## Open Grafana in the browser via port-forward 
 
 port-forward-pgbouncer:         ## Forward PgBouncer RW to localhost:5432 (alias for port-forward-db)
 	kubectl port-forward -n $(NAMESPACE) svc/aaa-postgres-pooler-rw 5432:5432
+
+port-forward-radius:            ## Forward RADIUS metrics (TCP 9090) to localhost:9091 — UDP 1812 uses NodePort in dev (make radius-access)
+	kubectl port-forward -n $(NAMESPACE) svc/$(RELEASE)-aaa-radius-server 9091:9090
+
+radius-access:                  ## Show RADIUS UDP access info (NodePort for dev/WSL, LoadBalancer IP for HA/prod)
+	@echo "══════════════════════════════════════════════════════════"
+	@echo " RADIUS Server access"
+	@echo "══════════════════════════════════════════════════════════"
+	@kubectl get svc -n $(NAMESPACE) $(RELEASE)-aaa-radius-server \
+	  -o custom-columns='TYPE:.spec.type,NODE-PORT:.spec.ports[0].nodePort,EXTERNAL-IP:.status.loadBalancer.ingress[0].ip' \
+	  2>/dev/null || echo "  Service not found — run: make deploy"
+	@echo ""
+	@echo " Dev/WSL (NodePort):"
+	@echo "   WINDOWS_IP=\$$(cat /etc/resolv.conf | grep nameserver | awk '{print \$$2}')"
+	@echo "   radtest user pass \$$WINDOWS_IP:$(RADIUS_NODEPORT) 0 $(RADIUS_SECRET)"
+	@echo ""
+	@echo " Prod/HA (LoadBalancer):"
+	@echo "   radtest user pass <EXTERNAL-IP>:1812 0 <radius-secret>"
+	@echo "══════════════════════════════════════════════════════════"
 
 # ── Logs ──────────────────────────────────────────────────────
 logs:                           ## Tail logs from all app pods

@@ -201,6 +201,8 @@ aaa-radius-server:
     secretName: "aaa-radius-secret"
   lookupUrl: "http://aaa-platform-aaa-lookup-service:8081"
   workerThreads: 64
+  service:
+    type: LoadBalancer  # cloud NLB (AWS NLB / GCP UDP LB) or MetalLB on-prem assigns external IP
   autoscaling:
     enabled: false
   podDisruptionBudget:

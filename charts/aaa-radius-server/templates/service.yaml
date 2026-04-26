@@ -11,6 +11,9 @@ spec:
       port: {{ .Values.service.port }}
       targetPort: radius-auth
       protocol: {{ .Values.service.protocol }}
+      {{- if .Values.service.nodePort }}
+      nodePort: {{ .Values.service.nodePort }}
+      {{- end }}
     - name: metrics
       port: {{ .Values.service.metricsPort }}
       targetPort: metrics
