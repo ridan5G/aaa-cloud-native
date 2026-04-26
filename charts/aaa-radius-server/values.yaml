@@ -10,6 +10,7 @@ service:
   port: 1812
   protocol: UDP
   metricsPort: 9090    # TCP port for Prometheus /metrics (prometheus-cpp Exposer)
+  nodePort: null        # set to 30000-32767 when type: NodePort
 
 # RADIUS shared secret — stored in a Kubernetes Secret.
 # Either set radiusSecret.value directly (dev only) or provide a secretRef.

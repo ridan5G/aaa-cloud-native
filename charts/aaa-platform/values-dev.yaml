@@ -180,6 +180,9 @@ aaa-radius-server:
     enabled: false
   monitoring:
     enabled: true
+  service:
+    type: NodePort
+    nodePort: 31812     # UDP 1812 → localhost:31812 on Docker Desktop; from WSL: <windows-host-ip>:31812
   resources:
     requests:
       cpu: "250m"
