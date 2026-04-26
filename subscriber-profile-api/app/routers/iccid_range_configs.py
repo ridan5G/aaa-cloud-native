@@ -4,12 +4,19 @@ import logging
 import uuid as _uuid
 from typing import Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from app.db import get_conn, get_pool
 from app.auth import require_auth
 from app.config import BULK_BATCH_SIZE
 from app.routers.first_connection import _allocate_ip, _load_apn_pools
-from app.routers.range_configs import _check_pool_capacity
+from app.routers.range_configs import (
+    _check_pool_capacity,
+    _claim_ips_from_pool,
+    _finalize_job,
+    _set_job_running,
+    _update_job_progress,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -69,6 +76,111 @@ class ApnPoolCreate(BaseModel):
     pool_id: str
 
 
+async def _compute_iccid_pools_needed(
+    conn, parent: dict, slot_rows: list[dict], card_count: int
+) -> dict:
+    """Aggregate IP claim requirements across all slots for an ICCID-range job.
+
+    Walks the same allocation pattern the per-card loop uses (see _run_provision_iccid_job
+    and _run_provision_imsi_job below), so the totals match what _allocate_ip will
+    consume. Returns {pool_id: ip_count}.
+    """
+    ip_resolution = parent["ip_resolution"]
+    pools_needed: dict = {}
+    for slot in slot_rows:
+        slot_pool = slot["pool_id"] or parent.get("pool_id")
+        if ip_resolution in ("imsi", "imsi_apn"):
+            apn_pools = await _load_apn_pools(
+                conn, slot["id"], slot_pool, ip_resolution
+            )
+            for _apn, apn_pool in apn_pools:
+                if apn_pool:
+                    pools_needed[apn_pool] = pools_needed.get(apn_pool, 0) + card_count
+        elif slot["imsi_slot"] == 1:
+            apn_pools = await _load_apn_pools(
+                conn, slot["id"], slot_pool, ip_resolution
+            )
+            for _apn, apn_pool in apn_pools:
+                if apn_pool:
+                    pools_needed[apn_pool] = pools_needed.get(apn_pool, 0) + card_count
+    return pools_needed
+
+
+async def _phase0_claim_for_iccid_job(
+    conn, job_id: str, pools_needed: dict
+) -> tuple[bool, Optional[str], int]:
+    """Claim IPs for an ICCID-range provisioning job in chunks.
+
+    Returns (ok, exhausted_pool_id_or_None, shortfall). On success, all IPs are
+    in ip_pool_available ready for _allocate_ip to consume. Emits per-chunk
+    heartbeats via _update_job_progress so the bulk_jobs row stays fresh.
+    """
+    for pid, count in pools_needed.items():
+        remaining = count
+        while remaining > 0:
+            chunk = min(remaining, BULK_BATCH_SIZE)
+            async with conn.transaction():
+                claimed = await _claim_ips_from_pool(conn, pid, chunk)
+            if claimed < chunk:
+                return False, pid, chunk - claimed
+            # Heartbeat: keep updated_at fresh; processed/failed reflect Phase 1
+            # progress only, so leave them at 0 here.
+            await _update_job_progress(conn, job_id, 0, 0, [])
+            remaining -= chunk
+    return True, None, 0
+
+
+async def _run_iccid_prepopulate_job(
+    job_id: str,
+    iccid_range_id: int,
+    parent: dict,
+    slot_rows: list[dict],
+    card_count: int,
+):
+    """first_connect mode: claim IPs for all slot pools so first-connection
+    requests have IPs ready in ip_pool_available. Per-chunk progress."""
+    processed = failed = 0
+    errors: list = []
+    try:
+        async with get_pool().acquire() as conn:
+            await _set_job_running(conn, job_id)
+            pools_needed = await _compute_iccid_pools_needed(
+                conn, parent, slot_rows, card_count
+            )
+            for pid, count in pools_needed.items():
+                remaining = count
+                while remaining > 0:
+                    chunk = min(remaining, BULK_BATCH_SIZE)
+                    async with conn.transaction():
+                        claimed = await _claim_ips_from_pool(conn, pid, chunk)
+                    processed += claimed
+                    if claimed < chunk:
+                        failed += chunk - claimed
+                        errors.append(
+                            {"pool_id": pid, "message": "pool_exhausted",
+                             "shortfall": chunk - claimed}
+                        )
+                        await _update_job_progress(conn, job_id, processed, failed, errors)
+                        await _finalize_job(conn, job_id, "failed")
+                        return
+                    await _update_job_progress(conn, job_id, processed, failed, errors)
+                    remaining -= chunk
+            final_status = "completed" if not errors else "completed_with_errors"
+            await _finalize_job(conn, job_id, final_status)
+    except Exception as job_exc:
+        logger.error("Unhandled exception in _run_iccid_prepopulate_job %s: %s", job_id, job_exc)
+        try:
+            async with get_pool().acquire() as _conn:
+                await _conn.execute(
+                    "UPDATE bulk_jobs SET status='failed', "
+                    "errors=$1::jsonb, updated_at=now() WHERE job_id=$2::uuid",
+                    json.dumps([{"message": str(job_exc)}]),
+                    job_id,
+                )
+        except Exception:
+            pass
+
+
 async def _run_provision_imsi_job(
     job_id: str,
     iccid_range_id: int,
@@ -86,10 +198,29 @@ async def _run_provision_imsi_job(
     account_name = parent["account_name"] or ""
     metadata = json.dumps({"tags": ["auto-allocated", "multi-imsi"]})
     processed = failed = 0
-    errors = []
+    errors: list = []
 
     try:
         async with get_pool().acquire() as conn:
+            await _set_job_running(conn, job_id)
+
+            # ── Phase 0: pre-claim IPs from each pool referenced by the slots ──
+            pools_needed = await _compute_iccid_pools_needed(
+                conn, parent, slot_rows, card_count
+            )
+            ok, exhausted_pid, shortfall = await _phase0_claim_for_iccid_job(
+                conn, job_id, pools_needed
+            )
+            if not ok:
+                errors.append(
+                    {"pool_id": exhausted_pid, "message": "pool_exhausted",
+                     "shortfall": shortfall}
+                )
+                await _update_job_progress(conn, job_id, 0, card_count, errors)
+                await _finalize_job(conn, job_id, "failed")
+                return
+
+            # ── Phase 1: per-card provisioning ──
             for batch_start in range(0, card_count, BULK_BATCH_SIZE):
                 batch_offsets = range(batch_start, min(batch_start + BULK_BATCH_SIZE, card_count))
                 async with conn.transaction():
@@ -169,17 +300,11 @@ async def _run_provision_imsi_job(
                         except Exception as exc:
                             failed += 1
                             errors.append({"primary_imsi": primary_imsi, "message": str(exc)})
+                # Per-chunk progress: visible to other connections immediately.
+                await _update_job_progress(conn, job_id, processed, failed, errors)
 
-            status = "completed" if not errors else "completed_with_errors"
-            await conn.execute(
-                "UPDATE bulk_jobs SET status=$1, processed=$2, failed=$3, "
-                "errors=$4::jsonb, updated_at=now() WHERE job_id=$5::uuid",
-                status,
-                processed,
-                failed,
-                errors,
-                job_id,
-            )
+            final_status = "completed" if not errors else "completed_with_errors"
+            await _finalize_job(conn, job_id, final_status)
             await conn.execute(
                 "UPDATE iccid_range_configs SET status='provisioned', updated_at=now() WHERE id=$1",
                 iccid_range_id,
@@ -191,7 +316,7 @@ async def _run_provision_imsi_job(
                 await _conn.execute(
                     "UPDATE bulk_jobs SET status='failed', "
                     "errors=$1::jsonb, updated_at=now() WHERE job_id=$2::uuid",
-                    [{"message": str(job_exc)}],
+                    json.dumps([{"message": str(job_exc)}]),
                     job_id,
                 )
         except Exception:
@@ -217,10 +342,29 @@ async def _run_provision_iccid_job(
     card_count = int(t_iccid) - int(f_iccid) + 1
     metadata = json.dumps({"tags": ["auto-allocated", "multi-imsi"]})
     processed = failed = 0
-    errors = []
+    errors: list = []
 
     try:
         async with get_pool().acquire() as conn:
+            await _set_job_running(conn, job_id)
+
+            # ── Phase 0: pre-claim IPs from each pool referenced by the slots ──
+            pools_needed = await _compute_iccid_pools_needed(
+                conn, parent, slot_rows, card_count
+            )
+            ok, exhausted_pid, shortfall = await _phase0_claim_for_iccid_job(
+                conn, job_id, pools_needed
+            )
+            if not ok:
+                errors.append(
+                    {"pool_id": exhausted_pid, "message": "pool_exhausted",
+                     "shortfall": shortfall}
+                )
+                await _update_job_progress(conn, job_id, 0, card_count, errors)
+                await _finalize_job(conn, job_id, "failed")
+                return
+
+            # ── Phase 1: per-card provisioning ──
             for batch_start in range(0, card_count, BULK_BATCH_SIZE):
                 batch_offsets = range(batch_start, min(batch_start + BULK_BATCH_SIZE, card_count))
                 async with conn.transaction():
@@ -301,17 +445,11 @@ async def _run_provision_iccid_job(
                         except Exception as exc:
                             failed += 1
                             errors.append({"iccid": derived_iccid, "message": str(exc)})
+                # Per-chunk progress: visible to other connections immediately.
+                await _update_job_progress(conn, job_id, processed, failed, errors)
 
-            status = "completed" if not errors else "completed_with_errors"
-            await conn.execute(
-                "UPDATE bulk_jobs SET status=$1, processed=$2, failed=$3, "
-                "errors=$4::jsonb, updated_at=now() WHERE job_id=$5::uuid",
-                status,
-                processed,
-                failed,
-                errors,
-                job_id,
-            )
+            final_status = "completed" if not errors else "completed_with_errors"
+            await _finalize_job(conn, job_id, final_status)
             await conn.execute(
                 "UPDATE iccid_range_configs SET status='provisioned', updated_at=now() WHERE id=$1",
                 iccid_range_id,
@@ -323,7 +461,7 @@ async def _run_provision_iccid_job(
                 await _conn.execute(
                     "UPDATE bulk_jobs SET status='failed', "
                     "errors=$1::jsonb, updated_at=now() WHERE job_id=$2::uuid",
-                    [{"message": str(job_exc)}],
+                    json.dumps([{"message": str(job_exc)}]),
                     job_id,
                 )
         except Exception:
@@ -717,39 +855,38 @@ async def add_imsi_slot(
                 body.status,
             )
 
-            if parent["provisioning_mode"] == "immediate":
-                slot_count = await conn.fetchval(
-                    "SELECT COUNT(*) FROM imsi_range_configs "
-                    "WHERE iccid_range_id = $1 AND status = 'active'",
+            slot_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM imsi_range_configs "
+                "WHERE iccid_range_id = $1 AND status = 'active'",
+                config_id,
+            )
+            if slot_count == parent["imsi_count"]:
+                slot_rows_raw = await conn.fetch(
+                    "SELECT id, f_imsi, t_imsi, imsi_slot, COALESCE(pool_id::text, $2) AS pool_id "
+                    "FROM imsi_range_configs WHERE iccid_range_id = $1 AND status='active'",
+                    config_id,
+                    parent["pool_id"],
+                )
+                slot_rows = [dict(s) for s in slot_rows_raw]
+                if parent["f_iccid"]:
+                    card_count = int(parent["t_iccid"]) - int(parent["f_iccid"]) + 1
+                    provision_fn = _run_provision_iccid_job
+                else:
+                    slot1 = next(s for s in slot_rows if s["imsi_slot"] == 1)
+                    card_count = int(slot1["t_imsi"]) - int(slot1["f_imsi"]) + 1
+                    provision_fn = _run_provision_imsi_job
+                for slot in slot_rows:
+                    await _check_pool_capacity(
+                        conn, slot["id"], card_count, slot["pool_id"], parent["ip_resolution"]
+                    )
+                job_id = str(_uuid.uuid4())
+                await conn.execute(
+                    "INSERT INTO bulk_jobs (job_id, status, submitted, range_config_id) "
+                    "VALUES ($1::uuid,'queued',$2,$3)",
+                    job_id,
+                    card_count * len(slot_rows),
                     config_id,
                 )
-                if slot_count == parent["imsi_count"]:
-                    slot_rows_raw = await conn.fetch(
-                        "SELECT id, f_imsi, t_imsi, imsi_slot, COALESCE(pool_id::text, $2) AS pool_id "
-                        "FROM imsi_range_configs WHERE iccid_range_id = $1 AND status='active'",
-                        config_id,
-                        parent["pool_id"],
-                    )
-                    slot_rows = [dict(s) for s in slot_rows_raw]
-                    if parent["f_iccid"]:
-                        card_count = int(parent["t_iccid"]) - int(parent["f_iccid"]) + 1
-                        provision_fn = _run_provision_iccid_job
-                    else:
-                        slot1 = next(s for s in slot_rows if s["imsi_slot"] == 1)
-                        card_count = int(slot1["t_imsi"]) - int(slot1["f_imsi"]) + 1
-                        provision_fn = _run_provision_imsi_job
-                    for slot in slot_rows:
-                        await _check_pool_capacity(
-                            conn, slot["id"], card_count, slot["pool_id"], parent["ip_resolution"]
-                        )
-                    job_id = str(_uuid.uuid4())
-                    await conn.execute(
-                        "INSERT INTO bulk_jobs (job_id, status, submitted, range_config_id) "
-                        "VALUES ($1::uuid,'queued',$2,$3)",
-                        job_id,
-                        card_count * len(slot_rows),
-                        config_id,
-                    )
     except HTTPException:
         raise
     except Exception as exc:
@@ -758,14 +895,29 @@ async def add_imsi_slot(
         raise
 
     if job_id and slot_rows is not None:
-        background_tasks.add_task(
-            provision_fn,
-            job_id,
-            config_id,
-            dict(parent),
-            slot_rows,
+        if parent["provisioning_mode"] == "immediate":
+            background_tasks.add_task(
+                provision_fn,
+                job_id,
+                config_id,
+                dict(parent),
+                slot_rows,
+            )
+        else:
+            # first_connect: pre-claim IPs across all slots so first-connection
+            # requests can pop from ip_pool_available without 503s.
+            background_tasks.add_task(
+                _run_iccid_prepopulate_job,
+                job_id,
+                config_id,
+                dict(parent),
+                slot_rows,
+                card_count,
+            )
+        return JSONResponse(
+            status_code=202,
+            content={"range_config_id": range_config_id, "job_id": job_id},
         )
-        return {"range_config_id": range_config_id, "job_id": job_id}
 
     return {"range_config_id": range_config_id}
 

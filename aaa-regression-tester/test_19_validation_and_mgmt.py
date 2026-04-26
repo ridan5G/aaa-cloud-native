@@ -264,9 +264,9 @@ class TestImsiSlotValidation:
 
     # B.8 ─────────────────────────────────────────────────────────────────────
     def test_08_valid_slot_accepted(self, http: httpx.Client):
-        """Exactly 10 IMSIs for a 10-card ICCID range → 201."""
+        """Exactly 10 IMSIs for a 10-card ICCID range → 201/202."""
         resp = self._post_slot(http, make_imsi(MODULE, 1), make_imsi(MODULE, 10))  # diff=9 ✓
-        assert resp.status_code == 201
+        assert resp.status_code in (201, 202)
         assert "range_config_id" in resp.json()
         TestImsiSlotValidation._slot_range_config_id = resp.json()["range_config_id"]
 
@@ -500,7 +500,7 @@ class TestSkipIccidRange:
                 "pool_id":   TestSkipIccidRange.pool_id,
             },
         )
-        assert resp.status_code == 201, resp.text
+        assert resp.status_code in (201, 202), resp.text
 
     # D.4 ─────────────────────────────────────────────────────────────────────
     def test_04_first_connection_by_imsi_works(self, http: httpx.Client):
@@ -609,7 +609,7 @@ class TestSizeAlignment:
                 "pool_id":   self.pool_id,
             },
         )
-        assert resp.status_code == 201, resp.text
+        assert resp.status_code in (201, 202), resp.text
 
     # E.4 ─────────────────────────────────────────────────────────────────────
     def test_04_patch_slot1_wrong_cardinality(self, http: httpx.Client):

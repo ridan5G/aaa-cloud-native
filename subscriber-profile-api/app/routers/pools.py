@@ -26,6 +26,12 @@ class PoolPatch(BaseModel):
     status: Optional[str] = None
 
 
+class PoolSubnetCreate(BaseModel):
+    subnet: str
+    start_ip: Optional[str] = None
+    end_ip: Optional[str] = None
+
+
 def _validation_error(field: str, message: str):
     raise HTTPException(
         status_code=400,
@@ -33,32 +39,32 @@ def _validation_error(field: str, message: str):
     )
 
 
-def _compute_pool_ips(subnet: str, start_ip: Optional[str], end_ip: Optional[str]):
+def _compute_pool_bounds(subnet: str, start_ip: Optional[str], end_ip: Optional[str]):
+    """O(1) bounds calculation — does NOT enumerate hosts."""
     try:
         network = ipaddress.ip_network(subnet, strict=False)
     except ValueError:
         _validation_error("subnet", "invalid CIDR notation")
 
-    hosts = list(network.hosts())
-    if not hosts:
+    hosts_iter = network.hosts()
+    first_host = next(hosts_iter, None)
+    if first_host is None:
         _validation_error("subnet", "subnet has no usable host addresses")
 
     if start_ip and end_ip:
         try:
-            s = ipaddress.ip_address(start_ip)
-            e = ipaddress.ip_address(end_ip)
+            ipaddress.ip_address(start_ip)
+            ipaddress.ip_address(end_ip)
         except ValueError:
             _validation_error("start_ip", "invalid IP address")
-        ips = [str(h) for h in hosts if s <= h <= e]
-        stored_start = start_ip
-        stored_end = end_ip
-    else:
-        # Default: all hosts except the last one (reserved as gateway)
-        ips = [str(h) for h in hosts[:-1]]
-        stored_start = str(hosts[0])
-        stored_end = str(hosts[-1])
+        return start_ip, end_ip
 
-    return ips, stored_start, stored_end
+    # Default: full hosts() range minus the last IP (reserved as gateway).
+    # For /24 → .1..253; for /12 → .0.1 .. .15.255.253. Preserves prior behaviour.
+    if network.num_addresses < 4:
+        # /31, /32 — no gateway reservation possible
+        return str(network.network_address + 1), str(network.broadcast_address - 1)
+    return str(network.network_address + 1), str(network.broadcast_address - 2)
 
 
 async def _resolve_routing_domain(body: PoolCreate, conn) -> tuple[str, str]:
@@ -130,9 +136,27 @@ async def _validate_subnet_in_prefixes(subnet: str, allowed_prefixes: list, conn
     )
 
 
+_OVERLAP_QUERY = """
+    WITH all_subnets AS (
+        SELECT p.pool_id, p.pool_name, p.subnet
+        FROM ip_pools p
+        WHERE p.routing_domain_id = $1::uuid
+        UNION ALL
+        SELECT p.pool_id, p.pool_name, s.subnet
+        FROM ip_pool_subnets s
+        JOIN ip_pools p ON p.pool_id = s.pool_id
+        WHERE p.routing_domain_id = $1::uuid
+    )
+    SELECT pool_id::text, pool_name, subnet::text
+    FROM all_subnets
+    WHERE subnet && $2::cidr
+    LIMIT 1
+"""
+
+
 @router.post("/pools", status_code=201, dependencies=[Depends(require_auth)])
 async def create_pool(body: PoolCreate, conn=Depends(get_conn)):
-    ips, stored_start, stored_end = _compute_pool_ips(body.subnet, body.start_ip, body.end_ip)
+    stored_start, stored_end = _compute_pool_bounds(body.subnet, body.start_ip, body.end_ip)
 
     routing_domain_id, routing_domain_name = await _resolve_routing_domain(body, conn)
 
@@ -144,18 +168,9 @@ async def create_pool(body: PoolCreate, conn=Depends(get_conn)):
     allowed_prefixes = list(domain_row["allowed_prefixes"] or [])
     await _validate_subnet_in_prefixes(body.subnet, allowed_prefixes)
 
-    # Overlap check: reject if any pool in the same routing domain has an overlapping subnet
-    overlap = await conn.fetchrow(
-        """
-        SELECT p.pool_id::text, p.pool_name, p.subnet::text
-        FROM ip_pools p
-        WHERE p.routing_domain_id = $1::uuid
-          AND p.subnet && $2::cidr
-        LIMIT 1
-        """,
-        routing_domain_id,
-        body.subnet,
-    )
+    # Overlap check across BOTH ip_pools.subnet (primary) and ip_pool_subnets.subnet
+    # (secondary subnets added via POST /pools/{id}/subnets).
+    overlap = await conn.fetchrow(_OVERLAP_QUERY, routing_domain_id, body.subnet)
     if overlap:
         raise HTTPException(
             status_code=409,
@@ -169,30 +184,96 @@ async def create_pool(body: PoolCreate, conn=Depends(get_conn)):
             },
         )
 
-    pool_id = await conn.fetchval(
-        """
-        INSERT INTO ip_pools (account_name, pool_name, routing_domain_id, subnet, start_ip, end_ip)
-        VALUES ($1, $2, $3::uuid, $4::cidr, $5::inet, $6::inet)
-        RETURNING pool_id::text
-        """,
-        body.account_name,
-        body.name,
-        routing_domain_id,
-        body.subnet,
-        stored_start,
-        stored_end,
-    )
+    async with conn.transaction():
+        pool_id = await conn.fetchval(
+            """
+            INSERT INTO ip_pools (account_name, pool_name, routing_domain_id, subnet, start_ip, end_ip)
+            VALUES ($1, $2, $3::uuid, $4::cidr, $5::inet, $6::inet)
+            RETURNING pool_id::text
+            """,
+            body.account_name,
+            body.name,
+            routing_domain_id,
+            body.subnet,
+            stored_start,
+            stored_end,
+        )
 
-    # Pre-populate ip_pool_available in batches
-    batch_size = 1000
-    for i in range(0, len(ips), batch_size):
-        batch = ips[i : i + batch_size]
-        await conn.executemany(
-            "INSERT INTO ip_pool_available (pool_id, ip) VALUES ($1::uuid, $2::inet)",
-            [(pool_id, ip) for ip in batch],
+        # Register the primary subnet for lazy claiming. priority=0 → claimed first.
+        await conn.execute(
+            """
+            INSERT INTO ip_pool_subnets (pool_id, subnet, start_ip, end_ip, priority)
+            VALUES ($1::uuid, $2::cidr, $3::inet, $4::inet, 0)
+            """,
+            pool_id,
+            body.subnet,
+            stored_start,
+            stored_end,
         )
 
     return {"pool_id": pool_id}
+
+
+@router.post(
+    "/pools/{pool_id}/subnets",
+    status_code=201,
+    dependencies=[Depends(require_auth)],
+)
+async def add_pool_subnet(
+    pool_id: uuid.UUID, body: PoolSubnetCreate, conn=Depends(get_conn)
+):
+    pool = await conn.fetchrow(
+        "SELECT pool_id::text, routing_domain_id::text FROM ip_pools WHERE pool_id = $1::uuid",
+        pool_id,
+    )
+    if not pool:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "resource": "ip_pool", "pool_id": str(pool_id)},
+        )
+
+    stored_start, stored_end = _compute_pool_bounds(body.subnet, body.start_ip, body.end_ip)
+
+    domain_row = await conn.fetchrow(
+        "SELECT name, allowed_prefixes FROM routing_domains WHERE id = $1::uuid",
+        pool["routing_domain_id"],
+    )
+    allowed_prefixes = list(domain_row["allowed_prefixes"] or [])
+    await _validate_subnet_in_prefixes(body.subnet, allowed_prefixes)
+
+    overlap = await conn.fetchrow(_OVERLAP_QUERY, pool["routing_domain_id"], body.subnet)
+    if overlap:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "pool_overlap",
+                "detail": (
+                    f"Subnet {body.subnet} overlaps with pool '{overlap['pool_name']}' "
+                    f"({overlap['subnet']}) in routing domain '{domain_row['name']}'"
+                ),
+                "conflicting_pool_id": overlap["pool_id"],
+            },
+        )
+
+    async with conn.transaction():
+        next_priority = await conn.fetchval(
+            "SELECT COALESCE(MAX(priority) + 1, 1) FROM ip_pool_subnets WHERE pool_id = $1::uuid",
+            pool_id,
+        )
+        subnet_id = await conn.fetchval(
+            """
+            INSERT INTO ip_pool_subnets (pool_id, subnet, start_ip, end_ip, priority)
+            VALUES ($1::uuid, $2::cidr, $3::inet, $4::inet, $5)
+            RETURNING id
+            """,
+            pool_id,
+            body.subnet,
+            stored_start,
+            stored_end,
+            next_priority,
+        )
+
+    return {"subnet_id": int(subnet_id), "priority": int(next_priority)}
 
 
 @router.get("/pools/{pool_id}", dependencies=[Depends(require_auth)])
@@ -266,11 +347,31 @@ async def list_pools(
         SELECT p.pool_id::text, p.account_name, p.pool_name AS name,
                rd.id::text AS routing_domain_id, rd.name AS routing_domain,
                p.subnet::text, p.start_ip::text, p.end_ip::text, p.status,
-               COALESCE(avail.cnt, 0)::int AS available,
-               COALESCE(alloc.cnt, 0)::int AS allocated,
-               (COALESCE(avail.cnt, 0) + COALESCE(alloc.cnt, 0))::int AS total
+               (
+                   COALESCE(subtot.unclaimed, 0)
+                   + COALESCE(avail.cnt, 0)
+               )::bigint AS available,
+               (
+                   CASE WHEN subtot.total IS NOT NULL
+                        THEN subtot.total - (COALESCE(subtot.unclaimed, 0) + COALESCE(avail.cnt, 0))
+                        ELSE COALESCE(alloc.cnt, 0)
+                   END
+               )::bigint AS allocated,
+               (
+                   CASE WHEN subtot.total IS NOT NULL
+                        THEN subtot.total
+                        ELSE COALESCE(avail.cnt, 0) + COALESCE(alloc.cnt, 0)
+                   END
+               )::bigint AS total
         FROM ip_pools p
         JOIN routing_domains rd ON rd.id = p.routing_domain_id
+        LEFT JOIN (
+            SELECT pool_id,
+                   SUM((end_ip - start_ip + 1))::bigint AS total,
+                   SUM((end_ip - start_ip + 1) - next_ip_offset)::bigint AS unclaimed
+            FROM ip_pool_subnets
+            GROUP BY pool_id
+        ) subtot ON p.pool_id = subtot.pool_id
         LEFT JOIN (
             SELECT pool_id, COUNT(*) AS cnt FROM ip_pool_available GROUP BY pool_id
         ) avail ON p.pool_id = avail.pool_id
@@ -302,7 +403,15 @@ async def get_pool_stats(pool_id: uuid.UUID, conn=Depends(get_conn)):
     stats = await conn.fetchrow(
         """
         SELECT
-            (SELECT COUNT(*) FROM ip_pool_available WHERE pool_id = $1::uuid) AS available,
+            COALESCE((
+                SELECT SUM((end_ip - start_ip + 1))
+                FROM ip_pool_subnets WHERE pool_id = $1::uuid
+            ), 0) AS subnet_total,
+            COALESCE((
+                SELECT SUM((end_ip - start_ip + 1) - next_ip_offset)
+                FROM ip_pool_subnets WHERE pool_id = $1::uuid
+            ), 0) AS subnet_unclaimed,
+            (SELECT COUNT(*) FROM ip_pool_available WHERE pool_id = $1::uuid) AS claimed_unallocated,
             (
                 SELECT COUNT(*) FROM imsi_apn_ips sai
                 JOIN imsi2sim si ON si.imsi = sai.imsi
@@ -317,11 +426,15 @@ async def get_pool_stats(pool_id: uuid.UUID, conn=Depends(get_conn)):
         pool_id,
     )
 
-    available = int(stats["available"])
-    allocated = int(stats["allocated"])
+    subnet_total = int(stats["subnet_total"])
+    subnet_unclaimed = int(stats["subnet_unclaimed"])
+    claimed_unallocated = int(stats["claimed_unallocated"])
+    available = subnet_unclaimed + claimed_unallocated
+    allocated = subnet_total - available if subnet_total else int(stats["allocated"])
+    total = subnet_total if subnet_total else (available + allocated)
     return {
         "pool_id": str(pool_id),
-        "total": available + allocated,
+        "total": total,
         "allocated": allocated,
         "available": available,
     }
