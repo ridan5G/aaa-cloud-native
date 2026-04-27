@@ -1,0 +1,12 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "subscriber-profile-api.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "subscriber-profile-api.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "subscriber-profile-api.selectorLabels" . | nindent 6 }}

@@ -1,0 +1,642 @@
+"""
+POST /profiles/bulk             — async bulk upsert (JSON body list or CSV multipart upload)
+POST /profiles/bulk-release-ips — async bulk IP release for a set of SIMs
+POST /imsis/bulk-delete         — async bulk IMSI removal with IP return to pool
+GET  /jobs                      — list bulk jobs (newest first, ?limit=N)
+GET  /jobs/{job_id}             — poll bulk job status
+"""
+import csv
+import io
+import json
+import logging
+import re
+import time
+import uuid
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
+from app.db import get_conn, get_pool
+from app.auth import require_auth
+from app.config import BULK_BATCH_SIZE
+from app.metrics import bulk_job_profiles_total, bulk_job_duration
+
+router = APIRouter()
+logger = logging.getLogger(__name__)
+
+IMSI_RE = re.compile(r"^\d{15}$")
+
+
+class BulkValidationError(ValueError):
+    """Raised for per-row validation failures; carries a field name for error reporting."""
+    def __init__(self, field: str, message: str):
+        self.field = field
+        super().__init__(message)
+
+
+async def _process_bulk_job(job_id: str, profiles: list[dict]):
+    start = time.monotonic()
+    processed = 0
+    failed = 0
+    errors = []
+
+    async with get_pool().acquire() as conn:
+        for i in range(0, len(profiles), BULK_BATCH_SIZE):
+            batch = profiles[i : i + BULK_BATCH_SIZE]
+            for row_idx, profile in enumerate(batch, start=i):
+                try:
+                    await _upsert_profile(conn, profile)
+                    processed += 1
+                    bulk_job_profiles_total.labels(outcome="processed").inc()
+                except BulkValidationError as exc:
+                    failed += 1
+                    bulk_job_profiles_total.labels(outcome="failed").inc()
+                    logger.warning(
+                        '{"job_id":"%s","row":%d,"result":"failed","reason":"validation_error","field":"%s","message":"%s"}',
+                        job_id, row_idx, exc.field, str(exc),
+                    )
+                    errors.append({
+                        "row": row_idx,
+                        "field": exc.field,
+                        "message": str(exc),
+                    })
+                    if len(errors) > 1000:
+                        break
+                except Exception as exc:
+                    failed += 1
+                    bulk_job_profiles_total.labels(outcome="failed").inc()
+                    logger.error(
+                        '{"job_id":"%s","row":%d,"result":"failed","reason":"exception","message":"%s"}',
+                        job_id, row_idx, str(exc),
+                    )
+                    errors.append({
+                        "row": row_idx,
+                        "message": str(exc),
+                    })
+                    if len(errors) > 1000:
+                        break
+
+        elapsed = time.monotonic() - start
+        bulk_job_duration.observe(elapsed)
+
+        status = "completed"
+        await conn.execute(
+            """
+            UPDATE bulk_jobs
+            SET status=$1, processed=$2, failed=$3, errors=$4::jsonb, updated_at=now()
+            WHERE job_id=$5::uuid
+            """,
+            status,
+            processed,
+            failed,
+            errors,  # asyncpg's jsonb codec handles json.dumps; pre-encoding causes double-encoding
+            job_id,
+        )
+
+    logger.info(
+        '{"job_id":"%s","status":"completed","processed":%d,"failed":%d,"elapsed_s":%.1f}',
+        job_id, processed, failed, elapsed,
+    )
+
+
+async def _upsert_profile(conn, profile: dict):
+    sim_id = profile.get("sim_id")
+    iccid = profile.get("iccid")
+    account_name = profile.get("account_name")
+    status = profile.get("status", "active")
+    ip_resolution = profile.get("ip_resolution", "imsi")
+    metadata = profile.get("metadata")
+
+    # Validate all IMSIs first
+    for imsi_entry in profile.get("imsis", []):
+        imsi = imsi_entry.get("imsi")
+        if imsi and not IMSI_RE.match(imsi):
+            raise BulkValidationError("imsi", f"IMSI '{imsi}' must be exactly 15 digits")
+
+    if sim_id:
+        await conn.execute(
+            """
+            INSERT INTO sim_profiles (sim_id, iccid, account_name, status, ip_resolution, metadata)
+            VALUES ($1::uuid, $2, $3, $4, $5, $6::jsonb)
+            ON CONFLICT (sim_id) DO UPDATE
+            SET status=EXCLUDED.status, ip_resolution=EXCLUDED.ip_resolution,
+                metadata=EXCLUDED.metadata, updated_at=now()
+            """,
+            sim_id,
+            iccid,
+            account_name,
+            status,
+            ip_resolution,
+            json.dumps(metadata) if metadata else None,
+        )
+    elif iccid:
+        sim_id = await conn.fetchval(
+            """
+            INSERT INTO sim_profiles (iccid, account_name, status, ip_resolution, metadata)
+            VALUES ($1, $2, $3, $4, $5::jsonb)
+            ON CONFLICT (iccid) DO UPDATE
+            SET status=EXCLUDED.status, ip_resolution=EXCLUDED.ip_resolution,
+                metadata=EXCLUDED.metadata, updated_at=now()
+            RETURNING sim_id::text
+            """,
+            iccid,
+            account_name,
+            status,
+            ip_resolution,
+            json.dumps(metadata) if metadata else None,
+        )
+    else:
+        sim_id = await conn.fetchval(
+            """
+            INSERT INTO sim_profiles (account_name, status, ip_resolution, metadata)
+            VALUES ($1, $2, $3, $4::jsonb)
+            RETURNING sim_id::text
+            """,
+            account_name,
+            status,
+            ip_resolution,
+            json.dumps(metadata) if metadata else None,
+        )
+
+    # Upsert IMSIs and their apn_ips
+    for imsi_entry in profile.get("imsis", []):
+        imsi = imsi_entry.get("imsi")
+        if not imsi:
+            continue
+        priority = imsi_entry.get("priority", 1)
+        await conn.execute(
+            """
+            INSERT INTO imsi2sim (imsi, sim_id, priority)
+            VALUES ($1, $2::uuid, $3)
+            ON CONFLICT (imsi) DO NOTHING
+            """,
+            imsi, sim_id, priority,
+        )
+        for aip in imsi_entry.get("apn_ips", []):
+            static_ip = aip.get("static_ip")
+            if not static_ip:
+                continue
+            await conn.execute(
+                """
+                INSERT INTO imsi_apn_ips (imsi, apn, static_ip, pool_id, pool_name)
+                VALUES ($1, $2, $3::inet, $4::uuid, $5)
+                ON CONFLICT ON CONSTRAINT uq_apn_ips_imsi_apn DO UPDATE
+                SET static_ip=EXCLUDED.static_ip, pool_id=EXCLUDED.pool_id,
+                    pool_name=EXCLUDED.pool_name, updated_at=now()
+                """,
+                imsi,
+                aip.get("apn"),
+                static_ip,
+                aip.get("pool_id"),
+                aip.get("pool_name"),
+            )
+
+    # Upsert iccid_ips (card-level IPs)
+    for iip in profile.get("iccid_ips", []):
+        static_ip = iip.get("static_ip")
+        if not static_ip:
+            continue
+        await conn.execute(
+            """
+            INSERT INTO sim_apn_ips (sim_id, apn, static_ip, pool_id, pool_name)
+            VALUES ($1::uuid, $2, $3::inet, $4::uuid, $5)
+            ON CONFLICT ON CONSTRAINT uq_iccid_ips_sim_apn DO UPDATE
+            SET static_ip=EXCLUDED.static_ip, pool_id=EXCLUDED.pool_id,
+                pool_name=EXCLUDED.pool_name, updated_at=now()
+            """,
+            sim_id,
+            iip.get("apn"),
+            static_ip,
+            iip.get("pool_id"),
+            iip.get("pool_name"),
+        )
+
+
+def _parse_csv(text: str) -> list[dict]:
+    """Parse flat CSV format into profile dicts.
+
+    Expected columns: iccid, account_name, status, ip_resolution, imsi, apn, static_ip, pool_id
+
+    One IMSI per row. Rows that share the same non-empty ICCID are merged into a
+    single profile — each row adds one IMSI (and its IP) to that card.
+    Rows without an ICCID are treated as individual profiles.
+
+    Example — a dual-IMSI card:
+        iccid,            account_name, status, ip_resolution, imsi,            apn,       static_ip,   pool_id
+        8935501234567890, Melita,       active, imsi_apn,      123456789012345, internet,  10.0.0.1,    <uuid>
+        8935501234567890, Melita,       active, imsi_apn,      123456789012346, internet,  10.0.0.2,    <uuid>
+    → produces one profile with two IMSIs.
+    """
+    reader = csv.DictReader(io.StringIO(text))
+
+    # Ordered dict keyed by ICCID (None-keyed rows are never merged).
+    # Value is (profile_dict, sequential_index) — index preserves insertion order
+    # for None-ICCID rows which each need a unique key.
+    seen: dict = {}        # iccid → profile dict
+    ordered: list = []     # profiles in insertion order
+
+    for row in reader:
+        iccid = row.get("iccid") or None
+        ip_resolution = row.get("ip_resolution", "imsi")
+        imsi = row.get("imsi") or None
+        apn = row.get("apn") or None
+        static_ip = row.get("static_ip") or None
+        pool_id = row.get("pool_id") or None
+
+        # Determine whether to merge with an existing profile.
+        key = iccid if iccid else id(row)  # None-ICCID rows never merge
+
+        if key not in seen:
+            profile: dict = {
+                "iccid": iccid,
+                "account_name": row.get("account_name") or None,
+                "status": row.get("status", "active"),
+                "ip_resolution": ip_resolution,
+                "imsis": [],
+                "iccid_ips": [],
+            }
+            seen[key] = profile
+            ordered.append(profile)
+        else:
+            profile = seen[key]
+
+        if imsi:
+            if ip_resolution in ("iccid", "iccid_apn"):
+                # IP stored at card level; IMSI has no apn_ips.
+                # Avoid duplicate iccid_ips when the same APN appears multiple times.
+                profile["imsis"].append({"imsi": imsi, "apn_ips": []})
+                if static_ip:
+                    apn_val = apn if ip_resolution == "iccid_apn" else None
+                    already = any(
+                        e.get("apn") == apn_val and e.get("static_ip") == static_ip
+                        for e in profile["iccid_ips"]
+                    )
+                    if not already:
+                        profile["iccid_ips"].append({
+                            "apn": apn_val,
+                            "static_ip": static_ip,
+                            "pool_id": pool_id,
+                        })
+            else:
+                # ip_resolution in (imsi, imsi_apn): IP stored per IMSI.
+                apn_ips = []
+                if static_ip:
+                    apn_ips.append({
+                        "apn": apn if apn else None,
+                        "static_ip": static_ip,
+                        "pool_id": pool_id,
+                    })
+                profile["imsis"].append({"imsi": imsi, "apn_ips": apn_ips})
+
+    return ordered
+
+
+# ── Bulk Release IPs ─────────────────────────────────────────────────────────
+
+async def _release_sim_ips(conn, sim_id: str) -> int:
+    """Release all pool-managed IPs for one SIM. Returns count of IPs released."""
+    async with conn.transaction():
+        imsi_rows = await conn.fetch(
+            """
+            SELECT pool_id::text, host(static_ip) AS ip
+            FROM imsi_apn_ips
+            WHERE imsi IN (SELECT imsi FROM imsi2sim WHERE sim_id = $1::uuid)
+              AND pool_id IS NOT NULL
+            """,
+            sim_id,
+        )
+        sim_rows = await conn.fetch(
+            "SELECT pool_id::text, host(static_ip) AS ip FROM sim_apn_ips "
+            "WHERE sim_id = $1::uuid AND pool_id IS NOT NULL",
+            sim_id,
+        )
+        if imsi_rows:
+            await conn.execute(
+                "DELETE FROM imsi_apn_ips "
+                "WHERE imsi IN (SELECT imsi FROM imsi2sim WHERE sim_id = $1::uuid) "
+                "AND pool_id IS NOT NULL",
+                sim_id,
+            )
+            await conn.executemany(
+                "INSERT INTO ip_pool_available (pool_id, ip) VALUES ($1::uuid, $2::inet) ON CONFLICT DO NOTHING",
+                [(r["pool_id"], r["ip"]) for r in imsi_rows],
+            )
+        if sim_rows:
+            await conn.execute(
+                "DELETE FROM sim_apn_ips WHERE sim_id = $1::uuid AND pool_id IS NOT NULL",
+                sim_id,
+            )
+            await conn.executemany(
+                "INSERT INTO ip_pool_available (pool_id, ip) VALUES ($1::uuid, $2::inet) ON CONFLICT DO NOTHING",
+                [(r["pool_id"], r["ip"]) for r in sim_rows],
+            )
+    return len(imsi_rows) + len(sim_rows)
+
+
+async def _process_bulk_release_ips(job_id: str, sim_ids: list[str]):
+    start = time.monotonic()
+    processed = 0
+    failed = 0
+    errors = []
+
+    async with get_pool().acquire() as conn:
+        for idx, sim_id in enumerate(sim_ids):
+            try:
+                exists = await conn.fetchval(
+                    "SELECT 1 FROM sim_profiles WHERE sim_id = $1::uuid AND status != 'terminated'",
+                    sim_id,
+                )
+                if not exists:
+                    raise BulkValidationError("sim_id", f"SIM '{sim_id}' not found or terminated")
+                await _release_sim_ips(conn, sim_id)
+                processed += 1
+                bulk_job_profiles_total.labels(outcome="processed").inc()
+            except BulkValidationError as exc:
+                failed += 1
+                bulk_job_profiles_total.labels(outcome="failed").inc()
+                logger.warning(
+                    '{"job_id":"%s","idx":%d,"result":"failed","field":"%s","message":"%s"}',
+                    job_id, idx, exc.field, str(exc),
+                )
+                errors.append({"index": idx, "value": sim_id, "field": exc.field, "message": str(exc)})
+                if len(errors) > 1000:
+                    break
+            except Exception as exc:
+                failed += 1
+                bulk_job_profiles_total.labels(outcome="failed").inc()
+                logger.error(
+                    '{"job_id":"%s","idx":%d,"result":"failed","message":"%s"}',
+                    job_id, idx, str(exc),
+                )
+                errors.append({"index": idx, "value": sim_id, "message": str(exc)})
+                if len(errors) > 1000:
+                    break
+
+        elapsed = time.monotonic() - start
+        bulk_job_duration.observe(elapsed)
+        await conn.execute(
+            "UPDATE bulk_jobs SET status='completed', processed=$1, failed=$2, errors=$3::jsonb, updated_at=now() "
+            "WHERE job_id=$4::uuid",
+            processed, failed, errors, job_id,
+        )
+
+    logger.info(
+        '{"job_id":"%s","status":"completed","processed":%d,"failed":%d,"elapsed_s":%.1f}',
+        job_id, processed, failed, elapsed,
+    )
+
+
+@router.post("/profiles/bulk-release-ips", status_code=202, dependencies=[Depends(require_auth)])
+async def bulk_release_ips(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    conn=Depends(get_conn),
+):
+    body = await request.json()
+    sim_ids = body.get("sim_ids")
+
+    if not sim_ids:
+        # Filter mode: at least one of account_name or pool_id required
+        account_name = body.get("account_name")
+        pool_id = body.get("pool_id")
+        if not account_name and not pool_id:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "validation_failed", "details": [
+                    {"field": "sim_ids", "message": "provide sim_ids list or at least one filter (account_name, pool_id)"},
+                ]},
+            )
+        filters = ["status != 'terminated'"]
+        params: list = []
+        idx = 1
+        if account_name:
+            filters.append(f"account_name = ${idx}")
+            params.append(account_name)
+            idx += 1
+        if pool_id:
+            filters.append(
+                f"sim_id IN ("
+                f"SELECT si.sim_id FROM imsi2sim si "
+                f"JOIN imsi_apn_ips iai ON iai.imsi = si.imsi "
+                f"WHERE iai.pool_id = ${idx}::uuid "
+                f"UNION "
+                f"SELECT sim_id FROM sim_apn_ips WHERE pool_id = ${idx}::uuid"
+                f")"
+            )
+            params.append(pool_id)
+        rows = await conn.fetch(
+            f"SELECT sim_id::text FROM sim_profiles WHERE {' AND '.join(filters)}",
+            *params,
+        )
+        sim_ids = [r["sim_id"] for r in rows]
+
+    if not sim_ids:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "validation_failed", "details": [
+                {"field": "sim_ids", "message": "no matching SIMs found"},
+            ]},
+        )
+
+    submitted = len(sim_ids)
+    job_id = await conn.fetchval(
+        "INSERT INTO bulk_jobs (status, submitted) VALUES ('queued', $1) RETURNING job_id::text",
+        submitted,
+    )
+    background_tasks.add_task(_process_bulk_release_ips, job_id, sim_ids)
+    return {"job_id": job_id, "submitted": submitted, "status_url": f"/v1/jobs/{job_id}"}
+
+
+# ── Bulk Delete IMSIs ─────────────────────────────────────────────────────────
+
+async def _delete_imsi_with_ip_return(conn, imsi: str):
+    """Delete one IMSI from its SIM, returning its pool-managed IPs to the pool."""
+    row = await conn.fetchrow("SELECT imsi FROM imsi2sim WHERE imsi = $1", imsi)
+    if not row:
+        raise BulkValidationError("imsi", f"IMSI '{imsi}' not found")
+    async with conn.transaction():
+        ip_rows = await conn.fetch(
+            "SELECT pool_id::text, host(static_ip) AS ip FROM imsi_apn_ips "
+            "WHERE imsi = $1 AND pool_id IS NOT NULL",
+            imsi,
+        )
+        await conn.execute("DELETE FROM imsi2sim WHERE imsi = $1", imsi)
+        if ip_rows:
+            await conn.executemany(
+                "INSERT INTO ip_pool_available (pool_id, ip) VALUES ($1::uuid, $2::inet) ON CONFLICT DO NOTHING",
+                [(r["pool_id"], r["ip"]) for r in ip_rows],
+            )
+
+
+async def _process_bulk_imsi_delete(job_id: str, imsis: list[str]):
+    start = time.monotonic()
+    processed = 0
+    failed = 0
+    errors = []
+
+    async with get_pool().acquire() as conn:
+        for idx, imsi in enumerate(imsis):
+            try:
+                if not IMSI_RE.match(imsi):
+                    raise BulkValidationError("imsi", f"IMSI '{imsi}' must be exactly 15 digits")
+                await _delete_imsi_with_ip_return(conn, imsi)
+                processed += 1
+                bulk_job_profiles_total.labels(outcome="processed").inc()
+            except BulkValidationError as exc:
+                failed += 1
+                bulk_job_profiles_total.labels(outcome="failed").inc()
+                logger.warning(
+                    '{"job_id":"%s","idx":%d,"result":"failed","field":"%s","message":"%s"}',
+                    job_id, idx, exc.field, str(exc),
+                )
+                errors.append({"index": idx, "value": imsi, "field": exc.field, "message": str(exc)})
+                if len(errors) > 1000:
+                    break
+            except Exception as exc:
+                failed += 1
+                bulk_job_profiles_total.labels(outcome="failed").inc()
+                logger.error(
+                    '{"job_id":"%s","idx":%d,"result":"failed","message":"%s"}',
+                    job_id, idx, str(exc),
+                )
+                errors.append({"index": idx, "value": imsi, "message": str(exc)})
+                if len(errors) > 1000:
+                    break
+
+        elapsed = time.monotonic() - start
+        bulk_job_duration.observe(elapsed)
+        await conn.execute(
+            "UPDATE bulk_jobs SET status='completed', processed=$1, failed=$2, errors=$3::jsonb, updated_at=now() "
+            "WHERE job_id=$4::uuid",
+            processed, failed, errors, job_id,
+        )
+
+    logger.info(
+        '{"job_id":"%s","status":"completed","processed":%d,"failed":%d,"elapsed_s":%.1f}',
+        job_id, processed, failed, elapsed,
+    )
+
+
+def _parse_imsi_csv(text: str) -> list[str]:
+    """Parse a single-column CSV with header 'imsi', returning a list of IMSI strings."""
+    reader = csv.DictReader(io.StringIO(text))
+    return [row["imsi"].strip() for row in reader if row.get("imsi", "").strip()]
+
+
+@router.post("/imsis/bulk-delete", status_code=202, dependencies=[Depends(require_auth)])
+async def bulk_delete_imsis(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    conn=Depends(get_conn),
+):
+    content_type = request.headers.get("content-type", "")
+
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        file = form.get("file")
+        if not file:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "validation_failed", "details": [{"field": "file", "message": "required"}]},
+            )
+        content = await file.read()
+        imsis = _parse_imsi_csv(content.decode("utf-8-sig"))
+    else:
+        body = await request.json()
+        imsis = body.get("imsis", [])
+
+    if not imsis:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "validation_failed", "details": [{"field": "imsis", "message": "required"}]},
+        )
+
+    submitted = len(imsis)
+    job_id = await conn.fetchval(
+        "INSERT INTO bulk_jobs (status, submitted) VALUES ('queued', $1) RETURNING job_id::text",
+        submitted,
+    )
+    background_tasks.add_task(_process_bulk_imsi_delete, job_id, imsis)
+    return {"job_id": job_id, "submitted": submitted, "status_url": f"/v1/jobs/{job_id}"}
+
+
+# ── Bulk Upsert ───────────────────────────────────────────────────────────────
+
+@router.post("/profiles/bulk", status_code=202, dependencies=[Depends(require_auth)])
+async def bulk_upsert(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    conn=Depends(get_conn),
+):
+    content_type = request.headers.get("content-type", "")
+
+    if "multipart/form-data" in content_type:
+        form = await request.form()
+        file = form.get("file")
+        if not file:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "validation_failed", "details": [{"field": "file", "message": "required"}]},
+            )
+        content = await file.read()
+        text = content.decode("utf-8-sig")
+        profiles = _parse_csv(text)
+    else:
+        body = await request.json()
+        if isinstance(body, list):
+            profiles = body
+        elif isinstance(body, dict):
+            profiles = body.get("profiles", [])
+        else:
+            profiles = []
+
+    if not profiles:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "validation_failed", "details": [{"field": "profiles", "message": "required"}]},
+        )
+
+    submitted = len(profiles)
+    job_id = await conn.fetchval(
+        "INSERT INTO bulk_jobs (status, submitted) VALUES ('queued', $1) RETURNING job_id::text",
+        submitted,
+    )
+
+    background_tasks.add_task(_process_bulk_job, job_id, profiles)
+
+    return {
+        "job_id": job_id,
+        "submitted": submitted,
+        "status_url": f"/v1/jobs/{job_id}",
+    }
+
+
+@router.get("/jobs", dependencies=[Depends(require_auth)])
+async def list_jobs(limit: int = 100, conn=Depends(get_conn)):
+    rows = await conn.fetch(
+        """
+        SELECT job_id::text, status, submitted, processed, failed, created_at, range_config_id
+        FROM bulk_jobs
+        ORDER BY created_at DESC
+        LIMIT $1
+        """,
+        limit,
+    )
+    return {"jobs": [dict(r) for r in rows]}
+
+
+@router.get("/jobs/{job_id}", dependencies=[Depends(require_auth)])
+async def get_job(job_id: uuid.UUID, conn=Depends(get_conn)):
+    row = await conn.fetchrow(
+        """
+        SELECT job_id::text, status, submitted, processed, failed, errors, range_config_id
+        FROM bulk_jobs WHERE job_id = $1::uuid
+        """,
+        job_id,
+    )
+    if not row:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "resource": "bulk_job", "job_id": str(job_id)},
+        )
+    result = dict(row)
+    if result["errors"] is None:
+        result["errors"] = []
+    return result

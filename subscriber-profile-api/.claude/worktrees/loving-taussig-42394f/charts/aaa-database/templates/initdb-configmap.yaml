@@ -1,0 +1,425 @@
+{{/*
+SQL schema ConfigMap — executed once during CloudNativePG cluster bootstrap
+via postInitApplicationSQLRefs. Runs as the app user (aaa_app) against the
+app database (aaa) after initdb completes.
+
+Contains the full AAA platform schema (Plan 2):
+  - 11 tables (including routing_domains, range_config_apn_pools, bulk_jobs)
+  - 17 indexes
+  - set_updated_at() trigger function
+  - 9 BEFORE UPDATE triggers (one per mutable table)
+
+PostgreSQL 15+ required for UNIQUE NULLS NOT DISTINCT.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aaa-database.clusterName" . }}-initdb-sql
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aaa-database.labels" . | nindent 4 }}
+data:
+  schema.sql: |
+    -- ================================================================
+    -- AAA Platform — PostgreSQL 15 Schema
+    -- Plan 2 — executed via CNPG postInitApplicationSQLRefs
+    -- ================================================================
+
+    -- ── Trigger helper ──────────────────────────────────────────────
+    CREATE OR REPLACE FUNCTION set_updated_at()
+    RETURNS TRIGGER LANGUAGE plpgsql AS $$
+    BEGIN
+        NEW.updated_at = now();
+        RETURN NEW;
+    END;
+    $$;
+
+    -- ================================================================
+    -- Table 1: sim_profiles
+    -- One row per physical SIM card.
+    -- sim_id is the immutable primary key (UUID).
+    -- iccid is optional — NULL for auto-allocated first-connection profiles.
+    -- ================================================================
+    CREATE TABLE IF NOT EXISTS sim_profiles (
+        sim_id          UUID        NOT NULL DEFAULT gen_random_uuid(),
+        iccid           TEXT        UNIQUE,
+        account_name    TEXT,
+        status          TEXT        NOT NULL DEFAULT 'active',
+        ip_resolution   TEXT        NOT NULL DEFAULT 'imsi',
+        metadata        JSONB,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CONSTRAINT sim_profiles_pkey
+            PRIMARY KEY (sim_id),
+        CONSTRAINT chk_status
+            CHECK (status IN ('active', 'suspended', 'terminated')),
+        CONSTRAINT chk_ip_resolution
+            CHECK (ip_resolution IN
+                ('iccid', 'iccid_apn', 'imsi', 'imsi_apn',
+                 'multi_imsi_sim', 'vrf_reuse')),
+        CONSTRAINT chk_iccid_format
+            CHECK (iccid IS NULL OR iccid ~ '^\d{19,20}$')
+    );
+
+    -- Partial index: ICCID lookups (NULL ICCIDs excluded — auto-allocated profiles)
+    CREATE INDEX IF NOT EXISTS idx_sp_iccid
+        ON sim_profiles (iccid)
+        WHERE iccid IS NOT NULL;
+
+    CREATE INDEX IF NOT EXISTS idx_sp_account_name
+        ON sim_profiles (account_name);
+
+    -- Combined index: list by account + filter by status
+    CREATE INDEX IF NOT EXISTS idx_sp_status
+        ON sim_profiles (account_name, status);
+
+    CREATE OR REPLACE TRIGGER trg_sp_updated_at
+        BEFORE UPDATE ON sim_profiles
+        FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+    -- ================================================================
+    -- Table 2: imsi2sim
+    -- One row per IMSI. Multiple rows may share one sim_id (Multi-IMSI SIM).
+    -- imsi is the B-tree primary key — AAA hot-path entry point.
+    -- ================================================================
+    CREATE TABLE IF NOT EXISTS imsi2sim (
+        imsi        TEXT        NOT NULL,
+        sim_id      UUID        NOT NULL,
+        status      TEXT        NOT NULL DEFAULT 'active',
+        priority    SMALLINT    NOT NULL DEFAULT 1,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CONSTRAINT imsi2sim_pkey
+            PRIMARY KEY (imsi),
+        CONSTRAINT imsi2sim_sim_fkey
+            FOREIGN KEY (sim_id)
+            REFERENCES sim_profiles (sim_id)
+            ON DELETE CASCADE,
+        CONSTRAINT chk_imsi_status
+            CHECK (status IN ('active', 'suspended')),
+        CONSTRAINT chk_imsi_15
+            CHECK (imsi ~ '^\d{15}$')
+    );
+
+    -- Reverse index: sim → all its IMSIs
+    CREATE INDEX IF NOT EXISTS idx_si_sim_id
+        ON imsi2sim (sim_id);
+
+    CREATE OR REPLACE TRIGGER trg_si_updated_at
+        BEFORE UPDATE ON imsi2sim
+        FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+    -- ================================================================
+    -- Table 3: imsi_apn_ips
+    -- Per-IMSI static IP assignments.
+    --   apn IS NULL     → ip_resolution = 'imsi'     (APN-agnostic)
+    --   apn IS NOT NULL → ip_resolution = 'imsi_apn' (APN-specific)
+    --   apn = NULL alongside specific APN entries acts as wildcard fallback.
+    -- UNIQUE NULLS NOT DISTINCT: PostgreSQL 15+ required.
+    -- ================================================================
+    CREATE TABLE IF NOT EXISTS imsi_apn_ips (
+        id          BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        imsi        TEXT        NOT NULL,
+        apn         TEXT,
+        static_ip   INET        NOT NULL,
+        pool_id     UUID,
+        pool_name   TEXT,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CONSTRAINT imsi_apn_ips_imsi_fkey
+            FOREIGN KEY (imsi)
+            REFERENCES imsi2sim (imsi)
+            ON DELETE CASCADE,
+        -- Only one wildcard (NULL apn) row permitted per IMSI
+        CONSTRAINT uq_apn_ips_imsi_apn
+            UNIQUE NULLS NOT DISTINCT (imsi, apn)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sai_imsi
+        ON imsi_apn_ips (imsi);
+
+    CREATE OR REPLACE TRIGGER trg_sai_updated_at
+        BEFORE UPDATE ON imsi_apn_ips
+        FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+    -- ================================================================
+    -- Table 4: sim_apn_ips
+    -- Card-level static IP assignments. All IMSIs on the card share these IPs.
+    --   apn IS NULL     → ip_resolution = 'iccid'     (all APNs)
+    --   apn IS NOT NULL → ip_resolution = 'iccid_apn' (APN-specific)
+    -- UNIQUE NULLS NOT DISTINCT: PostgreSQL 15+ required.
+    -- ================================================================
+    CREATE TABLE IF NOT EXISTS sim_apn_ips (
+        id          BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        sim_id      UUID        NOT NULL,
+        apn         TEXT,
+        static_ip   INET        NOT NULL,
+        pool_id     UUID,
+        pool_name   TEXT,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CONSTRAINT sim_apn_ips_sim_fkey
+            FOREIGN KEY (sim_id)
+            REFERENCES sim_profiles (sim_id)
+            ON DELETE CASCADE,
+        -- Only one wildcard (NULL apn) row permitted per sim
+        CONSTRAINT uq_iccid_ips_sim_apn
+            UNIQUE NULLS NOT DISTINCT (sim_id, apn)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sii_sim_id
+        ON sim_apn_ips (sim_id);
+
+    CREATE OR REPLACE TRIGGER trg_sii_updated_at
+        BEFORE UPDATE ON sim_apn_ips
+        FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+    -- ================================================================
+    -- Table 5: routing_domains
+    -- Named uniqueness scopes for IP address assignment.
+    -- Within one routing domain, no two pools may have overlapping subnets.
+    -- allowed_prefixes: if non-empty, new pool subnets must be contained
+    --   within one of these CIDRs (e.g. ['10.0.0.0/8', '172.16.0.0/12']).
+    --   Empty array = unrestricted (any subnet allowed).
+    -- ================================================================
+    CREATE TABLE IF NOT EXISTS routing_domains (
+        id               UUID        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+        name             TEXT        NOT NULL,
+        description      TEXT,
+        allowed_prefixes TEXT[]      NOT NULL DEFAULT '{}',
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CONSTRAINT uq_routing_domain_name UNIQUE (name)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_rd_name
+        ON routing_domains (name);
+
+    CREATE OR REPLACE TRIGGER trg_rd_updated_at
+        BEFORE UPDATE ON routing_domains
+        FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+    -- Auto-create the default routing domain
+    INSERT INTO routing_domains (name, description)
+    VALUES ('default', 'Default routing domain')
+    ON CONFLICT (name) DO NOTHING;
+
+    -- ================================================================
+    -- Table 6: ip_pools
+    -- IP pool definitions. One pool covers one subnet.
+    -- IPs are pre-populated into ip_pool_available at pool creation time.
+    -- routing_domain_id FK references routing_domains — pools in the same
+    -- domain cannot have overlapping subnets (enforced at app layer).
+    -- ================================================================
+    CREATE TABLE IF NOT EXISTS ip_pools (
+        pool_id            UUID        DEFAULT gen_random_uuid() PRIMARY KEY,
+        account_name       TEXT,
+        pool_name          TEXT        NOT NULL,
+        routing_domain_id  UUID        NOT NULL
+                                       REFERENCES routing_domains (id),
+        subnet             CIDR        NOT NULL,
+        start_ip           INET        NOT NULL,
+        end_ip             INET        NOT NULL,
+        next_ip_offset     BIGINT      NOT NULL DEFAULT 0,
+        status             TEXT        NOT NULL DEFAULT 'active',
+        created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CONSTRAINT chk_pool_status
+            CHECK (status IN ('active', 'suspended'))
+    );
+
+    -- Idempotent migration: add next_ip_offset to pools created before this column existed.
+    ALTER TABLE ip_pools ADD COLUMN IF NOT EXISTS next_ip_offset BIGINT NOT NULL DEFAULT 0;
+
+    CREATE INDEX IF NOT EXISTS idx_pools_account
+        ON ip_pools (account_name);
+
+    CREATE INDEX IF NOT EXISTS idx_pools_routing_domain_id
+        ON ip_pools (routing_domain_id);
+
+    CREATE OR REPLACE TRIGGER trg_pools_updated_at
+        BEFORE UPDATE ON ip_pools
+        FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+    -- ================================================================
+    -- Table 7: ip_pool_available
+    -- Recycled IPs returned by released subscribers. New pools no longer
+    -- pre-populate this table; IPs are allocated lazily via next_ip_offset.
+    -- SELECT FOR UPDATE SKIP LOCKED prevents race conditions during
+    -- concurrent first-connection allocation.
+    -- ================================================================
+    CREATE TABLE IF NOT EXISTS ip_pool_available (
+        pool_id     UUID    NOT NULL
+                            REFERENCES ip_pools (pool_id)
+                            ON DELETE CASCADE,
+        ip          INET    NOT NULL,
+        PRIMARY KEY (pool_id, ip)
+    );
+
+    -- ================================================================
+    -- Table 8: iccid_range_configs
+    -- Parent table for Multi-IMSI SIM provisioning.
+    -- Each row defines a group of IMSIs that belong to the same physical SIM card.
+    -- f_iccid / t_iccid are OPTIONAL — omit both for IMSI-only groups (no ICCID bounds).
+    -- Child IMSI ranges are in imsi_range_configs.
+    --
+    -- ip_resolution authority:
+    --   Standalone IMSI range (iccid_range_id IS NULL):
+    --     → imsi_range_configs.ip_resolution is authoritative
+    --   Multi-IMSI SIM group (iccid_range_id IS NOT NULL):
+    --     → iccid_range_configs.ip_resolution is authoritative
+    --       (enforced at API layer — child rows must match parent)
+    -- ================================================================
+    CREATE TABLE IF NOT EXISTS iccid_range_configs (
+        id              BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        account_name    TEXT,
+        f_iccid         TEXT,       -- nullable: NULL = IMSI-only group (no ICCID bounds)
+        t_iccid         TEXT,       -- nullable: NULL = IMSI-only group
+        pool_id         UUID        REFERENCES ip_pools (pool_id),  -- nullable: slots may each define their own pool
+        ip_resolution   TEXT        NOT NULL DEFAULT 'imsi',
+        imsi_count      SMALLINT    NOT NULL DEFAULT 1,
+        description     TEXT,
+        status          TEXT        NOT NULL DEFAULT 'active',
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CONSTRAINT chk_iccid_range_status
+            CHECK (status IN ('active', 'suspended', 'provisioned')),
+        CONSTRAINT chk_iccid_range_ip_res
+            CHECK (ip_resolution IN ('imsi', 'imsi_apn', 'iccid', 'iccid_apn')),
+        CONSTRAINT chk_f_iccid_format
+            CHECK (f_iccid IS NULL OR f_iccid ~ '^\d{19,20}$'),
+        CONSTRAINT chk_t_iccid_format
+            CHECK (t_iccid IS NULL OR t_iccid ~ '^\d{19,20}$'),
+        CONSTRAINT chk_iccid_range_order
+            CHECK (f_iccid IS NULL OR f_iccid <= t_iccid),
+        CONSTRAINT chk_imsi_count
+            CHECK (imsi_count BETWEEN 1 AND 10),
+        provisioning_mode TEXT        NOT NULL DEFAULT 'first_connect',
+        CONSTRAINT chk_iccid_range_prov_mode
+            CHECK (provisioning_mode IN ('first_connect', 'immediate'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_iccid_rc_account
+        ON iccid_range_configs (account_name);
+
+    -- Range scan: f_iccid <= $iccid AND t_iccid >= $iccid
+    CREATE INDEX IF NOT EXISTS idx_iccid_rc_range
+        ON iccid_range_configs (f_iccid, t_iccid);
+
+    CREATE OR REPLACE TRIGGER trg_iccid_rc_updated_at
+        BEFORE UPDATE ON iccid_range_configs
+        FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+    -- ================================================================
+    -- Table 9: imsi_range_configs
+    -- IMSI range authorization table for dynamic first-connection allocation.
+    --
+    -- Two modes:
+    --   iccid_range_id IS NULL     → standalone single-IMSI range
+    --   iccid_range_id IS NOT NULL → child of a Multi-IMSI SIM ICCID range;
+    --                                imsi_slot identifies the IMSI position (1–10)
+    --
+    -- Note: TEXT comparison is valid for IMSI range scans because all values
+    -- are exactly 15 digits (enforced by chk_f_imsi_15 / chk_t_imsi_15) —
+    -- no zero-padding ambiguity.
+    -- ================================================================
+    CREATE TABLE IF NOT EXISTS imsi_range_configs (
+        id              BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        account_name    TEXT,
+        f_imsi          TEXT        NOT NULL,
+        t_imsi          TEXT        NOT NULL,
+        pool_id         UUID        REFERENCES ip_pools (pool_id),  -- nullable: slot uses APN-pool routing when NULL
+        ip_resolution   TEXT        NOT NULL DEFAULT 'imsi',
+        iccid_range_id  BIGINT
+                                    REFERENCES iccid_range_configs (id)
+                                    ON DELETE CASCADE,
+        imsi_slot       SMALLINT    NOT NULL DEFAULT 1,
+        description     TEXT,
+        status          TEXT        NOT NULL DEFAULT 'active',
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CONSTRAINT chk_range_status
+            CHECK (status IN ('active', 'suspended', 'provisioned')),
+        CONSTRAINT chk_range_ip_resolution
+            CHECK (ip_resolution IN ('imsi', 'imsi_apn', 'iccid', 'iccid_apn')),
+        CONSTRAINT chk_f_imsi_15
+            CHECK (f_imsi ~ '^\d{15}$'),
+        CONSTRAINT chk_t_imsi_15
+            CHECK (t_imsi ~ '^\d{15}$'),
+        CONSTRAINT chk_range_order
+            CHECK (f_imsi <= t_imsi),
+        CONSTRAINT chk_imsi_slot
+            CHECK (imsi_slot BETWEEN 1 AND 10),
+        -- Within a multi-IMSI group each slot number must be unique
+        CONSTRAINT uq_iccid_range_slot
+            UNIQUE (iccid_range_id, imsi_slot),
+        provisioning_mode TEXT        NOT NULL DEFAULT 'first_connect',
+        CONSTRAINT chk_imsi_range_prov_mode
+            CHECK (provisioning_mode IN ('first_connect', 'immediate'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_irc_account
+        ON imsi_range_configs (account_name);
+
+    -- Hot-path range scan: f_imsi <= $imsi AND t_imsi >= $imsi
+    CREATE INDEX IF NOT EXISTS idx_irc_imsi_range
+        ON imsi_range_configs (f_imsi, t_imsi);
+
+    -- Lookup all child slots for a given iccid_range_id (multi-IMSI pre-provision)
+    CREATE INDEX IF NOT EXISTS idx_irc_iccid_range
+        ON imsi_range_configs (iccid_range_id);
+
+    CREATE OR REPLACE TRIGGER trg_irc_updated_at
+        BEFORE UPDATE ON imsi_range_configs
+        FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+    -- ================================================================
+    -- Table 10: range_config_apn_pools
+    -- Per-APN pool overrides for a specific imsi_range_configs entry.
+    -- When ip_resolution is 'imsi_apn' or 'iccid_apn', first-connection
+    -- checks this table before using the range config's default pool_id.
+    -- Allows different APNs to draw IPs from different pools for the
+    -- same IMSI range (e.g. apn1 → 10.0.0.0/24, apn2 → 11.0.0.0/24).
+    -- ================================================================
+    CREATE TABLE IF NOT EXISTS range_config_apn_pools (
+        id              BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        range_config_id BIGINT      NOT NULL
+                                    REFERENCES imsi_range_configs (id)
+                                    ON DELETE CASCADE,
+        apn             TEXT        NOT NULL,
+        pool_id         UUID        NOT NULL
+                                    REFERENCES ip_pools (pool_id),
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CONSTRAINT uq_range_config_apn UNIQUE (range_config_id, apn)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_rcap_range_config
+        ON range_config_apn_pools (range_config_id);
+
+    -- ================================================================
+    -- Table 11: bulk_jobs
+    -- Tracks async bulk import/provisioning jobs submitted via the API.
+    -- Owned by this schema so that fresh-cluster installs and migration
+    -- Job installs share the same definition.
+    -- ================================================================
+    CREATE TABLE IF NOT EXISTS bulk_jobs (
+        job_id          UUID        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+        status          TEXT        NOT NULL DEFAULT 'queued',
+        submitted       INT         NOT NULL DEFAULT 0,
+        processed       INT         NOT NULL DEFAULT 0,
+        failed          INT         NOT NULL DEFAULT 0,
+        errors          JSONB,
+        range_config_id BIGINT      REFERENCES iccid_range_configs (id) ON DELETE SET NULL,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CONSTRAINT chk_bulk_job_status
+            CHECK (status IN ('queued', 'running', 'completed', 'completed_with_errors', 'failed'))
+    );
+
+    CREATE OR REPLACE TRIGGER trg_bj_updated_at
+        BEFORE UPDATE ON bulk_jobs
+        FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+    -- ── Application user grants ──────────────────────────────────────────
+    GRANT SELECT, INSERT, UPDATE, DELETE  ON ALL TABLES    IN SCHEMA public TO aaa_app;
+    GRANT USAGE, SELECT                   ON ALL SEQUENCES IN SCHEMA public TO aaa_app;

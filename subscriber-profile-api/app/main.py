@@ -7,6 +7,7 @@ Env vars (see app/config.py for full list):
   METRICS_PORT      default 9091
   JWT_SKIP_VERIFY   "true" for dev
 """
+import asyncio
 import logging
 import uvicorn
 from contextlib import asynccontextmanager
@@ -14,9 +15,10 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from app.config import HTTP_PORT, METRICS_PORT, CORS_ORIGINS
-from app.db import init_db, close_db
+from app.config import HTTP_PORT, METRICS_PORT, CORS_ORIGINS, POOL_METRICS_REFRESH_SECONDS
+from app.db import init_db, close_db, get_pool
 from app.metrics import start_metrics_server, api_request_duration, http_requests_in_flight
+from app.pool_metrics_refresher import run as run_pool_metrics_refresher
 from app.routers import health, pools, routing_domains, range_configs, iccid_range_configs, profiles, imsis, first_connection, bulk
 import asyncpg
 import time
@@ -32,8 +34,16 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     await init_db()
     start_metrics_server(METRICS_PORT)
+    pool_metrics_task = asyncio.create_task(
+        run_pool_metrics_refresher(get_pool(), POOL_METRICS_REFRESH_SECONDS)
+    )
     logger.info('"subscriber-profile-api started"')
     yield
+    pool_metrics_task.cancel()
+    try:
+        await pool_metrics_task
+    except asyncio.CancelledError:
+        pass
     await close_db()
     logger.info('"subscriber-profile-api stopped"')
 

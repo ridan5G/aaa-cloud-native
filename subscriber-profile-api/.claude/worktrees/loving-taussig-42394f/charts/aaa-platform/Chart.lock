@@ -1,0 +1,27 @@
+dependencies:
+- name: aaa-database
+  repository: file://../aaa-database
+  version: 1.0.0
+- name: aaa-lookup-service
+  repository: file://../aaa-lookup-service
+  version: 1.0.0
+- name: subscriber-profile-api
+  repository: file://../subscriber-profile-api
+  version: 1.0.0
+- name: aaa-management-ui
+  repository: file://../aaa-management-ui
+  version: 1.0.0
+- name: aaa-radius-server
+  repository: file://../aaa-radius-server
+  version: 1.0.0
+- name: kube-prometheus-stack
+  repository: https://prometheus-community.github.io/helm-charts
+  version: 55.11.0
+- name: prometheus-pushgateway
+  repository: https://prometheus-community.github.io/helm-charts
+  version: 2.17.0
+- name: aaa-regression-tester
+  repository: file://../aaa-regression-tester
+  version: 1.0.0
+digest: sha256:82b14d00146c28590f9a54424dc98464c30b4b7c131193351b415148508ff940
+generated: "2026-03-16T13:45:21.979463912+02:00"

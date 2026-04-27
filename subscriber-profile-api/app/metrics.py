@@ -49,6 +49,30 @@ db_rollbacks_total = Counter(
     ["reason"],
 )
 
+# Per-pool IP utilization gauges. Refreshed periodically by
+# pool_metrics_refresher; see app/pool_metrics_refresher.py.
+_POOL_LABELS = ["pool_id", "pool_name", "account_name"]
+
+aaa_pool_total_ips = Gauge(
+    "aaa_pool_total_ips",
+    "Total IP capacity of a static pool (sum of all subnet ranges)",
+    _POOL_LABELS,
+)
+aaa_pool_allocated_ips = Gauge(
+    "aaa_pool_allocated_ips",
+    "Allocated IPs of a static pool (total - available)",
+    _POOL_LABELS,
+)
+aaa_pool_available_ips = Gauge(
+    "aaa_pool_available_ips",
+    "Available (free) IPs of a static pool",
+    _POOL_LABELS,
+)
+aaa_pool_metrics_refresh_timestamp_seconds = Gauge(
+    "aaa_pool_metrics_refresh_timestamp_seconds",
+    "Unix timestamp of the last successful pool metrics refresh",
+)
+
 
 def start_metrics_server(port: int):
     """Start Prometheus HTTP server on a daemon thread."""

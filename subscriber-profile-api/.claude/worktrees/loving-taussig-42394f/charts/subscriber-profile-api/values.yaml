@@ -1,0 +1,80 @@
+# ── Replica count ───────────────────────────────────────────────
+replicaCount: 2
+
+# ── Image ───────────────────────────────────────────────────────
+image:
+  repository: ""          # REQUIRED — set per environment
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# ── Service ─────────────────────────────────────────────────────
+service:
+  type: ClusterIP
+  httpPort: 8080
+  metricsPort: 9091
+
+# ── Ingress ─────────────────────────────────────────────────────
+ingress:
+  enabled: false
+  className: nginx
+  host: provisioning.aaa.example.com
+  tls:
+    enabled: true
+    secretName: ""
+
+# ── Database ────────────────────────────────────────────────────
+# Name of the Secret created by charts/aaa-database.
+# Must contain key: uri-rw (read-write PgBouncer URI, primary only)
+db:
+  secretName: aaa-db-credentials
+
+# ── JWT ─────────────────────────────────────────────────────────
+jwt:
+  skipVerify: "false"
+  secretName: ""
+  algorithm: "RS256"  # RS256 | HS256 — must match the signing algorithm of the token issuer
+
+# ── CORS ────────────────────────────────────────────────────────
+# Comma-separated allowed origins for browser cross-origin requests.
+# Leave empty when the UI nginx proxy routes /v1/ internally (no CORS needed).
+# Set explicitly when direct browser → API access is required (e.g., dev).
+cors:
+  origins: ""
+
+# ── Bulk job settings ───────────────────────────────────────────
+bulkJob:
+  workerThreads: 4
+  batchSize: 1000
+
+# ── Resources ───────────────────────────────────────────────────
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "2"
+    memory: "1Gi"
+
+# ── Autoscaling ─────────────────────────────────────────────────
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+
+# ── Pod Disruption Budget ───────────────────────────────────────
+podDisruptionBudget:
+  minAvailable: 1
+
+# ── Prometheus monitoring ────────────────────────────────────────
+monitoring:
+  enabled: true
+
+# ── Affinity ────────────────────────────────────────────────────
+affinity:
+  podAntiAffinity:
+    enabled: false   # set true in values-ha.yaml to spread pods across nodes
+
+# ── Helm name overrides ─────────────────────────────────────────
+nameOverride: ""
+fullnameOverride: ""

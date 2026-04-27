@@ -26,21 +26,80 @@ metadata:
 spec:
   groups:
 
-    # ── IP Pool Exhaustion ───────────────────────────────────────────────────
+    # ── IP Pool Exhaustion & Utilization ─────────────────────────────────────
     - name: aaa.pool
       rules:
+        # PoolExhausted preserves pool_id and enriches pool_name/account_name
+        # via group_left from the per-pool gauges (refreshed every 30 s by
+        # subscriber-profile-api). Any pool that can be exhausted has subnets
+        # so a corresponding aaa_pool_total_ips series will exist.
         - alert: PoolExhausted
-          expr: sum(rate(pool_exhausted_total[5m])) > 0
+          expr: |
+            (rate(pool_exhausted_total[5m]) > 0)
+            * on(pool_id) group_left(pool_name, account_name)
+              aaa_pool_total_ips
           for: 1m
           labels:
             severity: critical
           annotations:
-            summary: "IP pool exhausted"
+            summary: "Pool '{{ $labels.pool_name }}' ({{ $labels.pool_id }}) exhausted"
             description: >
-              pool_exhausted_total is increasing — at least one IP pool has
-              run out of addresses. New SIM connections will be rejected with
-              503 until the pool is expanded. Check the Subscriber Profile API
-              logs for pool_id details.
+              IP pool '{{ $labels.pool_name }}'
+              (id={{ $labels.pool_id }}, account={{ $labels.account_name }})
+              ran out of addresses — pool_exhausted_total is increasing.
+              New SIM connections to this pool are rejected with 503 until
+              capacity is added. Expand by adding a subnet:
+              POST /v1/pools/{{ $labels.pool_id }}/subnets
+
+        - alert: PoolUtilizationWarning
+          expr: |
+            aaa_pool_allocated_ips
+            / ignoring(__name__) aaa_pool_total_ips
+            > 0.80
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pool '{{ $labels.pool_name }}' ({{ $labels.pool_id }}) > 80% used"
+            description: >
+              Pool '{{ $labels.pool_name }}'
+              (id={{ $labels.pool_id }}, account={{ $labels.account_name }})
+              is at {{ $value | humanizePercentage }} utilization. Plan to
+              expand soon by adding a subnet:
+              POST /v1/pools/{{ $labels.pool_id }}/subnets
+
+        - alert: PoolUtilizationCritical
+          expr: |
+            aaa_pool_allocated_ips
+            / ignoring(__name__) aaa_pool_total_ips
+            > 0.95
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pool '{{ $labels.pool_name }}' ({{ $labels.pool_id }}) > 95% used"
+            description: >
+              Pool '{{ $labels.pool_name }}'
+              (id={{ $labels.pool_id }}, account={{ $labels.account_name }})
+              is at {{ $value | humanizePercentage }} utilization and will
+              be exhausted soon. Add a subnet now:
+              POST /v1/pools/{{ $labels.pool_id }}/subnets
+
+        - alert: PoolMetricsStale
+          expr: |
+            time() - aaa_pool_metrics_refresh_timestamp_seconds > 180
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pool utilization metrics are stale"
+            description: >
+              The subscriber-profile-api pool metrics refresh task has not
+              completed a successful cycle in over 3 minutes. Pool
+              utilization gauges (aaa_pool_total_ips, aaa_pool_allocated_ips,
+              aaa_pool_available_ips) may be stale, hiding pool exhaustion
+              risk. Check subscriber-profile-api logs for "pool metrics
+              refresh failed".
 
     # ── First-Connection Allocation ──────────────────────────────────────────
     - name: aaa.first_connection

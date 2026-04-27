@@ -1,0 +1,12 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "aaa-lookup-service.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aaa-lookup-service.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "aaa-lookup-service.selectorLabels" . | nindent 6 }}

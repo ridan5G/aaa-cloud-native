@@ -1,0 +1,11 @@
+apiVersion: v2
+name: aaa-radius-server
+description: >
+  Lightweight C++ RADIUS authentication server.
+  Receives Access-Request packets on UDP/1812, performs two-stage AAA:
+    Stage 1: GET /lookup?imsi=&apn=      (aaa-lookup-service)
+    Stage 2: POST /v1/first-connection   (subscriber-profile-api, on 404)
+  Returns Access-Accept with Framed-IP-Address or Access-Reject.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

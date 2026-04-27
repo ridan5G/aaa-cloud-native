@@ -1,0 +1,349 @@
+# ══════════════════════════════════════════════════════════════════
+# values-ha.yaml — HA (high-availability) environment overrides
+#
+# Deploy with:
+#   make deploy-ha
+#
+# Layers on top of values.yaml (prod defaults).
+# Every service gets:
+#   - Pod anti-affinity: pods of the same service are forced onto
+#     different nodes so a single node failure cannot take down all
+#     replicas.
+#   - PodDisruptionBudget: voluntary evictions (node drain,
+#     rolling upgrades) cannot remove the last available pod.
+# ══════════════════════════════════════════════════════════════════
+
+createNamespace: false
+
+# ── Database ─────────────────────────────────────────────────────
+aaa-database:
+  enabled: true
+  clusterNameOverride: aaa-postgres
+  postgresql:
+    instances: 3
+    imageName: ghcr.io/cloudnative-pg/postgresql:15.6
+    storage:
+      size: 5Gi
+      storageClass: hostpath
+    parameters:
+      max_connections: "50"
+      shared_buffers: "128MB"
+      work_mem: "4MB"
+      maintenance_work_mem: "64MB"
+      effective_cache_size: "256MB"
+      wal_level: logical
+    appPassword: devpassword
+    appCredentialsSecretName: aaa-db-credentials
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "1"
+        memory: "1Gi"
+    monitoring:
+      enabled: true
+  pgbouncer:
+    rw:
+      enabled: true
+      instances: 3          # up from 2 — tolerate one pooler pod loss
+      parameters:
+        max_client_conn: "300"
+        default_pool_size: "30"
+        reserve_pool_size: "10"
+        client_tls_sslmode: "disable"
+      pdb:
+        enabled: true
+        minAvailable: 1
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "32Mi"
+        limits:
+          cpu: "200m"
+          memory: "64Mi"
+    ro:
+      enabled: true
+      instances: 3          # up from 2 — tolerate one pooler pod loss
+      parameters:
+        max_client_conn: "300"
+        default_pool_size: "30"
+        reserve_pool_size: "10"
+        client_tls_sslmode: "disable"
+      pdb:
+        enabled: true
+        minAvailable: 1
+      resources:
+        requests:
+          cpu: "50m"
+          memory: "32Mi"
+        limits:
+          cpu: "200m"
+          memory: "64Mi"
+
+# ── AAA Lookup Service ────────────────────────────────────────────
+aaa-lookup-service:
+  enabled: true
+  replicaCount: 3
+  image:
+    repository: aaa/aaa-lookup-service
+    tag: "dev"
+    pullPolicy: Never
+  db:
+    secretName: aaa-db-credentials
+    poolSize: 25
+    timeoutSec: "2.0"
+  jwt:
+    skipVerify: "true"
+  provisioningUrl: "http://aaa-platform-subscriber-profile-api:8080"
+  autoscaling:
+    enabled: false
+  podDisruptionBudget:
+    minAvailable: 2
+  affinity:
+    podAntiAffinity:
+      enabled: true         # spread pods across nodes
+  monitoring:
+    enabled: true
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "128Mi"
+    limits:
+      cpu: "2"
+      memory: "256Mi"
+
+# ── Provisioning API ─────────────────────────────────────────────
+subscriber-profile-api:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: aaa/subscriber-profile-api
+    tag: "dev"
+    pullPolicy: Never
+  ingress:
+    enabled: true
+    className: nginx
+    host: provisioning.aaa.localhost
+    tls:
+      enabled: false
+  db:
+    secretName: aaa-db-credentials
+  cors:
+    origins: "http://ui.aaa.localhost"
+  jwt:
+    skipVerify: "true"
+  bulkJob:
+    workerThreads: 2
+    batchSize: 500
+  autoscaling:
+    enabled: false
+  podDisruptionBudget:
+    minAvailable: 1
+  affinity:
+    podAntiAffinity:
+      enabled: true         # spread pods across nodes
+  monitoring:
+    enabled: true
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "512Mi"
+
+# ── Management UI ─────────────────────────────────────────────────
+aaa-management-ui:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: aaa/aaa-management-ui
+    tag: "dev"
+    pullPolicy: Never
+  ingress:
+    enabled: true
+    className: nginx
+    host: ui.aaa.localhost
+    tls:
+      enabled: false
+  appConfig:
+    apiBaseUrl: "/v1"
+    oidcAuthority: "http://auth.aaa.localhost/realms/aaa"
+    oidcClientId: "aaa-management-ui"
+    pushgatewayUrl: "http://pushgateway.aaa.localhost"
+  apiServiceName: "aaa-platform-subscriber-profile-api"
+  apiServicePort: 8080
+  podDisruptionBudget:
+    minAvailable: 1
+  affinity:
+    podAntiAffinity:
+      enabled: true         # spread pods across nodes
+  monitoring:
+    enabled: true
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
+
+# ── RADIUS Server ─────────────────────────────────────────────────
+aaa-radius-server:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: aaa/aaa-radius-server
+    tag: "dev"
+    pullPolicy: Never
+  radiusSecret:
+    secretName: "aaa-radius-secret"
+  lookupUrl: "http://aaa-platform-aaa-lookup-service:8081"
+  workerThreads: 64
+  service:
+    type: LoadBalancer  # cloud NLB (AWS NLB / GCP UDP LB) or MetalLB on-prem assigns external IP
+  autoscaling:
+    enabled: false
+  podDisruptionBudget:
+    minAvailable: 1
+  affinity:
+    podAntiAffinity:
+      enabled: true         # spread pods across nodes
+  monitoring:
+    enabled: true
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "64Mi"
+    limits:
+      cpu: "1"
+      memory: "128Mi"
+
+# ── Prometheus + Grafana (kube-prometheus-stack) ──────────────────
+kube-prometheus-stack:
+  enabled: true
+  grafana:
+    enabled: true
+    adminPassword: "dev-grafana"
+    grafana.ini:
+      dashboards:
+        default_home_dashboard_path: /tmp/dashboards/AAA Platform/aaa-platform-dashboard.json
+    ingress:
+      enabled: true
+      ingressClassName: nginx
+      hosts:
+        - grafana.aaa.localhost
+      tls: []
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "200m"
+        memory: "256Mi"
+    persistence:
+      enabled: false
+    sidecar:
+      dashboards:
+        enabled: true
+        label: grafana_dashboard
+        labelValue: "1"
+        searchNamespace: aaa-platform
+        folderAnnotation: grafana_folder
+        provider:
+          foldersFromFilesStructure: true
+      datasources:
+        defaultDatasourceEnabled: false
+    datasources:
+      datasources.yaml:
+        apiVersion: 1
+        datasources:
+          - name: Prometheus
+            uid: prometheus
+            type: prometheus
+            url: http://prometheus-operated.aaa-platform.svc:9090
+            isDefault: true
+            access: proxy
+            jsonData:
+              timeInterval: 15s
+              httpMethod: POST
+  prometheus:
+    ingress:
+      enabled: true
+      ingressClassName: nginx
+      hosts:
+        - prometheus.aaa.localhost
+      tls: []
+    prometheusSpec:
+      retention: 6h
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "512Mi"
+        limits:
+          cpu: "500m"
+          memory: "1Gi"
+      storageSpec:
+        volumeClaimTemplate:
+          spec:
+            storageClassName: hostpath
+            resources:
+              requests:
+                storage: 5Gi
+      podMonitorSelectorNilUsesHelmValues: false
+      serviceMonitorSelectorNilUsesHelmValues: false
+  alertmanager:
+    enabled: false
+  nodeExporter:
+    enabled: false
+  kubeStateMetrics:
+    enabled: true
+
+# ── Prometheus Pushgateway ─────────────────────────────────────────
+prometheus-pushgateway:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    namespace: ""
+  ingress:
+    enabled: true
+    className: nginx
+    hosts:
+      - pushgateway.aaa.localhost
+    pathType: ImplementationSpecific
+    annotations:
+      nginx.ingress.kubernetes.io/enable-cors: "true"
+      nginx.ingress.kubernetes.io/cors-allow-origin: "http://ui.aaa.localhost"
+      nginx.ingress.kubernetes.io/cors-allow-methods: "POST, GET, OPTIONS"
+      nginx.ingress.kubernetes.io/cors-allow-headers: "Content-Type"
+  resources:
+    requests:
+      cpu: "10m"
+      memory: "32Mi"
+    limits:
+      cpu: "100m"
+      memory: "64Mi"
+
+# ── Migration — disabled; run manually ────────────────────────────
+aaa-migration:
+  enabled: false
+  staging:
+    storageClass: local-path
+
+# ── Regression Tester ────────────────────────────────────────────
+aaa-regression-tester:
+  enabled: false
+  image:
+    repository: aaa/aaa-regression-tester
+    tag: "dev"
+    pullPolicy: Never
+  env:
+    PROVISION_URL:   "http://aaa-platform-subscriber-profile-api:8080/v1"
+    LOOKUP_URL:      "http://aaa-platform-aaa-lookup-service:8081/v1"
+    PUSHGATEWAY_URL: "http://aaa-platform-prometheus-pushgateway:9091"
+  jwtSecretName: aaa-test-jwt
+  radius:
+    host:       "aaa-platform-aaa-radius-server"
+    port:       1812
+    secretName: "aaa-radius-secret"

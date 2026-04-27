@@ -1,0 +1,110 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aaa-radius-server.fullname" . }}
+  labels:
+    {{- include "aaa-radius-server.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "aaa-radius-server.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "aaa-radius-server.selectorLabels" . | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.service.metricsPort | quote }}
+        prometheus.io/path: "/metrics"
+    spec:
+      {{- if .Values.affinity.podAntiAffinity.enabled }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                {{- include "aaa-radius-server.selectorLabels" . | nindent 16 }}
+            topologyKey: kubernetes.io/hostname
+      {{- end }}
+      {{- if not .Values.pcap.enabled }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+      {{- end }}
+      containers:
+        - name: aaa-radius-server
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if .Values.pcap.enabled }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+          {{- end }}
+          ports:
+            - name: radius-auth
+              containerPort: {{ .Values.service.port }}
+              protocol: UDP
+            - name: metrics
+              containerPort: {{ .Values.service.metricsPort }}
+              protocol: TCP
+          env:
+            - name: RADIUS_PORT
+              value: {{ .Values.service.port | quote }}
+            - name: RADIUS_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ if .Values.radiusSecret.secretName }}{{ .Values.radiusSecret.secretName }}{{ else }}{{ include "aaa-radius-server.fullname" . }}-secret{{ end }}
+                  key: radius-secret
+            - name: LOOKUP_URL
+              value: {{ .Values.lookupUrl | quote }}
+            {{- if .Values.lookupUrlSecondary }}
+            - name: LOOKUP_URL_SECONDARY
+              value: {{ .Values.lookupUrlSecondary | quote }}
+            {{- end }}
+            - name: WORKER_THREADS
+              value: {{ .Values.workerThreads | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+            - name: METRICS_PORT
+              value: {{ .Values.service.metricsPort | quote }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          # No liveness/readiness probes on UDP — monitor via logs/metrics
+          {{- if .Values.pcap.enabled }}
+          volumeMounts:
+            - name: captures
+              mountPath: /captures
+          {{- end }}
+
+        {{- if .Values.pcap.enabled }}
+        # ── tcpdump sidecar ────────────────────────────────────────────────────
+        # Captures RADIUS pod network traffic to /captures/radius.pcap.
+        # Rotates at fileSizeLimitMB (-C) keeping only the latest file (-W 1).
+        # Retrieve with: make pcap-get-radius
+        - name: tcpdump
+          image: {{ .Values.pcap.image | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsUser: 0
+            capabilities:
+              add: ["NET_RAW", "NET_ADMIN"]
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "[pcap] Starting capture on all interfaces (rotate at {{ .Values.pcap.fileSizeLimitMB }} MB)..."
+              exec tcpdump -i any -n -s 0 \
+                -C {{ .Values.pcap.fileSizeLimitMB }} -W 1 \
+                -w /captures/radius.pcap \
+                {{ .Values.pcap.filter }}
+          volumeMounts:
+            - name: captures
+              mountPath: /captures
+        {{- end }}
+
+      {{- if .Values.pcap.enabled }}
+      volumes:
+        - name: captures
+          persistentVolumeClaim:
+            claimName: {{ include "aaa-radius-server.fullname" . }}-pcap
+      {{- end }}

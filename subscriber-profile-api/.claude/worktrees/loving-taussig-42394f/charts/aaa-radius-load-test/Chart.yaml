@@ -1,0 +1,10 @@
+apiVersion: v2
+name: aaa-radius-load-test
+description: >
+  RADIUS load test for the AAA platform.
+  Runs as a Kubernetes Job — sends RADIUS Access-Requests at multiple
+  RPS tiers, collects Prometheus metrics per tier, and writes a JSON
+  results file to /app/results/.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

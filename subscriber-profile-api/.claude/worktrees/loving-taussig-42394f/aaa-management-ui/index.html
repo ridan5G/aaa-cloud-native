@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AAA Platform — Management UI</title>
+    <!--
+      /config.js is served by Nginx at runtime (ConfigMap mount).
+      It sets window.APP_CONFIG = { apiBaseUrl, oidcAuthority, oidcClientId }.
+      Falls back to defaults when running locally via Vite.
+    -->
+    <script src="/config.js" onerror="console.warn('config.js not found — using Vite env defaults')"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

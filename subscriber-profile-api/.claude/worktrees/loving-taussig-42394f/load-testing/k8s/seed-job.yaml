@@ -1,0 +1,73 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: aaa-load-test-seed
+  namespace: aaa-platform
+  labels:
+    app.kubernetes.io/name: aaa-load-test-seed
+    app.kubernetes.io/component: load-testing
+spec:
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aaa-load-test-seed
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: psql-seed
+          image: postgres:16-alpine
+          command:
+            - sh
+            - -c
+            - |
+              psql "$DATABASE_URL" -f /seed_load_test.sql
+          env:
+            - name: DB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: aaa-db-credentials
+                  key: host-rw        # write access needed for INSERT
+            - name: DB_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: aaa-db-credentials
+                  key: port
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: aaa-db-credentials
+                  key: database
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: aaa-db-credentials
+                  key: username-rw
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: aaa-db-credentials
+                  key: password-rw
+            - name: DATABASE_URL
+              value: "postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)"
+          volumeMounts:
+            - name: seed-sql
+              mountPath: /seed_load_test.sql
+              subPath: seed_load_test.sql
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+      volumes:
+        - name: seed-sql
+          configMap:
+            name: aaa-load-test-seed-sql
+---
+# ConfigMap holding the seed SQL (apply separately or inline via kustomize)
+# To create:
+#   kubectl create configmap aaa-load-test-seed-sql \
+#     --from-file=seed_load_test.sql=load-testing/seed/seed_load_test.sql \
+#     -n aaa-platform

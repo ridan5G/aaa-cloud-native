@@ -1,0 +1,58 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "aaa-radius-load-test.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "aaa-radius-load-test.labels" . | nindent 4 }}
+spec:
+  backoffLimit: {{ .Values.job.backoffLimit }}
+  ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "aaa-radius-load-test.selectorLabels" . | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "false"
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: radius-load
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: API_URL
+              value: {{ .Values.api.url | quote }}
+            - name: API_TOKEN
+              value: {{ .Values.api.token | quote }}
+            - name: RADIUS_HOST
+              value: {{ .Values.radius.host | quote }}
+            - name: RADIUS_PORT
+              value: {{ .Values.radius.port | quote }}
+            {{- if .Values.radius.secretName }}
+            - name: RADIUS_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.radius.secretName }}
+                  key: radius-secret
+            {{- end }}
+            - name: PROMETHEUS_URL
+              value: {{ .Values.prometheus.url | quote }}
+            - name: IMSI_COUNT
+              value: {{ .Values.load.imsiCount | quote }}
+            - name: TIER_DURATION_S
+              value: {{ .Values.load.tierDurationS | quote }}
+            - name: FIRSTCONN_RPS
+              value: {{ .Values.load.firstconnRps | quote }}
+            - name: FIRSTCONN_IMSI_START
+              value: {{ .Values.load.firstconnImsiStart | quote }}
+          volumeMounts:
+            - name: results
+              mountPath: /app/results
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        # Results JSON written here — retrieve with:
+        #   kubectl cp <namespace>/<pod>:/app/results ./load-test-results -n <namespace>
+        - name: results
+          emptyDir: {}

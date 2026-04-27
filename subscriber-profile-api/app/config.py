@@ -14,6 +14,9 @@ JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "RS256")
 BULK_WORKER_THREADS = int(os.getenv("BULK_WORKER_THREADS", "4"))
 BULK_BATCH_SIZE = int(os.getenv("BULK_BATCH_SIZE", "500"))
 
+# Per-pool IP utilization gauges refresh interval. 0 disables the task.
+POOL_METRICS_REFRESH_SECONDS = int(os.getenv("POOL_METRICS_REFRESH_SECONDS", "30"))
+
 # Comma-separated allowed CORS origins, e.g. "http://ui.aaa.localhost,https://ui.aaa.example.com"
 # Empty string disables CORS headers (safe when the UI proxies /v1/ via nginx).
 CORS_ORIGINS: list[str] = [

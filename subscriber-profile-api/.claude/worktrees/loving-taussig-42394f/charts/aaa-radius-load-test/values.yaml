@@ -1,0 +1,45 @@
+# ── Image ─────────────────────────────────────────────────────────
+image:
+  repository: ""          # REQUIRED — set per environment
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# ── RADIUS server ──────────────────────────────────────────────────
+radius:
+  host: ""                # REQUIRED — in-cluster Service name, e.g. "aaa-platform-aaa-radius-server"
+  port: 1812
+  secretName: "aaa-radius-secret"   # must have key: radius-secret
+
+# ── subscriber-profile-api ─────────────────────────────────────────
+api:
+  url: "http://aaa-platform-subscriber-profile-api:8080"
+  token: "dev-load-test"            # ignored when JWT_SKIP_VERIFY=true
+
+# ── Prometheus ─────────────────────────────────────────────────────
+prometheus:
+  url: "http://aaa-platform-kube-promethe-prometheus.aaa-platform.svc:9090"
+
+# ── Load test parameters ──────────────────────────────────────────
+load:
+  imsiCount: 10000
+  tierDurationS: 300          # seconds per tier; override to 30 for a smoke run
+  firstconnRps: 2
+  firstconnImsiStart: "1010000011001"
+
+# ── Job settings ───────────────────────────────────────────────────
+job:
+  backoffLimit: 0             # fail immediately — no retries
+  ttlSecondsAfterFinished: 600  # 10 min to read logs before auto-delete
+
+# ── Resources ─────────────────────────────────────────────────────
+resources:
+  requests:
+    cpu: "200m"
+    memory: "128Mi"
+  limits:
+    cpu: "500m"
+    memory: "256Mi"
+
+# ── Helm name overrides ───────────────────────────────────────────
+nameOverride: ""
+fullnameOverride: ""

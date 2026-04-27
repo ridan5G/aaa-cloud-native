@@ -1,0 +1,9 @@
+apiVersion: v2
+name: aaa-regression-tester
+description: >
+  Regression test suite for the AAA platform.
+  Runs as a Kubernetes Job — executes the full pytest suite, then pushes
+  metrics to Prometheus Pushgateway and terminates.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
