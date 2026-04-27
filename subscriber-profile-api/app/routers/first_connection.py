@@ -63,10 +63,67 @@ class FirstConnectionRequest(BaseModel):
     use_case_id: Optional[str] = None
 
 
-async def _allocate_ip(conn, pool_id: str) -> Optional[str]:
-    """Claim one IP from ip_pool_available. Returns None if pool is exhausted."""
-    return await conn.fetchval(
+_ON_DEMAND_CLAIM_CHUNK = 64
+
+
+async def _claim_on_demand(conn, pool_id: str, n: int = _ON_DEMAND_CLAIM_CHUNK) -> int:
+    """Claim up to ``n`` IPs from ip_pool_subnets into ip_pool_available.
+
+    Used by _allocate_ip when ip_pool_available is empty for a pool — covers
+    late-binding cases (e.g. APN pools registered after a first_connect bulk
+    pre-pop has already run, so the pre-pop never claimed for them).
+    Returns the number actually claimed.
+    """
+    subnets = await conn.fetch(
         """
+        SELECT id, start_ip::text AS start_ip, next_ip_offset,
+               (end_ip - start_ip + 1) - next_ip_offset AS remaining
+          FROM ip_pool_subnets
+         WHERE pool_id = $1::uuid
+           AND ((end_ip - start_ip + 1) - next_ip_offset) > 0
+         ORDER BY priority
+         FOR UPDATE
+        """,
+        pool_id,
+    )
+    total = 0
+    remaining = n
+    for s in subnets:
+        if remaining <= 0:
+            break
+        take = min(remaining, int(s["remaining"]))
+        row = await conn.fetchrow(
+            """
+            UPDATE ip_pool_subnets
+               SET next_ip_offset = next_ip_offset + $2
+             WHERE id = $1
+            RETURNING next_ip_offset - $2 AS start_offset, start_ip::text AS start_ip
+            """,
+            s["id"], take,
+        )
+        await conn.execute(
+            """
+            INSERT INTO ip_pool_available (pool_id, ip)
+            SELECT $1::uuid, ($2::inet + gs.n)::inet
+              FROM generate_series($3::bigint, $4::bigint) gs(n)
+            ON CONFLICT DO NOTHING
+            """,
+            pool_id, row["start_ip"], row["start_offset"],
+            row["start_offset"] + take - 1,
+        )
+        total += take
+        remaining -= take
+    return total
+
+
+async def _allocate_ip(conn, pool_id: str) -> Optional[str]:
+    """Claim one IP from ip_pool_available. Returns None if pool is exhausted.
+
+    Self-heals against late-bound or missed pre-pops: if the available set is
+    empty, attempts to claim a small chunk from ip_pool_subnets watermarks
+    before retrying once.
+    """
+    sql = """
         DELETE FROM ip_pool_available
         WHERE ip = (
             SELECT ip FROM ip_pool_available
@@ -75,9 +132,13 @@ async def _allocate_ip(conn, pool_id: str) -> Optional[str]:
             FOR UPDATE SKIP LOCKED
         )
         RETURNING host(ip)
-        """,
-        pool_id,
-    )
+    """
+    ip = await conn.fetchval(sql, pool_id)
+    if ip is not None:
+        return ip
+    if await _claim_on_demand(conn, pool_id) == 0:
+        return None
+    return await conn.fetchval(sql, pool_id)
 
 
 async def _load_apn_pools(

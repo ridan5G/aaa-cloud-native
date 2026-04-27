@@ -206,8 +206,10 @@ data:
 
     -- ================================================================
     -- Table 6: ip_pools
-    -- IP pool definitions. One pool covers one subnet.
-    -- IPs are pre-populated into ip_pool_available at pool creation time.
+    -- IP pool definitions. A pool is a logical container that may span
+    -- one or more subnets (see ip_pool_subnets). The columns below
+    -- describe the *primary* subnet (back-compat for older clients);
+    -- additional subnets are tracked in ip_pool_subnets.
     -- routing_domain_id FK references routing_domains — pools in the same
     -- domain cannot have overlapping subnets (enforced at app layer).
     -- ================================================================
@@ -238,8 +240,33 @@ data:
         FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
     -- ================================================================
+    -- Table 6b: ip_pool_subnets
+    -- One row per subnet contained in an ip_pool. Each subnet has its
+    -- own next_ip_offset watermark used by the lazy claim helper.
+    -- start_ip / end_ip are inclusive bounds.
+    -- priority orders subnets for allocation (lower = used first).
+    -- ================================================================
+    CREATE TABLE IF NOT EXISTS ip_pool_subnets (
+        id              BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        pool_id         UUID        NOT NULL
+                                    REFERENCES ip_pools (pool_id)
+                                    ON DELETE CASCADE,
+        subnet          CIDR        NOT NULL,
+        start_ip        INET        NOT NULL,
+        end_ip          INET        NOT NULL,
+        next_ip_offset  BIGINT      NOT NULL DEFAULT 0,
+        priority        INT         NOT NULL DEFAULT 0,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CONSTRAINT uq_pool_subnet UNIQUE (pool_id, subnet)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_pool_subnets_pool_id
+        ON ip_pool_subnets (pool_id, priority);
+
+    -- ================================================================
     -- Table 7: ip_pool_available
-    -- Work-queue of unallocated IPs. Pre-populated at pool creation.
+    -- Work-queue of pre-claimed-but-unallocated IPs. Populated lazily
+    -- by _claim_ips_from_pool when range configs are created.
     -- SELECT FOR UPDATE SKIP LOCKED prevents race conditions during
     -- concurrent first-connection allocation.
     -- ================================================================

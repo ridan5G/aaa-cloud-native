@@ -50,4 +50,49 @@ test.describe('IP Pools page', () => {
     await expect(page.getByText('Free CIDR Finder')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Find Free CIDR' })).toBeVisible()
   })
+
+  // ── Pool detail ────────────────────────────────────────────────────────────
+  // GET /pools/{id}/stats now sums across the lazy `ip_pool_subnets` table
+  // (total = SUM(end_ip - start_ip + 1) over all subnets, allocated = total -
+  // available watermark). The detail page renders Total/Allocated/Available
+  // tiles + a utilization bar — these must remain non-NaN and consistent under
+  // the new query.
+  test('clicking a pool row opens the detail page with utilization tiles', async ({ page }) => {
+    const table = page.locator('table.tbl')
+    if (!(await table.isVisible().catch(() => false))) {
+      test.skip()
+      return
+    }
+    const firstRow = table.locator('tbody tr').first()
+    if ((await firstRow.count()) === 0) { test.skip(); return }
+
+    await firstRow.click()
+    await expect(page).toHaveURL(/\/pools\/[0-9a-f-]{36}/)
+
+    // Identity fields rendered from /pools/{id}
+    await expect(page.getByText('Subnet', { exact: true })).toBeVisible()
+    await expect(page.getByText('Start IP', { exact: true })).toBeVisible()
+    await expect(page.getByText('End IP', { exact: true })).toBeVisible()
+
+    // Stats tiles + utilization gauge — these read from the new lazy
+    // multi-subnet stats query. Numbers render with toLocaleString(), so they
+    // never appear as 'NaN'.
+    await expect(page.getByText('Utilization')).toBeVisible()
+    await expect(page.getByText('Total', { exact: true })).toBeVisible()
+    await expect(page.getByText('Allocated', { exact: true })).toBeVisible()
+    await expect(page.getByText('Available', { exact: true })).toBeVisible()
+    await expect(page.locator('body')).not.toContainText('NaN')
+  })
+
+  test('detail page breadcrumb returns to the list', async ({ page }) => {
+    const table = page.locator('table.tbl')
+    if (!(await table.isVisible().catch(() => false))) { test.skip(); return }
+    const firstRow = table.locator('tbody tr').first()
+    if ((await firstRow.count()) === 0) { test.skip(); return }
+
+    await firstRow.click()
+    await expect(page).toHaveURL(/\/pools\/[0-9a-f-]{36}/)
+    await page.getByRole('button', { name: 'IP Pools' }).click()
+    await expect(page).toHaveURL(/\/pools$/)
+  })
 })

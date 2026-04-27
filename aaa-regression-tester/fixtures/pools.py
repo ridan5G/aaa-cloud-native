@@ -143,3 +143,23 @@ def get_pool_stats(http: httpx.Client, pool_id: str) -> dict:
     resp = http.get(f"/pools/{pool_id}/stats")
     assert resp.status_code == 200, f"get_pool_stats failed: {resp.status_code}"
     return resp.json()
+
+
+def add_pool_subnet(
+    http: httpx.Client,
+    pool_id: str,
+    *,
+    subnet: str,
+    start_ip: str | None = None,
+    end_ip: str | None = None,
+) -> httpx.Response:
+    """POST /pools/{pool_id}/subnets — add a secondary subnet to an existing pool.
+
+    Returns the raw response so callers can assert on 201 / 409 / 400.
+    """
+    body: dict = {"subnet": subnet}
+    if start_ip:
+        body["start_ip"] = start_ip
+    if end_ip:
+        body["end_ip"] = end_ip
+    return http.post(f"/pools/{pool_id}/subnets", json=body)
