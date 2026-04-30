@@ -8,9 +8,11 @@ Test cases cover the full operator workflow:
   1d.2  GET /pools/{pool_id} after creation → subnet matches suggested_cidr, routing_domain_id matches
   1d.3  Sequential suggestions don't overlap: suggest #1 → pool #1; suggest #2 → pool #2 (no 409)
   1d.4  Patch allowed_prefixes gates suggest-cidr: no prefixes → 422; add prefix → suggest → pool → 201
-  1d.5  suggest-cidr size → prefix_len mapping: size=6→/29, size=14→/28, size=254→/24
+  1d.5  suggest-cidr size → prefix_len boundary table (sizes 1..511 covering /30..-/22)
   1d.6  Create pool via routing_domain_id (UUID); GET confirms routing_domain_id and name
   1d.7  Large pool at start of prefix is skipped: pool covering first /17 → suggest finds /25 in second /17
+  1d.8  Smallest-fitting prefix invariant: in-between sizes pick the smallest p where 2^(32-p)-2 ≥ size
+  1d.9  Two consecutive size=14 suggestions return non-overlapping /28s; both pools create successfully
 """
 import ipaddress
 
@@ -228,12 +230,34 @@ class TestFreeCidrFinderWorkflow:
 
     # 1d.5 ────────────────────────────────────────────────────────────────────
     def test_01d_5_suggest_size_to_prefix_len(self, http: httpx.Client):
-        """suggest-cidr size maps to correct prefix_len: size=6→/29, size=14→/28, size=254→/24."""
+        """suggest-cidr size → prefix_len across the full boundary table.
+
+        Each row probes either an exact power-of-2 boundary (e.g. size=6→/29 with
+        usable=6) or one host past it (size=7→/28 with usable=14). Validates that
+        the chosen prefix:
+          * matches the expected prefix_len,
+          * has usable_hosts == 2^(32-p)-2,
+          * provides at least `size` usable hosts,
+          * lives inside TD_PREFIX.
+        """
         cases = [
-            (6,   29),
-            (14,  28),
-            (254, 24),
+            # (size, expected_prefix_len)  usable = 2^(32-p) - 2
+            (1,    30),  # usable=2
+            (2,    30),
+            (3,    29),  # usable=6
+            (6,    29),
+            (7,    28),  # usable=14
+            (14,   28),
+            (15,   27),  # usable=30
+            (31,   26),  # usable=62
+            (63,   25),  # usable=126
+            (127,  24),  # usable=254
+            (254,  24),
+            (255,  23),  # usable=510
+            (510,  23),
+            (511,  22),  # usable=1022
         ]
+        td_prefix_net = ipaddress.ip_network(TD_PREFIX, strict=False)
         for size, expected_prefix_len in cases:
             domain = create_domain(
                 http,
@@ -257,6 +281,10 @@ class TestFreeCidrFinderWorkflow:
                     f"size={size}: expected usable_hosts={expected_usable}, got {data['usable_hosts']}"
                 assert data["usable_hosts"] >= size, \
                     f"size={size}: usable_hosts {data['usable_hosts']} < requested size"
+
+                suggested_net = ipaddress.ip_network(data["suggested_cidr"], strict=False)
+                assert suggested_net.subnet_of(td_prefix_net), \
+                    f"size={size}: suggested {data['suggested_cidr']} not within {TD_PREFIX}"
             finally:
                 delete_domain(http, did)
 
@@ -350,4 +378,105 @@ class TestFreeCidrFinderWorkflow:
         finally:
             if blocking_pool_id:
                 delete_pool(http, blocking_pool_id)
+            delete_domain(http, did)
+
+    # 1d.8 ────────────────────────────────────────────────────────────────────
+    def test_01d_8_smallest_fitting_prefix_invariant(self, http: httpx.Client):
+        """In-between sizes pick the SMALLEST prefix that fits, not a larger one.
+
+        For each (size, expected_p) the suggester must return prefix_len=expected_p
+        AND the next-smaller prefix (expected_p + 1) must NOT have enough usable
+        hosts for `size`. Confirms the chosen subnet is minimal-sufficient.
+        """
+        cases = [
+            # (size, expected_smallest_prefix_len)
+            (10,   28),   # 14 fits, 6 does not
+            (20,   27),   # 30 fits, 14 does not
+            (100,  25),   # 126 fits, 62 does not
+            (200,  24),   # 254 fits, 126 does not
+        ]
+        for size, expected_p in cases:
+            # Sanity-check the case definition itself: the next-smaller prefix
+            # genuinely cannot accommodate `size`.
+            next_smaller_usable = 2 ** (32 - (expected_p + 1)) - 2
+            assert next_smaller_usable < size, \
+                f"case bug: size={size} fits in /{expected_p + 1} (usable={next_smaller_usable})"
+
+            domain = create_domain(
+                http,
+                f"{TD_NAME}-fit{size}",
+                allowed_prefixes=[TD_PREFIX],
+            )
+            did = domain["id"]
+            try:
+                resp = http.get(
+                    f"/routing-domains/{did}/suggest-cidr", params={"size": size}
+                )
+                assert resp.status_code == 200, \
+                    f"size={size}: Expected 200, got {resp.status_code}: {resp.text}"
+                data = resp.json()
+                assert data["prefix_len"] == expected_p, \
+                    f"size={size}: expected smallest prefix /{expected_p}, " \
+                    f"got /{data['prefix_len']} (usable={data['usable_hosts']})"
+                assert data["usable_hosts"] >= size
+            finally:
+                delete_domain(http, did)
+
+    # 1d.9 ────────────────────────────────────────────────────────────────────
+    def test_01d_9_two_28s_no_overlap_size14(self, http: httpx.Client):
+        """Two consecutive size=14 suggestions yield non-overlapping /28s; both pools create."""
+        domain = create_domain(http, f"{TD_NAME}-two28", allowed_prefixes=[TD_PREFIX])
+        did = domain["id"]
+        pool_id_a: str | None = None
+        pool_id_b: str | None = None
+        try:
+            resp_a = http.get(
+                f"/routing-domains/{did}/suggest-cidr", params={"size": 14}
+            )
+            assert resp_a.status_code == 200, f"first suggest failed: {resp_a.text}"
+            data_a = resp_a.json()
+            assert data_a["prefix_len"] == 28
+            cidr_a = data_a["suggested_cidr"]
+
+            pool_a = create_pool(
+                http,
+                subnet=cidr_a,
+                pool_name="rd-1d-two28-a",
+                account_name="TestAccount",
+                routing_domain=f"{TD_NAME}-two28",
+            )
+            pool_id_a = pool_a["pool_id"]
+
+            resp_b = http.get(
+                f"/routing-domains/{did}/suggest-cidr", params={"size": 14}
+            )
+            assert resp_b.status_code == 200, f"second suggest failed: {resp_b.text}"
+            data_b = resp_b.json()
+            assert data_b["prefix_len"] == 28
+            cidr_b = data_b["suggested_cidr"]
+
+            net_a = ipaddress.ip_network(cidr_a, strict=False)
+            net_b = ipaddress.ip_network(cidr_b, strict=False)
+            td_prefix_net = ipaddress.ip_network(TD_PREFIX, strict=False)
+
+            assert cidr_b != cidr_a, \
+                f"second suggestion returned the same /28 {cidr_a} after pool was created"
+            assert not net_a.overlaps(net_b), \
+                f"suggested /28s overlap: {cidr_a} and {cidr_b}"
+            assert net_a.subnet_of(td_prefix_net) and net_b.subnet_of(td_prefix_net), \
+                f"suggestions outside {TD_PREFIX}: {cidr_a}, {cidr_b}"
+
+            pool_b = create_pool(
+                http,
+                subnet=cidr_b,
+                pool_name="rd-1d-two28-b",
+                account_name="TestAccount",
+                routing_domain=f"{TD_NAME}-two28",
+            )
+            pool_id_b = pool_b["pool_id"]
+        finally:
+            if pool_id_b:
+                delete_pool(http, pool_id_b)
+            if pool_id_a:
+                delete_pool(http, pool_id_a)
             delete_domain(http, did)

@@ -19,12 +19,22 @@ Test cases cover:
   1c.15 POST /pools routing_domain_id by UUID → 201; response includes routing_domain_id
   1c.16 POST /routing-domains empty name → 400
   1c.17 POST /routing-domains invalid CIDR in allowed_prefixes → 400
+  1c.18 POST /pools subnet inside SECOND of multi-prefix allowed list → 201
+  1c.19 POST /pools subnet outside ALL of multi-prefix allowed list → 409 (echoes both)
+  1c.20 suggest-cidr against multi-prefix domain → suggested_cidr within one of them
+  1c.21 POST /pools subnet equals allowed_prefix (reflexive subnet_of) → 201
+  1c.22 POST /pools subnet is strict superset of allowed_prefix → 409
+  1c.23 PATCH allowed_prefixes to [] → 200; GET confirms unrestricted
+  1c.24 add_pool_subnet outside allowed_prefixes → 409
+  1c.25 add_pool_subnet inside allowed_prefixes → 201
 """
+import ipaddress
+
 import httpx
 import pytest
 
 from conftest import PROVISION_BASE, JWT_TOKEN
-from fixtures.pools import create_pool, delete_pool
+from fixtures.pools import add_pool_subnet, create_pool, delete_pool
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -63,6 +73,14 @@ TD_PREFIX  = "10.99.0.0/16"           # allowed prefix for suggest-cidr tests
 TD_SUBNET  = "10.99.0.0/24"           # inside TD_PREFIX
 TD_SUBNET2 = "10.99.1.0/24"           # inside TD_PREFIX, non-overlapping
 TD_OUTSIDE = "192.168.55.0/24"        # outside TD_PREFIX
+
+# 1c.18–1c.25 — additional allowed_prefixes scenarios
+TD_PREFIX_2          = "172.16.0.0/12"   # second prefix for multi-prefix tests
+TD_SUBNET_2A         = "172.16.5.0/24"   # inside TD_PREFIX_2
+TD_NARROW            = "10.99.7.0/24"    # used as both prefix and subnet (equality test)
+TD_SUPERSET          = "10.99.0.0/8"     # strict superset of TD_NARROW
+TD_SECONDARY_INSIDE  = "10.99.50.0/24"   # inside TD_PREFIX, for add_pool_subnet
+TD_SECONDARY_OUTSIDE = "192.168.66.0/24" # outside TD_PREFIX, for add_pool_subnet
 
 
 # ─── Tests ────────────────────────────────────────────────────────────────────
@@ -289,6 +307,31 @@ class TestSuggestCidr:
         assert resp.status_code == 404
         assert resp.json().get("error") == "not_found"
 
+    # 1c.20 ───────────────────────────────────────────────────────────────────
+    def test_01c_20_multi_prefix_suggest_cidr_within_one(self, http: httpx.Client):
+        """suggest-cidr against multi-prefix domain → suggested_cidr is subnet_of one of them."""
+        body = create_domain(
+            http, TD_NAME, allowed_prefixes=[TD_PREFIX, TD_PREFIX_2]
+        )
+        did = body["id"]
+        try:
+            resp = http.get(
+                f"/routing-domains/{did}/suggest-cidr", params={"size": 50}
+            )
+            assert resp.status_code == 200, \
+                f"Expected 200, got {resp.status_code}: {resp.text}"
+            data = resp.json()
+            suggested = ipaddress.ip_network(data["suggested_cidr"], strict=False)
+            allowed_nets = [
+                ipaddress.ip_network(p, strict=False)
+                for p in (TD_PREFIX, TD_PREFIX_2)
+            ]
+            assert any(suggested.subnet_of(n) for n in allowed_nets), \
+                f"Suggested {data['suggested_cidr']} not within any of " \
+                f"[{TD_PREFIX}, {TD_PREFIX_2}]"
+        finally:
+            delete_domain(http, did)
+
 
 class TestAllowedPrefixesEnforcement:
     """allowed_prefixes pool validation — tests 1c.13 – 1c.15."""
@@ -363,6 +406,55 @@ class TestAllowedPrefixesEnforcement:
                 delete_pool(http, pool_id)
             delete_domain(http, did)
 
+    # 1c.18 ───────────────────────────────────────────────────────────────────
+    def test_01c_18_multi_prefix_subnet_in_second_accepted(self, http: httpx.Client):
+        """POST /pools with subnet inside the SECOND of two allowed_prefixes → 201."""
+        body = create_domain(
+            http, TD_NAME, allowed_prefixes=[TD_PREFIX, TD_PREFIX_2]
+        )
+        did = body["id"]
+        pool_id: str | None = None
+        try:
+            resp = http.post("/pools", json={
+                "name":              "rd-1c-multi-2nd-pool",
+                "account_name":      "TestAccount",
+                "routing_domain_id": did,
+                "subnet":            TD_SUBNET_2A,  # inside 172.16.0.0/12
+            })
+            assert resp.status_code == 201, \
+                f"Expected 201, got {resp.status_code}: {resp.text}"
+            pool_id = resp.json()["pool_id"]
+        finally:
+            if pool_id:
+                delete_pool(http, pool_id)
+            delete_domain(http, did)
+
+    # 1c.19 ───────────────────────────────────────────────────────────────────
+    def test_01c_19_multi_prefix_subnet_outside_both_rejected(self, http: httpx.Client):
+        """POST /pools with subnet outside ALL allowed_prefixes → 409 with both prefixes echoed."""
+        body = create_domain(
+            http, TD_NAME, allowed_prefixes=[TD_PREFIX, TD_PREFIX_2]
+        )
+        did = body["id"]
+        try:
+            resp = http.post("/pools", json={
+                "name":              "rd-1c-multi-outside-pool",
+                "account_name":      "TestAccount",
+                "routing_domain_id": did,
+                "subnet":            TD_OUTSIDE,
+            })
+            assert resp.status_code == 409, \
+                f"Expected 409, got {resp.status_code}: {resp.text}"
+            err = resp.json()
+            assert err.get("error") == "subnet_outside_allowed_prefixes"
+            echoed = err.get("allowed_prefixes", [])
+            assert TD_PREFIX in echoed, \
+                f"Response allowed_prefixes missing {TD_PREFIX}: {echoed}"
+            assert TD_PREFIX_2 in echoed, \
+                f"Response allowed_prefixes missing {TD_PREFIX_2}: {echoed}"
+        finally:
+            delete_domain(http, did)
+
 
 class TestRoutingDomainValidation:
     """Input validation — tests 1c.16 – 1c.17."""
@@ -383,3 +475,170 @@ class TestRoutingDomainValidation:
         })
         assert resp.status_code == 400
         assert resp.json().get("error") == "validation_failed"
+
+
+class TestAllowedPrefixesBoundaries:
+    """Boundary cases for allowed_prefixes — tests 1c.21–1c.23."""
+
+    _CLEANUP_NAMES = (
+        TD_NAME + "-equal",
+        TD_NAME + "-super",
+        TD_NAME + "-empty",
+    )
+
+    @classmethod
+    def setup_class(cls):
+        """Delete any routing domains left over from a previous interrupted run."""
+        with httpx.Client(
+            base_url=PROVISION_BASE,
+            headers={"Authorization": f"Bearer {JWT_TOKEN}"},
+            timeout=15.0,
+        ) as c:
+            r = c.get("/routing-domains")
+            if r.status_code != 200:
+                return
+            items = r.json()
+            if isinstance(items, dict):
+                items = items.get("items", [])
+            for d in items:
+                if d.get("name") in cls._CLEANUP_NAMES:
+                    c.delete(f"/routing-domains/{d['id']}")
+
+    # 1c.21 ───────────────────────────────────────────────────────────────────
+    def test_01c_21_subnet_equals_allowed_prefix_accepted(self, http: httpx.Client):
+        """POST /pools with subnet equal to allowed_prefix → 201 (subnet_of is reflexive)."""
+        name = TD_NAME + "-equal"
+        body = create_domain(http, name, allowed_prefixes=[TD_NARROW])
+        did = body["id"]
+        pool_id: str | None = None
+        try:
+            resp = http.post("/pools", json={
+                "name":              "rd-1c-equal-pool",
+                "account_name":      "TestAccount",
+                "routing_domain_id": did,
+                "subnet":            TD_NARROW,
+            })
+            assert resp.status_code == 201, \
+                f"Expected 201, got {resp.status_code}: {resp.text}"
+            pool_id = resp.json()["pool_id"]
+        finally:
+            if pool_id:
+                delete_pool(http, pool_id)
+            delete_domain(http, did)
+
+    # 1c.22 ───────────────────────────────────────────────────────────────────
+    def test_01c_22_subnet_strict_superset_rejected(self, http: httpx.Client):
+        """POST /pools with subnet that is a strict SUPERSET of allowed_prefix → 409."""
+        name = TD_NAME + "-super"
+        body = create_domain(http, name, allowed_prefixes=[TD_NARROW])
+        did = body["id"]
+        try:
+            resp = http.post("/pools", json={
+                "name":              "rd-1c-super-pool",
+                "account_name":      "TestAccount",
+                "routing_domain_id": did,
+                "subnet":            TD_SUPERSET,  # /8 — strict superset of /24
+            })
+            assert resp.status_code == 409, \
+                f"Expected 409, got {resp.status_code}: {resp.text}"
+            err = resp.json()
+            assert err.get("error") == "subnet_outside_allowed_prefixes"
+        finally:
+            delete_domain(http, did)
+
+    # 1c.23 ───────────────────────────────────────────────────────────────────
+    def test_01c_23_patch_to_empty_prefixes_unrestricted(self, http: httpx.Client):
+        """PATCH allowed_prefixes to [] → 200; GET confirms domain is now unrestricted."""
+        name = TD_NAME + "-empty"
+        body = create_domain(http, name, allowed_prefixes=[TD_PREFIX])
+        did = body["id"]
+        try:
+            resp = http.patch(
+                f"/routing-domains/{did}", json={"allowed_prefixes": []}
+            )
+            assert resp.status_code == 200, \
+                f"PATCH failed: {resp.status_code} {resp.text}"
+            get_resp = http.get(f"/routing-domains/{did}")
+            assert get_resp.status_code == 200
+            assert get_resp.json()["allowed_prefixes"] == []
+        finally:
+            delete_domain(http, did)
+
+
+class TestSecondarySubnetEnforcement:
+    """allowed_prefixes enforcement on POST /pools/{id}/subnets — tests 1c.24–1c.25."""
+
+    _CLEANUP_NAMES = (
+        TD_NAME + "-sec-out",
+        TD_NAME + "-sec-in",
+    )
+
+    @classmethod
+    def setup_class(cls):
+        """Delete any routing domains left over from a previous interrupted run."""
+        with httpx.Client(
+            base_url=PROVISION_BASE,
+            headers={"Authorization": f"Bearer {JWT_TOKEN}"},
+            timeout=15.0,
+        ) as c:
+            r = c.get("/routing-domains")
+            if r.status_code != 200:
+                return
+            items = r.json()
+            if isinstance(items, dict):
+                items = items.get("items", [])
+            for d in items:
+                if d.get("name") in cls._CLEANUP_NAMES:
+                    c.delete(f"/routing-domains/{d['id']}")
+
+    # 1c.24 ───────────────────────────────────────────────────────────────────
+    def test_01c_24_secondary_subnet_outside_rejected(self, http: httpx.Client):
+        """POST /pools/{id}/subnets with subnet outside allowed_prefixes → 409."""
+        name = TD_NAME + "-sec-out"
+        body = create_domain(http, name, allowed_prefixes=[TD_PREFIX])
+        did = body["id"]
+        pool_id: str | None = None
+        try:
+            pool = create_pool(
+                http,
+                subnet=TD_SUBNET,
+                pool_name="rd-1c-sec-out-pool",
+                account_name="TestAccount",
+                routing_domain=name,
+            )
+            pool_id = pool["pool_id"]
+
+            resp = add_pool_subnet(http, pool_id, subnet=TD_SECONDARY_OUTSIDE)
+            assert resp.status_code == 409, \
+                f"Expected 409, got {resp.status_code}: {resp.text}"
+            err = resp.json()
+            assert err.get("error") == "subnet_outside_allowed_prefixes"
+        finally:
+            if pool_id:
+                delete_pool(http, pool_id)
+            delete_domain(http, did)
+
+    # 1c.25 ───────────────────────────────────────────────────────────────────
+    def test_01c_25_secondary_subnet_inside_accepted(self, http: httpx.Client):
+        """POST /pools/{id}/subnets with subnet inside allowed_prefixes → 201."""
+        name = TD_NAME + "-sec-in"
+        body = create_domain(http, name, allowed_prefixes=[TD_PREFIX])
+        did = body["id"]
+        pool_id: str | None = None
+        try:
+            pool = create_pool(
+                http,
+                subnet=TD_SUBNET,
+                pool_name="rd-1c-sec-in-pool",
+                account_name="TestAccount",
+                routing_domain=name,
+            )
+            pool_id = pool["pool_id"]
+
+            resp = add_pool_subnet(http, pool_id, subnet=TD_SECONDARY_INSIDE)
+            assert resp.status_code == 201, \
+                f"Expected 201, got {resp.status_code}: {resp.text}"
+        finally:
+            if pool_id:
+                delete_pool(http, pool_id)
+            delete_domain(http, did)
