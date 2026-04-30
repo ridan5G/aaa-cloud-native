@@ -37,8 +37,10 @@ from fixtures.range_configs import (
 
 
 MODULE = 24
-SUBNET_LARGE = "100.66.16.0/20"   # 4094 hosts (default bounds)
-USABLE_LARGE = 4094
+SUBNET_LARGE = "100.66.16.0/20"   # 4096 addrs - network - broadcast - gateway = 4093
+# `_compute_pool_bounds` returns (network+1) .. (broadcast-2), reserving the
+# last host as gateway (matches the existing /24 convention of 253 usable IPs).
+USABLE_LARGE = 4093
 
 CREATION_BUDGET_SECONDS = 5.0     # Eager would have taken minutes; lazy is sub-second
 

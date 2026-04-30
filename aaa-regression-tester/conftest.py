@@ -97,7 +97,7 @@ def pytest_sessionstart(session):
 #  22     test_12c_radius_3imsi_*.py   100.65.244.0/22     .244–.247 (static) + 100.65.245.x/28 (FC)
 #  23     test_23_pool_subnets.py      100.66.0.0/22       .0–.3 (multi-subnet expansion)
 #  24     test_24_lazy_pool_create.py  100.66.16.0/20      large lazy pool (4094 IPs)
-#  25     test_25_bulk_job_progress.py 100.66.4.0/22       .4–.7 (Phase-0 progress)
+#  25     test_25_bulk_job_progress.py 100.66.32.0/20      large /20 (4094 IPs) for 3-chunk progress
 # ──────────────────────────────────────────────────────────────────────────────
 
 # ── Common test data ──────────────────────────────────────────────────────────

@@ -24,8 +24,7 @@ visible intermediate states on a dev cluster.
 Resources
 ─────────
   Module 25 → IMSI prefix 27877 25 xxxxxxxx
-  Subnet:   100.66.4.0/22  (1022 hosts — enough for 1500-IMSI run? no; use /20)
-            actually use 100.66.4.0/20 = 4094 hosts to fit any chunk size
+  Subnet:   100.66.32.0/20  (4094 hosts — /20-aligned, accommodates 3-chunk run)
 """
 import os
 import time
@@ -49,7 +48,7 @@ from fixtures.range_configs import (
 
 
 MODULE = 25
-SUBNET = "100.66.4.0/20"            # 4094 hosts — accommodates large ranges
+SUBNET = "100.66.32.0/20"           # 4094 hosts — /20-aligned, no host bits set
 BULK_BATCH_SIZE = int(os.getenv("BULK_BATCH_SIZE", "500"))
 RANGE_SIZE = BULK_BATCH_SIZE * 3    # 3 chunks → 2 intermediate snapshots
 JOB_TIMEOUT_S = 60.0

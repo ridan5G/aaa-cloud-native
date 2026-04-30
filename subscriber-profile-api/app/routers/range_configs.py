@@ -157,12 +157,15 @@ async def _set_job_running(conn, job_id: str) -> None:
 async def _update_job_progress(
     conn, job_id: str, processed: int, failed: int, errors: list
 ) -> None:
+    # asyncpg's jsonb codec already calls json.dumps; passing the list directly
+    # avoids double-encoding (which would store the JSON as a string and break
+    # callers iterating over `errors` as a list of dicts).
     await conn.execute(
         "UPDATE bulk_jobs SET processed=$1, failed=$2, errors=$3::jsonb, updated_at=now() "
         "WHERE job_id=$4::uuid",
         processed,
         failed,
-        json.dumps(errors),
+        errors,
         job_id,
     )
 
@@ -317,10 +320,14 @@ async def _run_prepopulate_pool_job(
     range_size: int,
     ip_resolution: str,
 ):
-    """Background task for first_connect mode: claim range_size IPs per relevant pool
-    into ip_pool_available, in chunks, with per-chunk progress reporting."""
-    processed = failed = 0
-    errors: list = []
+    """Background task for first_connect mode: best-effort warm-claim into
+    ip_pool_available so the first N first-connection requests can pop pre-claimed
+    IPs. Pool under-capacity is **not** an error here — first_connect ranges are
+    allowed to over-subscribe their pool (e.g. test_07's 99-IMSI range over a /29
+    pool). The on-demand path in _allocate_ip handles per-IMSI shortfall at
+    first-connection time and 503s individual requests when the watermark is
+    truly exhausted."""
+    processed = 0
     async with get_pool().acquire() as conn:
         await _set_job_running(conn, job_id)
         pools_needed = await _compute_pools_needed(
@@ -333,23 +340,14 @@ async def _run_prepopulate_pool_job(
                 async with conn.transaction():
                     claimed = await _claim_ips_from_pool(conn, pid, chunk)
                 processed += claimed
+                await _update_job_progress(conn, job_id, processed, 0, [])
                 if claimed < chunk:
-                    failed += chunk - claimed
-                    errors.append(
-                        {
-                            "pool_id": pid,
-                            "message": "pool_exhausted",
-                            "shortfall": chunk - claimed,
-                        }
-                    )
-                    await _update_job_progress(conn, job_id, processed, failed, errors)
-                    await _finalize_job(conn, job_id, "failed")
-                    return
-                await _update_job_progress(conn, job_id, processed, failed, errors)
+                    # Pool exhausted; stop pre-claiming. Remaining first-connection
+                    # requests will 503 individually via _allocate_ip.
+                    break
                 remaining -= chunk
 
-        final_status = "completed" if not errors else "completed_with_errors"
-        await _finalize_job(conn, job_id, final_status)
+        await _finalize_job(conn, job_id, "completed")
 
 
 @router.post("/range-configs", dependencies=[Depends(require_auth)])
@@ -400,9 +398,14 @@ async def create_range_config(
             body.status,
             body.provisioning_mode,
         )
-        # Both modes need a bulk job: immediate provisions IMSIs+IPs; first_connect
-        # pre-claims IPs into ip_pool_available so first-connection requests can pop them.
-        await _check_pool_capacity(conn, row_id, range_size, body.pool_id, body.ip_resolution)
+        # Both modes dispatch a bulk job: immediate provisions IMSIs+IPs;
+        # first_connect pre-claims IPs into ip_pool_available so first-connection
+        # requests can pop them. Capacity is only enforced for `immediate` mode —
+        # `first_connect` is dynamic-by-design and may legitimately over-subscribe a
+        # pool (the on-demand claim path in _allocate_ip handles per-IMSI shortfall
+        # at first-connection time, which is when the 503 should surface).
+        if body.provisioning_mode == "immediate":
+            await _check_pool_capacity(conn, row_id, range_size, body.pool_id, body.ip_resolution)
         job_id = str(_uuid.uuid4())
         await conn.execute(
             "INSERT INTO bulk_jobs (job_id, status, submitted) VALUES ($1::uuid, 'queued', $2)",

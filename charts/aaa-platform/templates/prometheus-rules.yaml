@@ -42,14 +42,14 @@ spec:
           labels:
             severity: critical
           annotations:
-            summary: "Pool '{{ $labels.pool_name }}' ({{ $labels.pool_id }}) exhausted"
+            summary: {{ "\"Pool '{{ $labels.pool_name }}' ({{ $labels.pool_id }}) exhausted\"" }}
             description: >
-              IP pool '{{ $labels.pool_name }}'
-              (id={{ $labels.pool_id }}, account={{ $labels.account_name }})
+              IP pool '{{ "{{ $labels.pool_name }}" }}'
+              (id={{ "{{ $labels.pool_id }}" }}, account={{ "{{ $labels.account_name }}" }})
               ran out of addresses — pool_exhausted_total is increasing.
               New SIM connections to this pool are rejected with 503 until
               capacity is added. Expand by adding a subnet:
-              POST /v1/pools/{{ $labels.pool_id }}/subnets
+              POST /v1/pools/{{ "{{ $labels.pool_id }}" }}/subnets
 
         - alert: PoolUtilizationWarning
           expr: |
@@ -60,13 +60,13 @@ spec:
           labels:
             severity: warning
           annotations:
-            summary: "Pool '{{ $labels.pool_name }}' ({{ $labels.pool_id }}) > 80% used"
+            summary: {{ "\"Pool '{{ $labels.pool_name }}' ({{ $labels.pool_id }}) > 80% used\"" }}
             description: >
-              Pool '{{ $labels.pool_name }}'
-              (id={{ $labels.pool_id }}, account={{ $labels.account_name }})
-              is at {{ $value | humanizePercentage }} utilization. Plan to
+              Pool '{{ "{{ $labels.pool_name }}" }}'
+              (id={{ "{{ $labels.pool_id }}" }}, account={{ "{{ $labels.account_name }}" }})
+              is at {{ "{{ $value | humanizePercentage }}" }} utilization. Plan to
               expand soon by adding a subnet:
-              POST /v1/pools/{{ $labels.pool_id }}/subnets
+              POST /v1/pools/{{ "{{ $labels.pool_id }}" }}/subnets
 
         - alert: PoolUtilizationCritical
           expr: |
@@ -77,13 +77,13 @@ spec:
           labels:
             severity: critical
           annotations:
-            summary: "Pool '{{ $labels.pool_name }}' ({{ $labels.pool_id }}) > 95% used"
+            summary: {{ "\"Pool '{{ $labels.pool_name }}' ({{ $labels.pool_id }}) > 95% used\"" }}
             description: >
-              Pool '{{ $labels.pool_name }}'
-              (id={{ $labels.pool_id }}, account={{ $labels.account_name }})
-              is at {{ $value | humanizePercentage }} utilization and will
+              Pool '{{ "{{ $labels.pool_name }}" }}'
+              (id={{ "{{ $labels.pool_id }}" }}, account={{ "{{ $labels.account_name }}" }})
+              is at {{ "{{ $value | humanizePercentage }}" }} utilization and will
               be exhausted soon. Add a subnet now:
-              POST /v1/pools/{{ $labels.pool_id }}/subnets
+              POST /v1/pools/{{ "{{ $labels.pool_id }}" }}/subnets
 
         - alert: PoolMetricsStale
           expr: |

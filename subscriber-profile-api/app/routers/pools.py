@@ -276,6 +276,65 @@ async def add_pool_subnet(
     return {"subnet_id": int(subnet_id), "priority": int(next_priority)}
 
 
+@router.get("/pools/{pool_id}/subnets", dependencies=[Depends(require_auth)])
+async def list_pool_subnets(pool_id: uuid.UUID, conn=Depends(get_conn)):
+    pool = await conn.fetchrow(
+        "SELECT pool_id FROM ip_pools WHERE pool_id = $1::uuid", pool_id
+    )
+    if not pool:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "resource": "ip_pool", "pool_id": str(pool_id)},
+        )
+    rows = await conn.fetch(
+        """
+        SELECT id, subnet::text, start_ip::text, end_ip::text,
+               priority, next_ip_offset,
+               (end_ip - start_ip + 1)::bigint AS capacity
+        FROM ip_pool_subnets
+        WHERE pool_id = $1::uuid
+        ORDER BY priority
+        """,
+        pool_id,
+    )
+    return {"subnets": [dict(r) for r in rows]}
+
+
+@router.delete(
+    "/pools/{pool_id}/subnets/{subnet_id}",
+    status_code=204,
+    dependencies=[Depends(require_auth)],
+)
+async def delete_pool_subnet(
+    pool_id: uuid.UUID, subnet_id: int, conn=Depends(get_conn)
+):
+    row = await conn.fetchrow(
+        "SELECT priority, next_ip_offset FROM ip_pool_subnets "
+        "WHERE id = $1 AND pool_id = $2::uuid",
+        subnet_id, pool_id,
+    )
+    if not row:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "not_found", "resource": "pool_subnet", "subnet_id": subnet_id},
+        )
+    if row["priority"] == 0:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "primary_subnet_immutable",
+                    "detail": "Cannot delete the primary subnet (priority 0). Delete the pool instead."},
+        )
+    if row["next_ip_offset"] > 0:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "subnet_in_use",
+                    "detail": f"Subnet has {row['next_ip_offset']} claimed IPs. "
+                              "Release them before deleting."},
+        )
+    await conn.execute("DELETE FROM ip_pool_subnets WHERE id = $1", subnet_id)
+    return None
+
+
 @router.get("/pools/{pool_id}", dependencies=[Depends(require_auth)])
 async def get_pool(pool_id: uuid.UUID, conn=Depends(get_conn)):
     row = await conn.fetchrow(

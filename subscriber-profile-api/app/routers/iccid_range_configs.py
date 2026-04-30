@@ -137,10 +137,12 @@ async def _run_iccid_prepopulate_job(
     slot_rows: list[dict],
     card_count: int,
 ):
-    """first_connect mode: claim IPs for all slot pools so first-connection
-    requests have IPs ready in ip_pool_available. Per-chunk progress."""
-    processed = failed = 0
-    errors: list = []
+    """first_connect mode: best-effort warm-claim into ip_pool_available so the
+    first N first-connection requests can pop pre-claimed IPs. Pool under-capacity
+    is **not** an error here — first_connect ranges may legitimately over-subscribe
+    (the on-demand path in _allocate_ip handles per-IMSI shortfall and 503s
+    individual requests when the watermark is truly exhausted)."""
+    processed = 0
     try:
         async with get_pool().acquire() as conn:
             await _set_job_running(conn, job_id)
@@ -154,19 +156,13 @@ async def _run_iccid_prepopulate_job(
                     async with conn.transaction():
                         claimed = await _claim_ips_from_pool(conn, pid, chunk)
                     processed += claimed
+                    await _update_job_progress(conn, job_id, processed, 0, [])
                     if claimed < chunk:
-                        failed += chunk - claimed
-                        errors.append(
-                            {"pool_id": pid, "message": "pool_exhausted",
-                             "shortfall": chunk - claimed}
-                        )
-                        await _update_job_progress(conn, job_id, processed, failed, errors)
-                        await _finalize_job(conn, job_id, "failed")
-                        return
-                    await _update_job_progress(conn, job_id, processed, failed, errors)
+                        # Pool exhausted; on-demand fallback handles remaining
+                        # first-connection requests.
+                        break
                     remaining -= chunk
-            final_status = "completed" if not errors else "completed_with_errors"
-            await _finalize_job(conn, job_id, final_status)
+            await _finalize_job(conn, job_id, "completed")
     except Exception as job_exc:
         logger.error("Unhandled exception in _run_iccid_prepopulate_job %s: %s", job_id, job_exc)
         try:
@@ -174,7 +170,7 @@ async def _run_iccid_prepopulate_job(
                 await _conn.execute(
                     "UPDATE bulk_jobs SET status='failed', "
                     "errors=$1::jsonb, updated_at=now() WHERE job_id=$2::uuid",
-                    json.dumps([{"message": str(job_exc)}]),
+                    [{"message": str(job_exc)}],
                     job_id,
                 )
         except Exception:
@@ -316,7 +312,7 @@ async def _run_provision_imsi_job(
                 await _conn.execute(
                     "UPDATE bulk_jobs SET status='failed', "
                     "errors=$1::jsonb, updated_at=now() WHERE job_id=$2::uuid",
-                    json.dumps([{"message": str(job_exc)}]),
+                    [{"message": str(job_exc)}],
                     job_id,
                 )
         except Exception:
@@ -461,7 +457,7 @@ async def _run_provision_iccid_job(
                 await _conn.execute(
                     "UPDATE bulk_jobs SET status='failed', "
                     "errors=$1::jsonb, updated_at=now() WHERE job_id=$2::uuid",
-                    json.dumps([{"message": str(job_exc)}]),
+                    [{"message": str(job_exc)}],
                     job_id,
                 )
         except Exception:
@@ -872,13 +868,25 @@ async def add_imsi_slot(
                     card_count = int(parent["t_iccid"]) - int(parent["f_iccid"]) + 1
                     provision_fn = _run_provision_iccid_job
                 else:
-                    slot1 = next(s for s in slot_rows if s["imsi_slot"] == 1)
+                    # IMSI-only path: slot 1 anchors the cardinality. Without it,
+                    # provisioning cannot proceed — return 201 without dispatching
+                    # so callers can add slot 1 later (or surface 422 missing_slot1
+                    # at first-connection time for first_connect mode).
+                    slot1 = next((s for s in slot_rows if s["imsi_slot"] == 1), None)
+                    if slot1 is None:
+                        slot_rows = None
+                        return {"range_config_id": range_config_id}
                     card_count = int(slot1["t_imsi"]) - int(slot1["f_imsi"]) + 1
                     provision_fn = _run_provision_imsi_job
-                for slot in slot_rows:
-                    await _check_pool_capacity(
-                        conn, slot["id"], card_count, slot["pool_id"], parent["ip_resolution"]
-                    )
+                # Capacity is only enforced for `immediate` mode — `first_connect`
+                # is dynamic-by-design and may legitimately over-subscribe (per-IMSI
+                # 503s surface at first-connection time via the on-demand claim
+                # path in _allocate_ip).
+                if parent["provisioning_mode"] == "immediate":
+                    for slot in slot_rows:
+                        await _check_pool_capacity(
+                            conn, slot["id"], card_count, slot["pool_id"], parent["ip_resolution"]
+                        )
                 job_id = str(_uuid.uuid4())
                 await conn.execute(
                     "INSERT INTO bulk_jobs (job_id, status, submitted, range_config_id) "

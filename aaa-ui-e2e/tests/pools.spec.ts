@@ -95,4 +95,83 @@ test.describe('IP Pools page', () => {
     await page.getByRole('button', { name: 'IP Pools' }).click()
     await expect(page).toHaveURL(/\/pools$/)
   })
+
+  // ── Subnets panel ─────────────────────────────────────────────────────────
+  // Pools have a primary subnet inserted on creation plus zero or more
+  // secondary subnets appended via POST /pools/{id}/subnets. The detail page
+  // surfaces them in a "Subnets" card with priority/range/claimed columns
+  // and an "Add subnet" dialog that hits the same endpoint.
+  test('detail page renders the Subnets panel with the primary subnet', async ({ page }) => {
+    const table = page.locator('table.tbl')
+    if (!(await table.isVisible().catch(() => false))) { test.skip(); return }
+    const firstRow = table.locator('tbody tr').first()
+    if ((await firstRow.count()) === 0) { test.skip(); return }
+
+    await firstRow.click()
+    await expect(page).toHaveURL(/\/pools\/[0-9a-f-]{36}/)
+
+    await expect(page.getByRole('heading', { name: 'Subnets' })).toBeVisible()
+    await expect(page.getByTestId('add-subnet-button')).toBeVisible()
+    // Primary subnet row carries the "(primary)" tag and never offers Remove.
+    await expect(page.getByText('(primary)')).toBeVisible()
+  })
+
+  test('Add Subnet button opens the dialog with CIDR + optional bounds', async ({ page }) => {
+    const table = page.locator('table.tbl')
+    if (!(await table.isVisible().catch(() => false))) { test.skip(); return }
+    const firstRow = table.locator('tbody tr').first()
+    if ((await firstRow.count()) === 0) { test.skip(); return }
+
+    await firstRow.click()
+    await page.getByTestId('add-subnet-button').click()
+
+    const dialog = page.getByTestId('add-subnet-dialog')
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByText('Subnet (CIDR) *')).toBeVisible()
+    await expect(dialog.getByText('Start IP')).toBeVisible()
+    await expect(dialog.getByText('End IP')).toBeVisible()
+    // Submit button is disabled until a CIDR is typed.
+    await expect(page.getByTestId('add-subnet-submit')).toBeDisabled()
+    await page.getByTestId('subnet-input').fill('10.99.0.0/24')
+    await expect(page.getByTestId('add-subnet-submit')).toBeEnabled()
+    // Close without submitting so we don't mutate cluster state.
+    await dialog.getByRole('button', { name: '×' }).click()
+    await expect(dialog).not.toBeVisible()
+  })
+
+  // ── Add-subnet Suggest-CIDR helper ────────────────────────────────────────
+  // The Add-subnet dialog mirrors NewPoolModal: it carries a "Suggest a free
+  // subnet" helper that hits GET /routing-domains/{id}/suggest-cidr?size=N and
+  // auto-fills the CIDR field. The helper only renders when the pool's routing
+  // domain advertises allowed_prefixes.
+  test('Add Subnet dialog exposes the Suggest-CIDR helper when the domain has prefixes', async ({ page }) => {
+    const table = page.locator('table.tbl')
+    if (!(await table.isVisible().catch(() => false))) { test.skip(); return }
+    const firstRow = table.locator('tbody tr').first()
+    if ((await firstRow.count()) === 0) { test.skip(); return }
+
+    await firstRow.click()
+    await page.getByTestId('add-subnet-button').click()
+
+    const dialog = page.getByTestId('add-subnet-dialog')
+    await expect(dialog).toBeVisible()
+
+    // Helper is conditional on allowed_prefixes — skip silently if the seeded
+    // routing domain has none rather than failing the suite.
+    const suggestInput = page.getByTestId('suggest-size-input')
+    if (!(await suggestInput.isVisible().catch(() => false))) {
+      await dialog.getByRole('button', { name: '×' }).click()
+      test.skip()
+      return
+    }
+
+    await expect(dialog.getByText('Suggest a free subnet')).toBeVisible()
+    await expect(page.getByTestId('suggest-find-button')).toBeDisabled()
+    await suggestInput.fill('64')
+    await expect(page.getByTestId('suggest-find-button')).toBeEnabled()
+    // Don't actually click Find — that would mutate nothing but depends on the
+    // routing domain having free space; just close.
+    await dialog.getByRole('button', { name: '×' }).click()
+    await expect(dialog).not.toBeVisible()
+  })
 })

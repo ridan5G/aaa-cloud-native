@@ -419,16 +419,36 @@ function PoolList() {
 }
 
 // ─── Pool Detail ──────────────────────────────────────────────────────────────
+interface PoolSubnet {
+  id: number
+  subnet: string
+  start_ip: string
+  end_ip: string
+  priority: number
+  next_ip_offset: number
+  capacity: number
+}
+
 function PoolDetail() {
   const { pool_id } = useParams<{ pool_id: string }>()
   const navigate    = useNavigate()
   const { show }    = useToasts()
   const [pool,    setPool]    = useState<Pool | null>(null)
   const [stats,   setStats]   = useState<PoolStats | null>(null)
+  const [subnets, setSubnets] = useState<PoolSubnet[]>([])
+  const [addSubnetOpen, setAddSubnetOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error,   setError]   = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
   const [newName, setNewName] = useState('')
+
+  async function loadSubnets() {
+    if (!pool_id) return
+    try {
+      const r = await apiClient.get(`/pools/${pool_id}/subnets`)
+      setSubnets(r.data.subnets ?? [])
+    } catch (e) { /* legacy clusters without /subnets endpoint render an empty list */ }
+  }
 
   async function load() {
     if (!pool_id) return; setLoading(true)
@@ -438,10 +458,24 @@ function PoolDetail() {
         apiClient.get(`/pools/${pool_id}/stats`),
       ])
       setPool(pr.data); setStats(sr.data)
+      await loadSubnets()
     } catch (e) { setError(String(e)) } finally { setLoading(false) }
   }
 
   useEffect(() => { load() }, [pool_id]) // eslint-disable-line
+
+  async function deleteSubnet(s: PoolSubnet) {
+    if (!confirm(`Delete subnet ${s.subnet}?`)) return
+    try {
+      await apiClient.delete(`/pools/${pool_id}/subnets/${s.id}`)
+      show('success', 'Subnet removed')
+      loadSubnets()
+      load()
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail
+      show('error', typeof detail === 'string' ? detail : detail?.detail ?? String(e))
+    }
+  }
 
   async function saveEdit() {
     try { await apiClient.patch(`/pools/${pool_id}`, { name: newName }); show('success', 'Pool updated'); setEditing(false); load() }
@@ -547,6 +581,266 @@ function PoolDetail() {
             </div>
           </div>
         )}
+      </div>
+
+      {/* Subnets panel — primary subnet was inserted on pool creation;
+          additional subnets can be appended here via POST /pools/{id}/subnets.
+          Capacity in the Utilization gauge above sums across every row. */}
+      <div className="card p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-base font-semibold text-gray-900">Subnets</h3>
+            <p className="text-xs text-gray-400 mt-0.5">
+              Claimed in priority order; once an IP is claimed it stays in the active pool until released.
+            </p>
+          </div>
+          <button onClick={() => setAddSubnetOpen(true)}
+                  className="btn-primary text-xs py-1.5 px-3"
+                  data-testid="add-subnet-button">+ Add subnet</button>
+        </div>
+
+        {subnets.length === 0 ? (
+          <p className="text-sm text-gray-400 italic">No subnets registered.</p>
+        ) : (
+          <table className="tbl text-sm">
+            <thead>
+              <tr className="text-xs text-gray-400 uppercase">
+                <th>Priority</th><th>Subnet</th><th>Range</th>
+                <th className="text-right">Claimed</th>
+                <th className="text-right">Capacity</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {subnets.map(s => (
+                <tr key={s.id}>
+                  <td className="tabular-nums">
+                    {s.priority}
+                    {s.priority === 0 && <span className="text-xs text-gray-400 ml-1">(primary)</span>}
+                  </td>
+                  <td className="font-mono text-xs">{s.subnet}</td>
+                  <td className="font-mono text-xs text-gray-500">{s.start_ip} → {s.end_ip}</td>
+                  <td className="text-right tabular-nums">{s.next_ip_offset.toLocaleString()}</td>
+                  <td className="text-right tabular-nums text-gray-500">{s.capacity.toLocaleString()}</td>
+                  <td className="text-right">
+                    {s.priority !== 0 && (
+                      <button onClick={() => deleteSubnet(s)}
+                              className="text-xs text-red-600 hover:underline"
+                              title={s.next_ip_offset > 0 ? 'Has claimed IPs — release first' : 'Delete subnet'}>
+                        Remove
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <AddSubnetDialog
+        open={addSubnetOpen}
+        poolId={pool_id ?? ''}
+        poolName={pool.name}
+        routingDomainId={pool.routing_domain_id}
+        routingDomainName={pool.routing_domain}
+        onClose={() => setAddSubnetOpen(false)}
+        onAdded={() => { setAddSubnetOpen(false); loadSubnets(); load() }}
+      />
+    </div>
+  )
+}
+
+// ─── Add-Subnet Dialog ────────────────────────────────────────────────────────
+function AddSubnetDialog({
+  open, poolId, poolName, routingDomainId, routingDomainName, onClose, onAdded,
+}: {
+  open: boolean
+  poolId: string
+  poolName: string
+  routingDomainId?: string
+  routingDomainName?: string
+  onClose: () => void
+  onAdded: () => void
+}) {
+  const { show } = useToasts()
+  const [subnet, setSubnet] = useState('')
+  const [startIp, setStartIp] = useState('')
+  const [endIp, setEndIp] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
+
+  // Routing-domain context for Suggest-CIDR. The new subnet must live in the
+  // pool's domain, so allowed_prefixes are read once when the dialog opens.
+  const [allowedPrefixes, setAllowedPrefixes] = useState<string[]>([])
+  const [suggestSize, setSuggestSize] = useState('')
+  const [suggesting, setSuggesting] = useState(false)
+  const [suggestion, setSuggestion] = useState<SuggestCidrResult | null>(null)
+  const [suggestError, setSuggestError] = useState<string | null>(null)
+  const canSuggest = !!routingDomainId && allowedPrefixes.length > 0
+
+  useEffect(() => {
+    if (!open) return
+    setSubnet(''); setStartIp(''); setEndIp(''); setFormError(null)
+    setSuggestSize(''); setSuggestion(null); setSuggestError(null)
+    if (!routingDomainId) { setAllowedPrefixes([]); return }
+    apiClient.get(`/routing-domains/${routingDomainId}`)
+      .then(r => setAllowedPrefixes(r.data?.allowed_prefixes ?? []))
+      .catch(() => setAllowedPrefixes([]))
+  }, [open, routingDomainId])
+
+  if (!open) return null
+
+  async function handleSuggest() {
+    if (!routingDomainId || !suggestSize) return
+    const size = parseInt(suggestSize, 10)
+    if (isNaN(size) || size < 1) { setSuggestError('Enter a valid number ≥ 1'); return }
+    setSuggesting(true); setSuggestion(null); setSuggestError(null)
+    try {
+      const res = await apiClient.get(
+        `/routing-domains/${routingDomainId}/suggest-cidr`,
+        { params: { size } },
+      )
+      setSuggestion(res.data)
+      setSubnet(res.data.suggested_cidr)
+      setFormError(null)
+    } catch (e: unknown) {
+      const raw = (e as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+      const msg: string = typeof raw === 'string' ? raw
+        : (raw as { detail?: string; error?: string } | undefined)?.detail
+          ?? (raw as { detail?: string; error?: string } | undefined)?.error
+          ?? String(e)
+      setSuggestError(msg)
+    } finally { setSuggesting(false) }
+  }
+
+  async function submit() {
+    setFormError(null)
+    if (!isValidCidr(subnet)) {
+      setFormError('Invalid subnet — enter a valid CIDR block (e.g. 10.1.0.0/24)')
+      return
+    }
+    setSaving(true)
+    try {
+      const body: Record<string, string> = { subnet }
+      if (startIp) body.start_ip = startIp
+      if (endIp)   body.end_ip   = endIp
+      await apiClient.post(`/pools/${poolId}/subnets`, body)
+      const usable = suggestion?.usable_hosts
+      show('success', usable
+        ? `Subnet ${subnet} added — ${usable.toLocaleString()} more IPs available`
+        : `Subnet ${subnet} added to ${poolName}`)
+      onAdded()
+    } catch (e: any) {
+      const data = e?.response?.data
+      if (data?.error === 'pool_overlap') {
+        setFormError(data.detail ?? 'Subnet overlaps with an existing pool subnet')
+      } else if (data?.error === 'subnet_outside_allowed_prefixes') {
+        setFormError('Subnet lies outside the routing domain\'s allowed prefixes')
+      } else {
+        setFormError(data?.detail ?? String(e))
+      }
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center"
+         onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6 space-y-4 max-h-[90vh] overflow-y-auto"
+           data-testid="add-subnet-dialog">
+        <div className="flex items-center justify-between">
+          <h3 className="text-base font-semibold text-gray-900">Add subnet to "{poolName}"</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xl leading-none">&times;</button>
+        </div>
+
+        {/* Routing-domain context (immutable — the new subnet inherits the pool's domain) */}
+        {routingDomainName && (
+          <div className="text-xs text-gray-500">
+            Routing domain:{' '}
+            <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-blue-200">
+              {routingDomainName}
+            </span>
+            {allowedPrefixes.length > 0 && (
+              <p className="mt-1 text-blue-600">
+                Allowed subnets: {allowedPrefixes.join(', ')}
+              </p>
+            )}
+            {!!routingDomainId && allowedPrefixes.length === 0 && (
+              <p className="mt-1 text-amber-600">
+                ⚠ Domain has no allowed_prefixes — Suggest CIDR is unavailable.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Suggest-CIDR helper — same UX as the New Pool modal */}
+        {canSuggest && (
+          <div className="rounded-lg border border-border bg-page p-3 space-y-2">
+            <p className="text-xs font-medium text-gray-600">Suggest a free subnet</p>
+            <div className="flex gap-2 items-center">
+              <input
+                className="input text-sm font-mono flex-1 py-1.5"
+                type="number"
+                min={1}
+                placeholder="hosts needed (e.g. 254)"
+                value={suggestSize}
+                onChange={e => { setSuggestSize(e.target.value); setSuggestion(null); setSuggestError(null) }}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleSuggest() } }}
+                data-testid="suggest-size-input"
+              />
+              <button onClick={handleSuggest} disabled={!suggestSize || suggesting}
+                      className="btn-ghost text-xs py-1.5 px-3 whitespace-nowrap"
+                      data-testid="suggest-find-button">
+                {suggesting ? '…' : 'Find'}
+              </button>
+            </div>
+            {suggestError && <p className="text-xs text-red-600">{suggestError}</p>}
+            {suggestion && (
+              <p className="text-xs text-green-700">
+                ✓ <code className="font-mono font-semibold">{suggestion.suggested_cidr}</code> auto-filled below
+                ({suggestion.usable_hosts.toLocaleString()} usable hosts)
+              </p>
+            )}
+          </div>
+        )}
+
+        <div>
+          <label className="label">Subnet (CIDR) *</label>
+          <input className="input font-mono text-sm" placeholder="10.1.0.0/24"
+                 value={subnet} onChange={e => setSubnet(e.target.value)}
+                 data-testid="subnet-input" />
+          <p className="text-xs text-gray-400 mt-1">
+            Must lie inside the pool's routing-domain prefixes and not overlap any existing pool subnet.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="label">Start IP <span className="text-gray-400 font-normal">(optional)</span></label>
+            <input className="input font-mono text-sm" placeholder="auto"
+                   value={startIp} onChange={e => setStartIp(e.target.value)} />
+          </div>
+          <div>
+            <label className="label">End IP <span className="text-gray-400 font-normal">(optional)</span></label>
+            <input className="input font-mono text-sm" placeholder="auto"
+                   value={endIp} onChange={e => setEndIp(e.target.value)} />
+          </div>
+        </div>
+        <p className="text-xs text-gray-400 -mt-2">Defaults to network+1 .. broadcast-2 (gateway reserved).</p>
+
+        {formError && (
+          <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2 rounded">
+            {formError}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button onClick={onClose} className="btn-ghost text-sm" disabled={saving}>Cancel</button>
+          <button onClick={submit} className="btn-primary text-sm" disabled={!subnet || saving}
+                  data-testid="add-subnet-submit">
+            {saving ? 'Adding…' : 'Add subnet'}
+          </button>
+        </div>
       </div>
     </div>
   )

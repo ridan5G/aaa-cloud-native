@@ -1,3 +1,7 @@
+## Worktree → main repo sync
+- After finishing work in a worktree, mirror every changed file (committed +
+  uncommitted) into `C:\Users\rony.idan\source\public-repo\aaa-cloud-native\`
+  at the matching path. Do this before reporting done.
 ## Git workflow
 - I am the sole contributor on this project.
 - I handle all git operations myself — Claude Code only edits files.
