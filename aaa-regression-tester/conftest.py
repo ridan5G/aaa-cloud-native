@@ -240,6 +240,91 @@ def percentile(values: list[float], p: float) -> float:
     return sorted_vals[lo] * (1 - frac) + sorted_vals[hi] * frac
 
 
+# ── Auto-bucket markers (fastpath / firstconnect / api) ───────────────────────
+# Tests are bucketed by file name so we can filter the suite for fast-path-only
+# runs in CI / dev (`pytest -m fastpath`). Files in more than one bucket are
+# tagged with all applicable markers; per-class overrides via @pytest.mark.X
+# still take precedence (pytest accumulates markers).
+#
+# See plan-04-api §"Fast-Path Regression Test Audit" for the bucket rationale
+# and the per-file table.
+_FASTPATH_FILES = {
+    # A-only — dedicated fast-path coverage
+    "test_11_performance",
+    "test_16_lookup_fast_path",
+    "test_16c_lookup_health_endpoints",
+    "test_18_lookup_prequalify",
+    "test_18b_lookup_prequalify_failure_modes",
+    # A + C — provision in setup, then exercise GET /v1/lookup
+    "test_03_iccid_profile",
+    "test_04_imsi_profile",
+    "test_05_imsi_apn_profile",
+    "test_08_iccid_apn_profile",
+    "test_10_errors",
+    "test_22_resolution_method_conversion",
+    # A + B — RADIUS hits both lookup and first-connection
+    "test_12_radius",
+    "test_12b_radius_modes",
+    "test_12c_radius_3imsi_modes",
+}
+_FIRSTCONNECT_FILES = {
+    "test_07_dynamic_alloc",
+    "test_07b_dynamic_alloc_modes",
+    "test_07c_release_ips",
+    "test_07e_release_reconnect_all_modes",
+    "test_17_immediate_provisioning",
+    "test_18_nullable_slot_pool",
+    "test_20_imsi_only_immediate",
+    "test_21_imsi_only_first_connect",
+    "test_12_radius",
+    "test_12b_radius_modes",
+    "test_12c_radius_3imsi_modes",
+}
+_API_FILES = {
+    "test_01_pools",
+    "test_01b_radius_warmup",
+    "test_01c_routing_domains",
+    "test_01d_free_cidr_finder",
+    "test_02_range_configs",
+    "test_03_iccid_profile",
+    "test_04_imsi_profile",
+    "test_05_imsi_apn_profile",
+    "test_06_imsi_ops",
+    "test_07c_release_ips",
+    "test_08_iccid_apn_profile",
+    "test_09_migration",
+    "test_10_errors",
+    "test_12_grafana_metrics",
+    "test_13_export_and_ip_search",
+    "test_14_export_delete_reprovision",
+    "test_15_bulk",
+    "test_15b_bulk_actions",
+    "test_19_validation_and_mgmt",
+    "test_22_resolution_method_conversion",
+    "test_23_pool_subnets",
+    "test_24_lazy_pool_creation",
+    "test_25_bulk_job_progress",
+}
+
+
+def pytest_collection_modifyitems(config, items):
+    fastpath = pytest.mark.fastpath
+    firstconnect = pytest.mark.firstconnect
+    api = pytest.mark.api
+    for item in items:
+        # nodeid example: "test_16_lookup_fast_path.py::TestX::test_01[...]"
+        # module name is everything before ".py"
+        module = item.nodeid.split("::", 1)[0].rsplit("/", 1)[-1]
+        if module.endswith(".py"):
+            module = module[:-3]
+        if module in _FASTPATH_FILES:
+            item.add_marker(fastpath)
+        if module in _FIRSTCONNECT_FILES:
+            item.add_marker(firstconnect)
+        if module in _API_FILES:
+            item.add_marker(api)
+
+
 # ── Per-test beacon ────────────────────────────────────────────────────────────
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
