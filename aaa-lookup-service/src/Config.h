@@ -35,6 +35,13 @@ struct Config {
     // ── Observability ────────────────────────────────────────────────────────
     std::string logLevel = "info";   // trace | debug | info | warn | error
 
+    // ── Pre-qualification short-circuit ─────────────────────────────────────
+    // When true, on a HOT_PATH_SQL miss the lookup runs one extra read-replica
+    // query against imsi_range_configs. If no row covers the IMSI, the request
+    // returns 404 "unqualified" without calling subscriber-profile-api.
+    // Disable to fall through to the legacy first-connection API path.
+    bool        prequalifyEnabled = true;
+
     // ── Singleton ───────────────────────────────────────────────────────────
     static Config& instance() {
         static Config cfg;
@@ -60,6 +67,8 @@ struct Config {
         provisioningUrl = envStr("PROVISIONING_URL", "http://subscriber-profile-api:8080");
 
         logLevel = envStr("LOG_LEVEL", "info");
+
+        prequalifyEnabled = envBool("QUALIFY_PRECHECK_ENABLED", true);
 
         validate();
     }

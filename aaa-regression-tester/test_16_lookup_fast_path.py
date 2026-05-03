@@ -29,7 +29,7 @@ Scenario matrix
     16.2  [bad]  IMSI 16 digits → 400
     16.3  [bad]  IMSI with non-digit chars → 400
     16.4  [bad]  Empty IMSI string → 400
-    16.5  [bad]  Valid IMSI never registered → 404 not_found
+    16.5  [bad]  Valid IMSI never registered → 404 unqualified
 
   TestSimSuspendImsiMode
     16.6  [good] Both IMSIs resolve when SIM active
@@ -140,12 +140,14 @@ class TestLookupParamValidation:
             f"Expected 400 for empty IMSI, got {r.status_code}: {r.text}"
 
     # 16.5 ────────────────────────────────────────────────────────────────────
-    def test_05_unknown_imsi_returns_not_found(self, lookup_http: httpx.Client):
-        """Valid 15-digit IMSI never registered → 404 {error: not_found}.
+    def test_05_unknown_imsi_returns_unqualified(self, lookup_http: httpx.Client):
+        """Valid 15-digit IMSI never registered, no covering range_config →
+        404 {error: unqualified}.
 
-        The hot-path SQL returns no rows → Resolver returns NotFound.
-        In production the RADIUS server would then call POST /first-connection,
-        but a direct lookup call always returns 404 for an unknown IMSI.
+        The hot-path SQL returns no rows → lookup-service runs PREQUALIFY_SQL
+        against imsi_range_configs and short-circuits with "unqualified" because
+        no range covers the IMSI.  See test_18_lookup_prequalify for full
+        coverage of the pre-qualification path.
         """
         r = lookup_http.get("/lookup",
                             params={"imsi": make_imsi(MODULE, 99999),  # never registered
@@ -153,7 +155,7 @@ class TestLookupParamValidation:
                                     "use_case_id": USE_CASE_ID})
         assert r.status_code == 404, \
             f"Expected 404 for unknown IMSI, got {r.status_code}: {r.text}"
-        assert r.json()["error"] == "not_found"
+        assert r.json()["error"] == "unqualified"
 
 
 # ══════════════════════════════════════════════════════════════════════════════

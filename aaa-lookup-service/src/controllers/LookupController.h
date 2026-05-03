@@ -23,6 +23,7 @@
 #include <drogon/HttpController.h>
 #include <drogon/HttpClient.h>
 
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <string>
@@ -61,4 +62,16 @@ private:
         const std::string& imei,
         const std::string& useCaseId,
         std::shared_ptr<std::function<void(const drogon::HttpResponsePtr&)>> sharedCb);
+
+    // Async pre-qualification on the read replica.
+    // Runs imsi_range_configs lookup; if no row covers the IMSI, returns 404
+    // "unqualified" directly. Otherwise (or on SQL error: fail-open) chains
+    // into callFirstConnection.
+    void runPrequalify(
+        const std::string& imsi,
+        const std::string& apn,
+        const std::string& imei,
+        const std::string& useCaseId,
+        std::shared_ptr<std::function<void(const drogon::HttpResponsePtr&)>> sharedCb,
+        std::chrono::steady_clock::time_point t0);
 };

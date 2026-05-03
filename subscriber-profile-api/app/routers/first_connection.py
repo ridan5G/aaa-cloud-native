@@ -234,6 +234,8 @@ async def first_connection(body: FirstConnectionRequest, conn=Depends(get_conn))
 
     # Step 1: Find matching range config.
     # COALESCE prefers the slot's own pool_id; parent ICCID range pool is fallback.
+    # Mirrored in aaa-lookup-service PREQUALIFY_SQL — keep the
+    # status filter ('active','provisioned') in sync across both call sites.
     range_row = await conn.fetchrow(
         """
         SELECT irc.id, irc.f_imsi, irc.iccid_range_id, irc.imsi_slot,

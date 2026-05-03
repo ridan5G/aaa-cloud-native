@@ -34,6 +34,12 @@ db:
 # subscriber-profile-api base URL (in-cluster) — called on DB-miss for first-connection
 provisioningUrl: "http://subscriber-profile-api:8080"
 
+# ── Pre-qualification short-circuit ─────────────────────────────
+# When "true", a HOT_PATH_SQL miss runs an extra read-replica query against
+# imsi_range_configs. Unqualified IMSIs return 404 "unqualified" without
+# reaching subscriber-profile-api or the primary DB.
+qualifyPrecheckEnabled: "true"
+
 # ── Performance tuning ──────────────────────────────────────────
 tuning:
   threadCount: 0      # 0 = auto (one thread per logical CPU)

@@ -22,6 +22,7 @@ void Metrics::init(uint16_t metricsPort) {
     cntApnNotFound_ = &lookupResultFamily_->Add({{"result", "apn_not_found"}});
     cntBadRequest_  = &lookupResultFamily_->Add({{"result", "bad_request"}});
     cntDbError_     = &lookupResultFamily_->Add({{"result", "db_error"}});
+    cntUnqualified_ = &lookupResultFamily_->Add({{"result", "unqualified"}});
 
     // ── aaa_lookup_duration_seconds ────────────────────────────────────────
     // Buckets span 1ms → 500ms; tightly clustered around the 15ms SLA.
@@ -85,6 +86,37 @@ void Metrics::init(uint16_t metricsPort) {
             0.250, 0.500, 1.0, 2.5
         });
 
+    // ── aaa_lookup_unqualified_total ────────────────────────────────────────
+    // Standalone counter for IMSIs short-circuited by the imsi_range_configs
+    // pre-check (no matching active/provisioned range). Paired with the
+    // aaa_lookup_requests_total{result="unqualified"} label so dashboards can
+    // pivot on either.
+    unqualifiedFamily_ = &prometheus::BuildCounter()
+        .Name("aaa_lookup_unqualified_total")
+        .Help("IMSIs short-circuited by the range-config pre-check on /lookup")
+        .Register(*registry_);
+    cntUnqualifiedTotal_ = &unqualifiedFamily_->Add({});
+
+    // ── aaa_lookup_prequalify_errors_total ──────────────────────────────────
+    prequalifyErrorFamily_ = &prometheus::BuildCounter()
+        .Name("aaa_lookup_prequalify_errors_total")
+        .Help("imsi_range_configs pre-check SQL errors (fail-open: request still falls through to API)")
+        .Register(*registry_);
+    cntPrequalifyError_ = &prequalifyErrorFamily_->Add({});
+
+    // ── aaa_lookup_prequalify_duration_seconds ──────────────────────────────
+    // Buckets sub-ms → 50 ms; the query is one indexed lookup on a hot replica.
+    prequalifyDurationFamily_ = &prometheus::BuildHistogram()
+        .Name("aaa_lookup_prequalify_duration_seconds")
+        .Help("Latency of the imsi_range_configs pre-check query")
+        .Register(*registry_);
+
+    histPrequalifyDuration_ = &prequalifyDurationFamily_->Add(
+        {},
+        prometheus::Histogram::BucketBoundaries{
+            0.0005, 0.001, 0.002, 0.005, 0.010, 0.025, 0.050
+        });
+
     // ── Prometheus pull endpoint on metricsPort ────────────────────────────
     // Runs its own CivetWeb HTTP server — separate from the Drogon API port.
     auto* exposer = new prometheus::Exposer{
@@ -105,11 +137,24 @@ void Metrics::recordLookup(const std::string& result, double latencySeconds) {
     else if (result == "apn_not_found") cntApnNotFound_->Increment();
     else if (result == "bad_request")   cntBadRequest_->Increment();
     else if (result == "db_error")      cntDbError_->Increment();
+    else if (result == "unqualified")   cntUnqualified_->Increment();
 }
 
 void Metrics::incrementInFlight() { gaugeInFlight_->Increment(); }
 void Metrics::decrementInFlight() { gaugeInFlight_->Decrement(); }
 void Metrics::recordDbError()     { cntDbErrors_->Increment(); }
+
+void Metrics::incUnqualified() {
+    if (cntUnqualifiedTotal_) cntUnqualifiedTotal_->Increment();
+}
+
+void Metrics::incPrequalifyError() {
+    if (cntPrequalifyError_) cntPrequalifyError_->Increment();
+}
+
+void Metrics::observePrequalifyDuration(double seconds) {
+    if (histPrequalifyDuration_) histPrequalifyDuration_->Observe(seconds);
+}
 
 void Metrics::incFirstConnRequests() {
     if (firstConnRequests_) firstConnRequests_->Increment();

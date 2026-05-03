@@ -180,14 +180,20 @@ class TestDynamicAlloc:
 
     # 7.6 ─────────────────────────────────────────────────────────────────────
     def test_06_imsi_outside_range_returns_404(self, lookup_http: httpx.Client):
-        """GET /lookup for IMSI not covered by any range config → 404 not_found."""
+        """GET /lookup for IMSI not covered by any range config → 404.
+
+        With QUALIFY_PRECHECK_ENABLED (default), the lookup-service short-circuits
+        before calling the API and returns ``unqualified``.  When the kill-switch
+        is off, the legacy API rejection (``not_found`` / ``no_range_config`` /
+        ``apn_not_found``) is returned instead.
+        """
         r = lookup_http.get("/lookup",
                             params={"imsi": IMSI_OOB,
                                     "apn": "internet.operator.com",
                                     "use_case_id": USE_CASE_ID})
         assert r.status_code == 404
         error = r.json().get("error", "")
-        assert error in ("not_found", "no_range_config", "apn_not_found"), \
+        assert error in ("unqualified", "not_found", "no_range_config", "apn_not_found"), \
             f"Unexpected error: {error}"
 
     # 7.7 ─────────────────────────────────────────────────────────────────────

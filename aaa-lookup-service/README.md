@@ -38,7 +38,8 @@ This is the **only** endpoint. It handles the hot path only:
 | IMSI found, SIM or IMSI suspended | 403 `{"error":"suspended"}` |
 | IMSI found, APN not matched (imsi_apn mode, no wildcard) | 404 `{"error":"apn_not_found"}` |
 | IMSI **not in read replica** → first-connection allocates IP successfully | 200 `{"static_ip":"..."}` |
-| IMSI **not in read replica** → no range config covers this IMSI | 404 `{"error":"not_found"}` |
+| IMSI **not in read replica** → no `imsi_range_configs` row covers this IMSI (pre-check) | 404 `{"error":"unqualified"}` |
+| IMSI **not in read replica** → range exists but API rejects (legacy path / pre-check disabled) | 404 `{"error":"not_found"}` |
 | IMSI **not in read replica** → IP pool exhausted | 503 `{"error":"pool_exhausted"}` |
 | IMSI **not in read replica** → `subscriber-profile-api` unreachable | 503 `{"error":"upstream_error"}` |
 | `imsi` param missing | 400 `{"error":"missing_param","param":"imsi"}` |
@@ -274,6 +275,7 @@ All configuration is loaded from environment variables at startup (see `src/Conf
 | `JWT_SKIP_VERIFY` | `false` | Set `true` in local dev to bypass JWT validation |
 | `PROVISIONING_URL` | `http://subscriber-profile-api:8080` | Base URL for first-connection calls |
 | `LOG_LEVEL` | `info` | Spdlog level: `trace` \| `debug` \| `info` \| `warn` \| `error` |
+| `QUALIFY_PRECHECK_ENABLED` | `true` | When true, on HOT_PATH miss the lookup runs one extra read-replica query against `imsi_range_configs`; IMSIs not covered by any active/provisioned range return `404 {"error":"unqualified"}` without calling `subscriber-profile-api`. Set `false` to fall through to the legacy first-connection API path. |
 
 ---
 
@@ -417,10 +419,13 @@ Every `GET /lookup` call emits a structured log line:
 ```
 
 Metrics (Prometheus, exposed on port 9090):
-- `aaa_lookup_requests_total` counter by `result` label (`resolved`, `not_found`, `suspended`, `apn_not_found`, `bad_request`, `db_error`)
+- `aaa_lookup_requests_total` counter by `result` label (`resolved`, `not_found`, `suspended`, `apn_not_found`, `bad_request`, `db_error`, `unqualified`)
 - `aaa_lookup_duration_seconds` histogram (p50, p95, p99) — full request latency; buckets tuned to 15ms SLA (1ms, 3ms, 5ms, 8ms, 10ms, 15ms, 25ms, 50ms, 100ms, 500ms)
 - `aaa_in_flight_requests` gauge — number of concurrent active requests
 - `aaa_db_errors_total` counter — DB connection failures and timeouts
+- `aaa_lookup_unqualified_total` counter — IMSIs short-circuited by the `imsi_range_configs` pre-check (paired with `aaa_lookup_requests_total{result="unqualified"}`)
+- `aaa_lookup_prequalify_errors_total` counter — pre-check SQL errors; the request still falls through to the API (fail-open)
+- `aaa_lookup_prequalify_duration_seconds` histogram — pre-check query latency (sub-ms buckets)
 - `first_connection_requests_total` counter — DB miss rate; triggers internal first-connection call
 - `first_connection_responses_total` counter by `status` (`200`, `404`, `503`, `error`) — outcomes of internal first-connection calls
 - `first_connection_duration_seconds` histogram — round-trip latency to `subscriber-profile-api`

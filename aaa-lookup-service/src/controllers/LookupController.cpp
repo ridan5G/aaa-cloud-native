@@ -36,6 +36,23 @@ WHERE       si.imsi = $1
 )SQL";
 
 // ---------------------------------------------------------------------------
+// Pre-qualification SQL — runs on the read replica when HOT_PATH_SQL misses.
+// If no row covers the IMSI, the request is rejected with 404 "unqualified"
+// without involving subscriber-profile-api or the primary DB.
+//
+// Mirrored in subscriber-profile-api/app/routers/first_connection.py:247 —
+// keep the status filter ('active','provisioned') in sync.
+// ---------------------------------------------------------------------------
+static constexpr auto PREQUALIFY_SQL = R"SQL(
+SELECT 1
+FROM   imsi_range_configs
+WHERE  f_imsi <= $1
+  AND  t_imsi >= $1
+  AND  status IN ('active', 'provisioned')
+LIMIT  1
+)SQL";
+
+// ---------------------------------------------------------------------------
 // Parameter validation helpers
 // ---------------------------------------------------------------------------
 static bool isValidImsi(const std::string& imsi) {
@@ -285,12 +302,19 @@ void LookupController::lookup(
                 break;
 
             case ResolveStatus::NotFound:
-                // IMSI not in DB yet — trigger first-connection allocation
-                // asynchronously and send response from that callback.
+                // IMSI not in DB yet. With pre-qualification disabled, fall
+                // straight through to first-connection allocation as before.
+                // With it enabled, run the imsi_range_configs pre-check on the
+                // read replica first — short-circuit "unqualified" IMSIs so
+                // they never hit subscriber-profile-api or the primary DB.
                 metrics.decrementInFlight();
-                metrics.recordLookup("not_found", latency);
-                callFirstConnection(imsi, apn, imei, useCaseId, sharedCb);
-                return;  // response will be sent by callFirstConnection
+                if (!Config::instance().prequalifyEnabled) {
+                    metrics.recordLookup("not_found", latency);
+                    callFirstConnection(imsi, apn, imei, useCaseId, sharedCb);
+                    return;
+                }
+                runPrequalify(imsi, apn, imei, useCaseId, sharedCb, t0);
+                return;  // response will be sent by runPrequalify or callFirstConnection
 
             case ResolveStatus::ApnNotFound:
                 resp = LookupController::errorResponse(
@@ -332,6 +356,84 @@ void LookupController::lookup(
             auto resp = LookupController::errorResponse(
                 drogon::k503ServiceUnavailable, "db_error");
             callback(resp);
+        },
+
+        // ── Query parameter ───────────────────────────────────────────────
+        imsi   // bound to $1
+    );
+}
+
+// ---------------------------------------------------------------------------
+// LookupController::runPrequalify — read-replica imsi_range_configs check
+//
+// Fired from the NotFound branch of lookup() when QUALIFY_PRECHECK_ENABLED is
+// true. Three terminal states:
+//   • 0 rows  → 404 "unqualified" (do NOT call subscriber-profile-api)
+//   • ≥1 row  → fall through to callFirstConnection (today's path)
+//   • SQL err → fail-open: log + metric, fall through to callFirstConnection
+// ---------------------------------------------------------------------------
+void LookupController::runPrequalify(
+        const std::string& imsi,
+        const std::string& apn,
+        const std::string& imei,
+        const std::string& useCaseId,
+        std::shared_ptr<std::function<void(const drogon::HttpResponsePtr&)>> sharedCb,
+        std::chrono::steady_clock::time_point t0) {
+
+    auto db = drogon::app().getDbClient("aaa_replica");
+    const auto pqStart = std::chrono::steady_clock::now();
+
+    db->execSqlAsync(
+        PREQUALIFY_SQL,
+
+        // ── Success callback ──────────────────────────────────────────────
+        [this, imsi, apn, imei, useCaseId, sharedCb, t0, pqStart](
+                const drogon::orm::Result& result) mutable {
+            auto& metrics = Metrics::instance();
+            const double pqLatency = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - pqStart).count();
+            metrics.observePrequalifyDuration(pqLatency);
+
+            const double total = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - t0).count();
+
+            if (result.empty()) {
+                // No range covers this IMSI — short-circuit. The subscriber-
+                // profile-api never sees this request.
+                metrics.incUnqualified();
+                metrics.recordLookup("unqualified", total);
+                spdlog::info(
+                    R"({{"imsi":"{}","apn":"{}","result":"unqualified","latency_ms":{:.2f}}})",
+                    imsi, apn, total * 1000.0);
+                auto& callback = *sharedCb;
+                callback(LookupController::errorResponse(
+                    drogon::k404NotFound, "unqualified"));
+                return;
+            }
+
+            // Range exists — preserve today's "not_found" semantics for the
+            // HOT_PATH miss and hand off to first-connection.
+            metrics.recordLookup("not_found", total);
+            callFirstConnection(imsi, apn, imei, useCaseId, sharedCb);
+        },
+
+        // ── Error callback (fail-open) ────────────────────────────────────
+        [this, imsi, apn, imei, useCaseId, sharedCb, t0, pqStart](
+                const drogon::orm::DrogonDbException& ex) mutable {
+            auto& metrics = Metrics::instance();
+            const double pqLatency = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - pqStart).count();
+            metrics.observePrequalifyDuration(pqLatency);
+            metrics.incPrequalifyError();
+
+            spdlog::warn(
+                R"({{"imsi":"{}","result":"prequalify_error","error":"{}"}})",
+                imsi, ex.base().what());
+
+            const double total = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - t0).count();
+            metrics.recordLookup("not_found", total);
+            callFirstConnection(imsi, apn, imei, useCaseId, sharedCb);
         },
 
         // ── Query parameter ───────────────────────────────────────────────

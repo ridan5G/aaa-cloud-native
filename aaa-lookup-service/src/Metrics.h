@@ -33,6 +33,7 @@ public:
     /// Record one completed lookup request.
     /// @param result   One of: "resolved" | "not_found" | "suspended"
     ///                         "apn_not_found" | "bad_request" | "db_error"
+    ///                         "unqualified"
     /// @param latencySeconds  wall-clock duration of the full request
     void recordLookup(const std::string& result, double latencySeconds);
 
@@ -42,6 +43,18 @@ public:
 
     /// Record a DB pool error (connection failure, timeout).
     void recordDbError();
+
+    // ── Pre-qualification short-circuit ─────────────────────────────────────
+    /// Increment the standalone unqualified counter (paired with
+    /// recordLookup("unqualified", ...)).
+    void incUnqualified();
+
+    /// Increment when the imsi_range_configs pre-check itself errors.
+    /// The request still falls through to subscriber-profile-api (fail-open).
+    void incPrequalifyError();
+
+    /// Observe pre-check SQL latency.
+    void observePrequalifyDuration(double seconds);
 
     // ── First-connection layer (Stage 2 — POST /v1/first-connection) ────────
     void incFirstConnRequests();
@@ -65,6 +78,7 @@ private:
     prometheus::Counter* cntApnNotFound_{nullptr};
     prometheus::Counter* cntBadRequest_{nullptr};
     prometheus::Counter* cntDbError_{nullptr};
+    prometheus::Counter* cntUnqualified_{nullptr};
 
     // aaa_lookup_duration_seconds histogram
     // Buckets tuned to the <15ms p99 SLA:
@@ -90,4 +104,17 @@ private:
     // first_connection_duration_seconds histogram
     prometheus::Family<prometheus::Histogram>* firstConnDurationFamily_{nullptr};
     prometheus::Histogram*                    histFirstConnDuration_{nullptr};
+
+    // aaa_lookup_unqualified_total — short-circuit counter (paired with
+    // aaa_lookup_requests_total{result="unqualified"})
+    prometheus::Family<prometheus::Counter>* unqualifiedFamily_{nullptr};
+    prometheus::Counter* cntUnqualifiedTotal_{nullptr};
+
+    // aaa_lookup_prequalify_errors_total — fail-open counter
+    prometheus::Family<prometheus::Counter>* prequalifyErrorFamily_{nullptr};
+    prometheus::Counter* cntPrequalifyError_{nullptr};
+
+    // aaa_lookup_prequalify_duration_seconds histogram
+    prometheus::Family<prometheus::Histogram>* prequalifyDurationFamily_{nullptr};
+    prometheus::Histogram*                    histPrequalifyDuration_{nullptr};
 };

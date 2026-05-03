@@ -91,6 +91,7 @@ def pytest_sessionstart(session):
 #  11     test_11_performance.py       100.68.0.0/14       large perf pool
 #  12     test_12_*.py                 100.65.206.0/22     .206–.209
 #  13     test_13_*.py                 100.65.210.0/22     .210–.213
+#  18     test_18_lookup_prequalify.py 100.65.214.0/24     .214 (single /24)
 #  19     test_19_validation_*.py      100.65.220.0/22     .220–.223
 #  20     test_20_imsi_only_*.py       100.73.230.0/22     .230–.237
 #  21     test_21_imsi_only_*.py       100.65.240.0/22     .240–.245
