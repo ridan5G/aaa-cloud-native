@@ -240,25 +240,50 @@ class TestErrors:
                    json={"status": "active"})
 
     # 10.11 ───────────────────────────────────────────────────────────────────
-    def test_11_patch_ip_resolution_imsi_to_imsi_apn_without_apn_field(
+    def test_11_patch_ip_resolution_imsi_to_imsi_apn(
             self, http: httpx.Client):
-        """PATCH ip_resolution=imsi→imsi_apn without supplying apn fields → 400."""
+        """PATCH ip_resolution=imsi→imsi_apn → 200 (safe: existing NULL-apn row
+        becomes the imsi_apn wildcard fallback; no orphans, no force required).
+
+        See plan-02-database.md "ip_resolution conversion safety" — same-table,
+        moving to APN-sensitive mode adds a dimension but doesn't strand any
+        existing rows.
+        """
         r = http.patch(
             f"/profiles/{TestErrors.device_main}",
             json={"ip_resolution": "imsi_apn"},
-            # No apn_ips with distinct APNs provided — must fail validation
         )
-        assert r.status_code == 400, (
-            f"Expected 400 when switching to imsi_apn without apn data, "
+        assert r.status_code == 200, (
+            f"Expected 200 for imsi→imsi_apn (no orphans), "
             f"got {r.status_code}: {r.text}"
         )
 
     # 10.12 ───────────────────────────────────────────────────────────────────
-    def test_12_patch_ip_resolution_imsi_to_iccid(
+    def test_12_patch_ip_resolution_to_iccid_requires_force(
             self, http: httpx.Client, lookup_http: httpx.Client):
-        """PATCH ip_resolution=imsi→iccid with valid iccid_ips → 200; GET /lookup returns iccid IP."""
+        """PATCH to iccid is a cross-table change (imsi_apn_ips → sim_apn_ips).
+        Without ?force=true → 409 mode_conversion_orphans_rows; with it → 200
+        and the old NULL-apn row is deleted in the same transaction.
+
+        Verifies the orphan-row guard added in profiles.py PATCH for cross-table
+        conversions, then that the lookup returns the new card-level iccid IP.
+        """
+        # Without ?force=true the cross-table change is rejected.
+        r_blocked = http.patch(
+            f"/profiles/{TestErrors.device_main}",
+            json={"ip_resolution": "iccid"},
+        )
+        assert r_blocked.status_code == 409, \
+            f"Expected 409 (cross-table change without force), got {r_blocked.status_code}: {r_blocked.text}"
+        body = r_blocked.json()
+        detail = body.get("detail", body)
+        assert detail["error"] == "mode_conversion_orphans_rows"
+        assert detail["to"] == "iccid"
+
+        # With ?force=true the change goes through and the old row is cleaned up.
         r = http.patch(
             f"/profiles/{TestErrors.device_main}",
+            params={"force": "true"},
             json={
                 "ip_resolution": "iccid",
                 "iccid": ICCID_MAIN,
@@ -270,7 +295,7 @@ class TestErrors:
             },
         )
         assert r.status_code == 200, \
-            f"Expected 200 on valid mode change, got {r.status_code}: {r.text}"
+            f"Expected 200 on forced mode change, got {r.status_code}: {r.text}"
 
         # Lookup now returns the iccid IP regardless of APN
         r_lookup = lookup_http.get("/lookup",
