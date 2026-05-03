@@ -72,20 +72,31 @@ This suite exercises the complete operator workflow for automatically allocating
 
 ---
 
-## Test 1d.5 — Requested size maps to the correct prefix length
+## Test 1d.5 — Requested size maps to the correct prefix length (full boundary table)
 
-**Goal:** Confirm that the suggestion engine selects the smallest CIDR block that still fits the requested number of hosts.
+**Goal:** Confirm that the suggestion engine selects the smallest CIDR block that still fits the requested number of hosts, across the full boundary table from `/30` up to `/22`.
 
-1. For each of the following size/prefix combinations, run the same sub-scenario:
-   - Size 6 → expect prefix length /29 (6 usable hosts)
-   - Size 14 → expect prefix length /28 (14 usable hosts)
-   - Size 254 → expect prefix length /24 (254 usable hosts)
+1. For each row in the boundary table, run the same sub-scenario. The table walks both the exact power-of-two boundary (e.g. size=6 → `/29` with usable=6) and one host past it (size=7 → `/28` with usable=14):
+
+   | Size | Expected prefix | Usable hosts (`2^(32-p) - 2`) |
+   |---:|:---:|---:|
+   | 1, 2 | `/30` | 2 |
+   | 3, 6 | `/29` | 6 |
+   | 7, 14 | `/28` | 14 |
+   | 15 | `/27` | 30 |
+   | 31 | `/26` | 62 |
+   | 63 | `/25` | 126 |
+   | 127, 254 | `/24` | 254 |
+   | 255, 510 | `/23` | 510 |
+   | 511 | `/22` | 1022 |
+
 2. For each case: create a fresh routing domain with allowed prefix `10.88.0.0/16`.
 3. Send a `suggest-cidr` request with the given `size`.
 4. Verify `prefix_len` matches the expected value.
-5. Verify `usable_hosts` equals the standard number of usable addresses for that prefix length (total addresses minus network and broadcast).
-6. Verify `usable_hosts` is at least as large as the requested `size`.
-7. (Teardown) Delete each domain after its sub-scenario completes.
+5. Verify `usable_hosts == 2^(32-p) - 2` exactly.
+6. Verify `usable_hosts >= size`.
+7. Verify the returned `suggested_cidr` is `subnet_of` the allowed prefix `10.88.0.0/16`.
+8. (Teardown) Delete each domain after its sub-scenario completes.
 
 ---
 
@@ -115,6 +126,41 @@ This suite exercises the complete operator workflow for automatically allocating
 6. Verify the suggested CIDR still falls within the allowed prefix `10.88.0.0/16`.
 7. Verify the suggested CIDR falls in the free second half (`10.88.128.0/17`).
 8. (Teardown) Delete the blocking pool, then the domain.
+
+---
+
+## Test 1d.8 — Smallest-fitting prefix invariant for in-between sizes
+
+**Goal:** When the requested size doesn't exactly match a power-of-two boundary, the suggester must return the **smallest** prefix that still fits — never a larger prefix than necessary. The test also asserts that the next-smaller prefix (one bit longer) genuinely cannot accommodate the request, validating the case definition itself.
+
+1. For each `(size, expected_smallest_p)` row:
+   - `size=10` → expect `/28` (14 fits; 6 does not)
+   - `size=20` → expect `/27` (30 fits; 14 does not)
+   - `size=100` → expect `/25` (126 fits; 62 does not)
+   - `size=200` → expect `/24` (254 fits; 126 does not)
+2. For each case: create a fresh routing domain with allowed prefix `10.88.0.0/16`.
+3. Send a `suggest-cidr` request with the given `size`.
+4. Verify the response is HTTP 200.
+5. Verify `prefix_len == expected_smallest_p`.
+6. Verify `usable_hosts >= size`.
+7. (Teardown) Delete the domain.
+
+---
+
+## Test 1d.9 — Two consecutive `size=14` suggestions return non-overlapping `/28`s
+
+**Goal:** Confirm the suggestion engine accounts for an existing pool when a follow-up suggestion of the same size is requested in the same domain — each suggestion must avoid the previously-allocated block.
+
+1. Create a routing domain with allowed prefix `10.88.0.0/16`.
+2. Send `suggest-cidr` with `size=14`. Record the returned CIDR (call it `A`); verify `prefix_len == 28`.
+3. Create a pool with subnet `A` assigned to the domain.
+4. Send `suggest-cidr` with `size=14` again. Record the returned CIDR (call it `B`); verify `prefix_len == 28`.
+5. Verify `B != A`.
+6. Verify the two `/28` networks do not overlap (`net_a.overlaps(net_b)` is false).
+7. Verify both suggestions are `subnet_of` `10.88.0.0/16`.
+8. Create a second pool with subnet `B` to confirm it is genuinely free.
+9. Verify both pool creations returned HTTP 201.
+10. (Teardown) Delete both pools, then the domain.
 
 ---
 

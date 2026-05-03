@@ -145,7 +145,7 @@ This suite verifies input validation and management operations for ICCID range c
 **Goal:** Confirm that a slot with exactly the right number of IMSIs is created successfully.
 
 1. Send a request to add slot 1 with exactly 10 IMSIs for the 10-card ICCID range.
-2. Verify the response is HTTP 201 (created) and contains a `range_config_id`.
+2. Verify the response is HTTP 201 (created) **or** 202 (accepted — when adding the slot triggers an immediate-mode provisioning job that runs asynchronously). Confirm the response contains a `range_config_id`.
 
 ### Test 19.B.9 — Submitting the same slot number again is rejected as a duplicate
 
@@ -255,7 +255,7 @@ This suite verifies input validation and management operations for ICCID range c
 **Goal:** Confirm that without an ICCID cardinality constraint, any number of IMSIs is valid.
 
 1. Send a request to add slot 1 with 8 IMSIs (which would fail cardinality checks on a normal ICCID range, but is fine here).
-2. Verify the response is HTTP 201 (created).
+2. Verify the response is HTTP 201 (created) **or** 202 (accepted — immediate-mode provisioning job dispatched).
 
 ### Test 19.D.3 — First-connection by IMSI works on a skip-ICCID config
 
@@ -288,7 +288,7 @@ This suite verifies input validation and management operations for ICCID range c
 **Goal:** Confirm that exactly 5 IMSIs (matching the 5-card ICCID range) is accepted.
 
 1. Send a request to add slot 2 with exactly 5 IMSIs.
-2. Verify the response is HTTP 201 (created).
+2. Verify the response is HTTP 201 (created) **or** 202 (accepted — immediate-mode provisioning job dispatched).
 
 ### Test 19.E.4 — Updating slot 1 with the wrong cardinality is rejected
 

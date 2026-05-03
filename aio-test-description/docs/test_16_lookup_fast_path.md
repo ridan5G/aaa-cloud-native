@@ -1,14 +1,14 @@
-# Test Suite 16 — Lookup Fast-Path: Input Validation and Suspend/Reactivate
+# Test Suite 16 — Lookup Fast-Path: Input Validation and Suspend/Reactivate (All Four Modes)
 
 ## What this test suite validates
 
-This suite covers three areas not addressed by earlier tests: (1) the lookup service's validation of the IMSI format before it touches the database, (2) SIM-level suspend and reactivate in IMSI mode (where all IMSIs on a profile are blocked or unblocked together), and (3) SIM-level suspend, reactivate, per-IMSI suspend, and concurrent lookups in IMSI-APN mode. These tests confirm that the suspend state is enforced correctly and that releasing a suspension restores full lookup capability.
+This is the dedicated fast-path test file for `aaa-lookup-service`. It covers five areas: (1) the lookup service's validation of the IMSI format before any database access, (2) SIM-level suspend / reactivate in `imsi` mode, (3) SIM-level + per-IMSI suspend, reactivate, and concurrent lookups in `imsi_apn` mode, (4) the same scenarios in `iccid` mode (card-level shared IP, APN ignored), and (5) the same scenarios in `iccid_apn` mode (per-APN card-level IPs with wildcard fallback). The four mode classes give the file parallel coverage across every `ip_resolution` value, so `pytest -m fastpath` exercises all branches of the C++ resolver in one place.
 
 ## Pre-conditions (Setup)
 
 **Group 1 — Parameter validation:** No database records are required.
 
-**Group 2 — IMSI-mode suspend tests:**
+**Group 2 — `imsi` mode suspend tests:**
 1. Clean up any existing profiles whose IMSIs start with the module-16 prefix.
 2. Force-delete any leftover terminated profiles for the test IMSI range.
 3. Create an IP pool (`pool-fp16-imsi`) in subnet `100.65.180.0/24`.
@@ -16,12 +16,24 @@ This suite covers three areas not addressed by earlier tests: (1) the lookup ser
    - IMSI_A (`278771600000001`) assigned IP `100.65.180.1`
    - IMSI_B (`278771600000002`) assigned IP `100.65.180.2`
 
-**Group 3 — IMSI-APN-mode suspend tests:**
+**Group 3 — `imsi_apn` mode suspend tests:**
 1. Clean up any existing profiles and force-delete terminated profiles for the test IMSI range.
 2. Create an IP pool (`pool-fp16-iapn`) in subnet `100.65.181.0/24`.
 3. Create a single SIM profile in `imsi_apn` mode with two IMSIs, each configured for two APNs:
    - IMSI_A (`278771600000011`): internet APN → IP `100.65.181.1`, IMS APN → IP `100.65.181.2`
    - IMSI_B (`278771600000012`): internet APN → IP `100.65.181.3`, IMS APN → IP `100.65.181.4`
+
+**Group 4 — `iccid` mode suspend tests:**
+1. Clean up any existing profiles and force-delete terminated profiles for the test IMSI range.
+2. Create an IP pool (`pool-fp16-iccid`) in subnet `100.65.182.0/24`.
+3. Create a single card-level SIM profile in `iccid` mode (ICCID `make_iccid(16, 21)`) with two IMSIs sharing one IP:
+   - IMSI_A (`278771600000021`) and IMSI_B (`278771600000022`) both → card IP `100.65.182.1`
+
+**Group 5 — `iccid_apn` mode suspend tests:**
+1. Clean up any existing profiles and force-delete terminated profiles for the test IMSI range.
+2. Create an IP pool (`pool-fp16-icapn`) in subnet `100.65.183.0/24`.
+3. Create a single card-level SIM profile in `iccid_apn` mode (ICCID `make_iccid(16, 31)`) with two IMSIs sharing per-APN IPs:
+   - Both IMSIs (`278771600000031`, `278771600000032`) share: internet APN → IP `100.65.183.1`, IMS APN → IP `100.65.183.2`
 
 ## Test 16.1 — 14-digit IMSI is rejected before database access
 
@@ -51,13 +63,13 @@ This suite covers three areas not addressed by earlier tests: (1) the lookup ser
 1. Send a request to `GET /lookup?imsi=&apn=internet.operator.com` (empty IMSI).
 2. Verify the response is HTTP 400 (bad request).
 
-## Test 16.5 — Valid IMSI that is not registered returns "not found"
+## Test 16.5 — Valid IMSI that is not registered returns "unqualified" (pre-qualification short-circuit)
 
-**Goal:** Confirm that a correctly formatted IMSI that was never provisioned returns a 404 response, not a server error.
+**Goal:** Confirm that a correctly formatted IMSI that was never provisioned and is not bracketed by any active range config is rejected by the lookup-service pre-qualification short-circuit (`PREQUALIFY_SQL`). The lookup service must return 404 directly without calling `subscriber-profile-api`. The full pre-qualification contract is covered by [test suite 18](test_18_lookup_prequalify.md).
 
-1. Send a request to `GET /lookup?imsi={valid_unregistered_imsi}&apn=internet.operator.com&use_case_id=...` using a correctly formatted 15-digit IMSI that was never provisioned.
-2. Verify the response is HTTP 404 (not found).
-3. Verify the response body contains `"error": "not_found"`.
+1. Send `GET /lookup?imsi={valid_unregistered_imsi}&apn=internet.operator.com&use_case_id=...` using a correctly formatted 15-digit IMSI never provisioned and outside every range config.
+2. Verify the response is HTTP 404.
+3. Verify the response body contains `"error": "unqualified"`.
 
 ## Test 16.6 — Both IMSIs resolve correctly when the SIM is active (baseline)
 
@@ -143,12 +155,96 @@ This suite covers three areas not addressed by earlier tests: (1) the lookup ser
 3. Verify the result for IMSI_B + internet APN is HTTP 200 (success) with IP `100.65.181.3`.
 4. Verify the result for IMSI_B + IMS APN is HTTP 200 (success) with IP `100.65.181.4`.
 
+## Test 16.14 — Both IMSIs return the same card-level IP in `iccid` mode (baseline)
+
+**Goal:** In `iccid` mode the resolver returns a card-level IP (`apn IS NULL` row in `sim_apn_ips`) shared by every IMSI on the card.
+
+1. Send `GET /lookup` for IMSI_A + any APN → HTTP 200 with `static_ip = 100.65.182.1`.
+2. Send `GET /lookup` for IMSI_B + any APN → HTTP 200 with `static_ip = 100.65.182.1` (same IP).
+
+## Test 16.15 — Garbage APN still resolves in `iccid` mode
+
+**Goal:** APN is ignored in `iccid` mode — even an APN that does not appear anywhere returns the card IP.
+
+1. Send `GET /lookup?imsi=278771600000021&apn=no.such.apn`.
+2. Verify HTTP 200 with `static_ip = 100.65.182.1`.
+
+## Test 16.16 — SIM-level suspend blocks both IMSIs in `iccid` mode
+
+1. PATCH the SIM profile `status=suspended`.
+2. Send lookups for IMSI_A and IMSI_B.
+3. Verify both return HTTP 403 with `"error": "suspended"`.
+
+## Test 16.17 — Reactivating the SIM in `iccid` mode restores the card IP
+
+1. PATCH the SIM profile `status=active`.
+2. Send lookups for both IMSIs.
+3. Verify both return HTTP 200 with `static_ip = 100.65.182.1`.
+
+## Test 16.18 — Per-IMSI suspend in `iccid` mode blocks only the suspended IMSI
+
+**Goal:** Even though both IMSIs share the same card-level IP, per-IMSI suspend in `iccid` mode is enforced at the `imsi2sim.status` level — only the suspended IMSI's lookups are blocked.
+
+1. PATCH `/profiles/{sim_id}/imsis/{IMSI_A}` with `{"status": "suspended"}`.
+2. Send a lookup for IMSI_A → HTTP 403 with `"error": "suspended"`.
+3. Send a lookup for IMSI_B → HTTP 200 with `static_ip = 100.65.182.1` (unaffected).
+
+## Test 16.19 — All IMSI×APN combos resolve in `iccid_apn` mode (baseline)
+
+**Goal:** In `iccid_apn` mode the resolver returns a card-level per-APN IP. Both IMSIs on the card share the same per-APN IP.
+
+1. Send `GET /lookup` for all four combinations:
+   - IMSI_A + internet → `100.65.183.1`
+   - IMSI_A + IMS → `100.65.183.2`
+   - IMSI_B + internet → `100.65.183.1`
+   - IMSI_B + IMS → `100.65.183.2`
+2. Verify each returns HTTP 200 with the expected card-level per-APN IP.
+
+## Test 16.20 — Unknown APN with no wildcard returns `apn_not_found`
+
+**Goal:** When the profile has specific APN entries but no wildcard (`apn IS NULL`), an unknown APN returns 404 with `apn_not_found` (not the generic `not_found`).
+
+1. Send `GET /lookup?imsi=278771600000031&apn=no.such.apn`.
+2. Verify HTTP 404 with `"error": "apn_not_found"`.
+
+## Test 16.21 — SIM-level suspend blocks all IMSI×APN combos in `iccid_apn` mode
+
+1. PATCH the SIM profile `status=suspended`.
+2. Send lookups for all four IMSI×APN combos.
+3. Verify each returns HTTP 403 with `"error": "suspended"`.
+
+## Test 16.22 — Reactivating the SIM in `iccid_apn` mode restores all combos
+
+1. PATCH the SIM profile `status=active`.
+2. Send lookups for all four IMSI×APN combos.
+3. Verify each returns HTTP 200 with the original card-level per-APN IP.
+
+## Test 16.23 — Per-IMSI suspend in `iccid_apn` mode blocks only that IMSI's APNs
+
+1. PATCH `/profiles/{sim_id}/imsis/{IMSI_A}` with `{"status": "suspended"}`.
+2. Send lookups for IMSI_A + internet, IMSI_A + IMS → both HTTP 403 with `"error": "suspended"`.
+3. Send lookups for IMSI_B + internet, IMSI_B + IMS → both HTTP 200 with the expected per-APN IPs.
+
+## Test 16.24 — Concurrent lookups for IMSI_B's two APNs return correct IPs (`iccid_apn`)
+
+1. With IMSI_A still suspended (from 16.23), send two parallel lookup threads — IMSI_B + internet and IMSI_B + IMS.
+2. Verify each returns HTTP 200 with the expected per-APN IP (`100.65.183.1` and `100.65.183.2`).
+3. Verify no thread cross-contamination occurred.
+
 ## Post-conditions (Teardown)
 
-**Group 2 (IMSI mode):**
+**Group 2 (`imsi` mode):**
 1. Delete the SIM profile.
 2. Delete the `pool-fp16-imsi` IP pool.
 
-**Group 3 (IMSI-APN mode):**
+**Group 3 (`imsi_apn` mode):**
 1. Delete the SIM profile.
 2. Delete the `pool-fp16-iapn` IP pool.
+
+**Group 4 (`iccid` mode):**
+1. Delete the SIM profile.
+2. Delete the `pool-fp16-iccid` IP pool.
+
+**Group 5 (`iccid_apn` mode):**
+1. Delete the SIM profile.
+2. Delete the `pool-fp16-icapn` IP pool.

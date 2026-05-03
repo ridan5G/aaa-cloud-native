@@ -73,7 +73,7 @@ This suite validates the automatic IP allocation path ("first-connection") where
 
 1. Send a lookup request with IMSI `278773079999999` (well outside the configured range `278773070000001–278773070000099`) and APN `internet.operator.com`.
 2. Verify the response is HTTP 404 (not found).
-3. Verify the response body contains an error such as `not_found`, `no_range_config`, or `apn_not_found`.
+3. Verify the response body contains an error in the accepted set: `unqualified`, `not_found`, `no_range_config`, or `apn_not_found`. With the lookup-service pre-qualification short-circuit enabled (`QUALIFY_PRECHECK_ENABLED=true`, the default), the lookup service rejects the request itself with `unqualified` before ever calling the API. With the kill switch off, the legacy API rejection (`not_found` / `no_range_config` / `apn_not_found`) is returned instead. Test suite 18 covers the pre-qualification path explicitly.
 
 ---
 

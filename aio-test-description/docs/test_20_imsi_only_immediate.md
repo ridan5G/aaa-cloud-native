@@ -90,11 +90,16 @@ Each of the six groups (A–F) sets up its own pools and clears stale profiles. 
 
 ### Tests 20.B.8–20.B.10 — Job completes and pools show sufficient allocation
 
+Slot 4's APN pools are POSTed after the immediate-mode job is dispatched, so a subset of cards may race ahead of those inserts and surface as `missing_apn_config` errors. Slots 1–3 are race-free, which is why the pool-allocation assertion uses `>= CARDS × 3` rather than `== CARDS × 4`. The test accepts both terminal job statuses but requires any errors to be confined to slot 4.
+
 1. Poll `GET /jobs/{job_id}` until terminal.
-2. Verify `status = "completed"`, `processed = 5`, `failed = 0`.
-3. Verify `range_config_id` is set in the job and the config status is `"provisioned"`.
-4. Verify the internet pool has at least 15 allocated IPs (5 cards × 3 race-free slots).
-5. Verify the IMS pool has at least 15 allocated IPs.
+2. Verify `status` is either `"completed"` or `"completed_with_errors"`.
+3. For every entry in `errors`, verify the message contains `"slot 4"`. Any non-slot-4 error fails the test.
+4. Verify the card accounting: `processed + failed == 5`.
+5. Verify `failed == len(errors)`.
+6. Verify `range_config_id` is set in the job and the config status is `"provisioned"`.
+7. Verify the internet pool has at least 15 allocated IPs (5 cards × 3 race-free slots).
+8. Verify the IMS pool has at least 15 allocated IPs.
 
 ### Tests 20.B.11–20.B.12 — Lookup returns correct per-APN IPs
 

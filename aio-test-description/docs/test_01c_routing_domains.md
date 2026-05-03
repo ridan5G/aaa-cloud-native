@@ -213,6 +213,101 @@ This suite covers the full lifecycle of routing domains as standalone objects ma
 
 ---
 
+## Test 1c.18 — Multi-prefix list: accept a subnet inside the second prefix
+
+**Goal:** Confirm that when `allowed_prefixes` contains more than one CIDR, a pool whose subnet falls inside any of them is accepted.
+
+1. Create a routing domain with `allowed_prefixes=[10.99.0.0/16, 172.16.0.0/12]`.
+2. Create a pool with subnet `172.16.5.0/24` (inside the second prefix) assigned to that domain.
+3. Verify the response is HTTP 201 (created).
+4. (Teardown) Delete the pool, then the domain.
+
+---
+
+## Test 1c.19 — Multi-prefix list: reject a subnet outside every prefix and echo the list
+
+**Goal:** Confirm that when a pool's subnet falls outside **all** allowed prefixes, the rejection error includes every configured prefix in `allowed_prefixes` so the operator can see what the valid options are.
+
+1. Create a routing domain with `allowed_prefixes=[10.99.0.0/16, 172.16.0.0/12]`.
+2. Attempt to create a pool with subnet `192.168.55.0/24` assigned to that domain.
+3. Verify the response is HTTP 409.
+4. Verify the response body contains `error: subnet_outside_allowed_prefixes`.
+5. Verify the body's `allowed_prefixes` field contains both `10.99.0.0/16` and `172.16.0.0/12`.
+6. (Teardown) Delete the domain.
+
+---
+
+## Test 1c.20 — suggest-cidr lands inside one of multiple allowed prefixes
+
+**Goal:** Confirm that the suggestion engine returns a CIDR contained in **at least one** of the configured prefixes when the domain has more than one.
+
+1. Create a routing domain with `allowed_prefixes=[10.99.0.0/16, 172.16.0.0/12]`.
+2. Send `GET /routing-domains/{id}/suggest-cidr?size=50`.
+3. Verify the response is HTTP 200.
+4. Parse the returned `suggested_cidr` and verify it is a `subnet_of` either `10.99.0.0/16` or `172.16.0.0/12`.
+5. (Teardown) Delete the domain.
+
+---
+
+## Test 1c.21 — Subnet equal to an allowed prefix is accepted (reflexive `subnet_of`)
+
+**Goal:** Confirm that a subnet exactly equal to an allowed prefix is accepted — `subnet_of` is reflexive in the IP-network library, so the equality case must work.
+
+1. Create a routing domain with `allowed_prefixes=[10.99.7.0/24]`.
+2. Create a pool with subnet `10.99.7.0/24` (exactly equal to the allowed prefix) assigned to that domain.
+3. Verify the response is HTTP 201.
+4. (Teardown) Delete the pool, then the domain.
+
+---
+
+## Test 1c.22 — Subnet that is a strict superset of an allowed prefix is rejected
+
+**Goal:** Confirm that a subnet which strictly contains an allowed prefix (e.g. a `/8` when only a `/24` is allowed) is rejected — `subnet_of` is direction-sensitive.
+
+1. Create a routing domain with `allowed_prefixes=[10.99.7.0/24]`.
+2. Attempt to create a pool with subnet `10.99.0.0/8` (strict superset).
+3. Verify the response is HTTP 409.
+4. (Teardown) Delete the domain.
+
+---
+
+## Test 1c.23 — PATCH `allowed_prefixes` to `[]` becomes unrestricted
+
+**Goal:** Confirm that emptying the `allowed_prefixes` list removes all enforcement — the domain accepts any subnet thereafter.
+
+1. Create a routing domain with `allowed_prefixes=[10.99.0.0/16]`.
+2. PATCH the domain to set `allowed_prefixes=[]`.
+3. Verify the response is HTTP 200.
+4. Create a pool with subnet `192.168.55.0/24` (would have been rejected before the PATCH).
+5. Verify the pool creation returns HTTP 201.
+6. (Teardown) Delete the pool, then the domain.
+
+---
+
+## Test 1c.24 — Adding a secondary subnet outside `allowed_prefixes` is rejected
+
+**Goal:** Confirm that the multi-subnet pool expansion endpoint (`POST /pools/{id}/subnets`) is also gated by `allowed_prefixes`, not just the initial pool creation.
+
+1. Create a routing domain with `allowed_prefixes=[10.99.0.0/16]`.
+2. Create a pool with subnet `10.99.0.0/24` (inside the prefix) → HTTP 201.
+3. Attempt to add a secondary subnet `192.168.66.0/24` (outside the prefix) via `POST /pools/{id}/subnets`.
+4. Verify the response is HTTP 409 with `error: subnet_outside_allowed_prefixes`.
+5. (Teardown) Delete the pool, then the domain.
+
+---
+
+## Test 1c.25 — Adding a secondary subnet inside `allowed_prefixes` is accepted
+
+**Goal:** Companion to 1c.24 — secondary subnets inside the allowed prefix go through.
+
+1. Create a routing domain with `allowed_prefixes=[10.99.0.0/16]`.
+2. Create a pool with subnet `10.99.0.0/24` → HTTP 201.
+3. Add a secondary subnet `10.99.50.0/24` (also inside the prefix) via `POST /pools/{id}/subnets`.
+4. Verify the response is HTTP 201.
+5. (Teardown) Delete the pool, then the domain.
+
+---
+
 ## Post-conditions (Teardown)
 1. Each test cleans up the routing domains and pools it created inside `finally` blocks, so no persistent data remains after the suite completes.
-2. The class-level setup performs a pre-run cleanup to remove stale domains from previous interrupted runs.
+2. The class-level setup performs a pre-run cleanup to remove stale domains from previous interrupted runs (now also covers the `-equal`, `-super`, and `-empty` suffixes used by the boundary tests).

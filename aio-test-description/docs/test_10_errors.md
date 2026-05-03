@@ -110,26 +110,31 @@ This suite systematically verifies that the platform's APIs reject bad input wit
 
 ---
 
-## Test 10.11 — Switch IP resolution mode without providing required APN data → HTTP 400
+## Test 10.11 — Switch IP resolution mode `imsi → imsi_apn` is a safe transition → HTTP 200
 
-**Goal:** Changing a profile's IP resolution mode from `imsi` to `imsi_apn` without also providing APN IP data must be rejected.
+**Goal:** Changing a profile's IP resolution mode from `imsi` to `imsi_apn` requires no force flag and no extra APN data — the existing `apn IS NULL` row becomes the `imsi_apn` wildcard fallback.
 
-1. Send an update request for the main profile, changing only `ip_resolution` to `imsi_apn` with no APN IPs supplied.
-2. Confirm the response is HTTP 400 (bad request — the mode change is invalid without the required additional data).
+1. Send a PATCH request for the main profile changing `ip_resolution` to `imsi_apn` (no other fields).
+2. Confirm the response is HTTP 200.
+
+This test guards against regression of the orphan-row guard added to `PATCH /profiles/{sim_id}`: same-table additive transitions don't strand any rows, so they must not require `?force=true`. The previous over-cautious "switching to imsi_apn requires existing APN-specific entries" check was incorrect and is replaced by the new guard. See [test_22_resolution_method_conversion.md](test_22_resolution_method_conversion.md) for the full conversion-safety contract.
 
 ---
 
-## Test 10.12 — Switch IP resolution mode from imsi to iccid (valid change) → lookup uses new IP
+## Test 10.12 — Switch IP resolution mode to `iccid` (cross-table) requires `?force=true` → HTTP 409 then HTTP 200
 
-**Goal:** A valid mode change with all required data succeeds, and the lookup service immediately reflects the new IP.
+**Goal:** Changing the resolution mode to a different table family (`imsi*` ↔ `iccid*`) is a cross-table change that orphans every row in the previous mode's table. The orphan-row guard rejects the change with 409 unless the caller passes `?force=true`, which then deletes the orphans in the same transaction as the `UPDATE sim_profiles`.
 
-1. Send an update request for the main profile, changing:
+1. Send a PATCH for the main profile with body `{"ip_resolution": "iccid"}` and **no** `?force=true`.
+2. Confirm HTTP 409.
+3. Confirm the response body contains `"error": "mode_conversion_orphans_rows"` and `"to": "iccid"`.
+4. Send a second PATCH with `?force=true` and the full mode-change payload:
    - `ip_resolution` to `iccid`
-   - Adding a new ICCID
-   - Adding a card-level IP entry (`100.65.200.11`)
-2. Confirm HTTP 200 (success).
-3. Send a lookup request for the main profile's IMSI.
-4. Confirm HTTP 200 and `static_ip` = `100.65.200.11` (the new card-level IP, not the old per-IMSI IP).
+   - A new ICCID
+   - A card-level IP entry (`100.65.200.11`)
+5. Confirm HTTP 200 (success).
+6. Send a lookup request for the main profile's IMSI.
+7. Confirm HTTP 200 and `static_ip` = `100.65.200.11` (the new card-level IP). The previous `imsi`/`imsi_apn` IP row was deleted by the forced cleanup, so the resolver runs against a clean state.
 
 ---
 
