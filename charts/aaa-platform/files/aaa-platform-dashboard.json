@@ -1460,7 +1460,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "### How the lookup service works\n`aaa-lookup-service` is the **hot-path** of every RADIUS authentication.  Each Access-Request triggers a single `GET /lookup?imsi=…&apn=…` call (Stage 1).  The service queries the **read-replica** for a pre-allocated static IP and responds in < 15 ms (p99 SLA).\n\n| Result | Meaning | Next step |\n|--------|---------|-----------|\n| `resolved` ✅ | Static IP found — subscriber known | RADIUS sends Access-Accept |\n| `not_found` 🔶 | IMSI/APN not in DB yet | Falls through to Stage 2 (first-connection) |\n| `suspended` 🚫 | Subscriber flagged as inactive | RADIUS sends Access-Reject immediately |\n| `db_error` 🔴 | Read replica unreachable/timeout | RADIUS sends Access-Reject; triggers critical alert |\n\n**SLAs:** p99 latency < 15 ms · DB error rate = 0 · Suspended rate < 0.05/s",
+        "content": "### How the lookup service works\n`aaa-lookup-service` is the **hot-path** of every RADIUS authentication.  Each Access-Request triggers a single `GET /lookup?imsi=…&apn=…` call (Stage 1).  The service queries the **read-replica** for a pre-allocated static IP and responds in < 15 ms (p99 SLA).\n\n| Result | Meaning | Next step |\n|--------|---------|-----------|\n| `resolved` ✅ | Static IP found — subscriber known | RADIUS sends Access-Accept |\n| `not_found` 🔶 | IMSI/APN not in DB yet | Falls through to Stage 2 (first-connection) |\n| `unqualified` ⛔ | No `imsi_range_configs` row covers the IMSI (PREQUALIFY_SQL short-circuit) | RADIUS sends Access-Reject; subscriber-profile-api **not** called |\n| `suspended` 🚫 | Subscriber flagged as inactive | RADIUS sends Access-Reject immediately |\n| `db_error` 🔴 | Read replica unreachable/timeout | RADIUS sends Access-Reject; triggers critical alert |\n\n**SLAs:** p99 latency < 15 ms · DB error rate = 0 · Suspended rate < 0.05/s · Pre-qualify p99 < 5 ms",
         "code": {
           "language": "plaintext",
           "showLineNumbers": false,
@@ -1803,6 +1803,21 @@
                 "id": "color",
                 "value": {
                   "fixedColor": "#F2CC0C",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "unqualified"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#FADE2A",
                   "mode": "fixed"
                 }
               }
@@ -2208,8 +2223,8 @@
     {
       "id": 54,
       "type": "timeseries",
-      "title": "Suspended vs Not-Found Lookup Rate",
-      "description": "Rate of suspended-subscriber rejections (403), not-found lookups (404), and DB errors per second. A rising suspended rate indicates mass-suspension or corrupted state; a rising not_found rate indicates new SIMs without matching range config.",
+      "title": "Suspended vs Not-Found vs Unqualified Lookup Rate",
+      "description": "Rate of suspended-subscriber rejections (403), not-found lookups (404 → falls through to first-connection), unqualified lookups (404 → PREQUALIFY_SQL short-circuit, API not called), and DB errors per second. A rising suspended rate indicates mass-suspension or corrupted state; a rising not_found rate indicates new SIMs without matching range config; a rising unqualified rate indicates missing range_configs or IMSI probing.",
       "gridPos": {
         "h": 6,
         "w": 24,
@@ -2258,6 +2273,15 @@
           "expr": "sum(rate(aaa_lookup_requests_total{result=\"not_found\"}[$__rate_interval]))",
           "legendFormat": "not_found/s",
           "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(aaa_lookup_requests_total{result=\"unqualified\"}[$__rate_interval]))",
+          "legendFormat": "unqualified/s",
+          "refId": "D"
         },
         {
           "datasource": {
@@ -4281,6 +4305,444 @@
         "textMode": "auto",
         "colorMode": "background",
         "graphMode": "none"
+      }
+    },
+    {
+      "id": 210,
+      "type": "row",
+      "title": "IMSI Pre-Qualification  (PREQUALIFY_SQL on read replica · QUALIFY_PRECHECK_ENABLED)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 190
+      },
+      "panels": []
+    },
+    {
+      "id": 211,
+      "type": "timeseries",
+      "title": "Pre-Qualification Outcomes (per second)",
+      "description": "unqualified/s = lookups short-circuited by PREQUALIFY_SQL before subscriber-profile-api is called (load saved). errors/s = pre-check SQL itself failed → fail-open path forwarded to API (alert: LookupPrequalifyErrors).",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 191
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(aaa_lookup_unqualified_total[$__rate_interval]))",
+          "legendFormat": "unqualified/s (api calls saved)",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(aaa_lookup_prequalify_errors_total[$__rate_interval]))",
+          "legendFormat": "errors/s (fail-open)",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "unqualified/s (api calls saved)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#FADE2A",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "errors/s (fail-open)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#E02F44",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 212,
+      "type": "timeseries",
+      "title": "Pre-Qualification Latency Percentiles",
+      "description": "PREQUALIFY_SQL is one indexed read on imsi_range_configs against the replica — p99 should sit well under 1 ms. Sustained p99 > 5 ms triggers LookupPrequalifyLatencyHigh.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 191
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.50, sum(rate(aaa_lookup_prequalify_duration_seconds_bucket[$__rate_interval])) by (le)) * 1000",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.95, sum(rate(aaa_lookup_prequalify_duration_seconds_bucket[$__rate_interval])) by (le)) * 1000",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum(rate(aaa_lookup_prequalify_duration_seconds_bucket[$__rate_interval])) by (le)) * 1000",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 5,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 2
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p50"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#73BF69",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p95"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#F2CC0C",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p99"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#E02F44",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 213,
+      "type": "stat",
+      "title": "API Calls Saved (last 1 h)",
+      "description": "Cumulative count of /first-connection POSTs that PREQUALIFY_SQL avoided in the last hour. Each one is a primary-DB transaction that did NOT happen on subscriber-profile-api.",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 198
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(increase(aaa_lookup_unqualified_total[1h]))",
+          "legendFormat": "calls saved",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 214,
+      "type": "stat",
+      "title": "Pre-Check Errors (last 1 h)",
+      "description": "Cumulative PREQUALIFY_SQL failures in the last hour. Each error is a fail-open: the lookup falls through to subscriber-profile-api as if pre-check were disabled. Sustained > 0 triggers LookupPrequalifyErrors.",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 198
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(increase(aaa_lookup_prequalify_errors_total[1h]))",
+          "legendFormat": "errors",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "area"
+      }
+    },
+    {
+      "id": 215,
+      "type": "stat",
+      "title": "Unqualified Share of Misses",
+      "description": "Of all cache-miss lookups (not_found + unqualified), what fraction was rejected by the pre-check before reaching the API. Higher = pre-check is doing more work; lower = either traffic is well-targeted or something is bypassing it.",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 198
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(aaa_lookup_requests_total{result=\"unqualified\"}[$__rate_interval])) / clamp_min(sum(rate(aaa_lookup_requests_total{result=~\"unqualified|not_found\"}[$__rate_interval])), 0.0001) * 100",
+          "legendFormat": "unqualified share",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 10
+              },
+              {
+                "color": "yellow",
+                "value": 75
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area"
       }
     }
   ]

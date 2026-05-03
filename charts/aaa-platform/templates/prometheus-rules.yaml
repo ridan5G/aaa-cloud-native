@@ -225,6 +225,65 @@ spec:
               RadiusStage2RateHigh alert — now correctly sourced from the lookup
               service's first_connection_requests_total metric.
 
+        # ── IMSI Pre-Qualification (PREQUALIFY_SQL on read replica) ──────────
+        # Fed by the new aaa_lookup_unqualified_total /
+        # aaa_lookup_prequalify_errors_total /
+        # aaa_lookup_prequalify_duration_seconds metrics. Pre-check is gated by
+        # QUALIFY_PRECHECK_ENABLED (default true) on aaa-lookup-service.
+        - alert: LookupPrequalifyErrors
+          expr: sum(rate(aaa_lookup_prequalify_errors_total[5m])) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PREQUALIFY_SQL is failing on the read replica"
+            description: >
+              The IMSI pre-qualification query (imsi_range_configs lookup on
+              the replica) is returning errors. The fail-open path keeps
+              RADIUS working by forwarding to subscriber-profile-api, but
+              every uncovered IMSI now incurs the full first-connection
+              round-trip — defeating the load-shedding purpose of the
+              pre-check. Investigate replica health and aaa-lookup-service
+              logs for "prequalify" entries.
+
+        - alert: LookupUnqualifiedRateHigh
+          expr: sum(rate(aaa_lookup_requests_total{result="unqualified"}[10m])) > 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Unqualified IMSI rate > 1/s sustained"
+            description: >
+              More than 1 unqualified-IMSI rejection/s for 10 minutes — the
+              lookup service's PREQUALIFY_SQL is short-circuiting requests
+              with no covering imsi_range_configs row. Sustained high rate
+              usually means: (a) RADIUS is being pointed at the wrong
+              namespace, (b) a missing range_config rollout, or (c) IMSI
+              probing/scanning. Cross-check first_connection_total — if
+              missing range configs were the cause, those would show up
+              before the pre-check was deployed. Current rate:
+              {{ "{{ $value | humanize }}" }}/s.
+
+        - alert: LookupPrequalifyLatencyHigh
+          expr: >
+            histogram_quantile(0.99,
+              sum(rate(aaa_lookup_prequalify_duration_seconds_bucket[5m])) by (le)
+            ) * 1000 > 5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pre-qualification p99 latency > 5 ms"
+            description: >
+              The IMSI pre-qualification query p99 latency exceeds 5 ms for
+              5 minutes. Current value: {{ "{{ $value | humanize }}" }} ms.
+              PREQUALIFY_SQL is a single indexed read on imsi_range_configs
+              and should normally complete in well under 1 ms — sustained
+              high latency points to read-replica saturation, missing
+              idx_irc_imsi_range index, or replica I/O pressure. Pre-check
+              latency is added to every cache-miss lookup, so this directly
+              widens the p99 budget for the 15 ms lookup SLA.
+
     # ── RADIUS Server ────────────────────────────────────────────────────────
     - name: aaa.radius
       rules:
