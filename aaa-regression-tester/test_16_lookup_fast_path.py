@@ -54,9 +54,11 @@ import threading
 
 import httpx
 
-from conftest import PROVISION_BASE, JWT_TOKEN, USE_CASE_ID, make_imsi
+from conftest import PROVISION_BASE, JWT_TOKEN, USE_CASE_ID, make_iccid, make_imsi
 from fixtures.pools import create_pool, delete_pool, _force_clear_range_profiles
 from fixtures.profiles import (
+    create_profile_iccid,
+    create_profile_iccid_apn,
     create_profile_imsi,
     create_profile_imsi_apn,
     delete_profile,
@@ -81,6 +83,19 @@ IP_C = "100.65.181.1"   # IMSI_IAPN_A → APN_INTERNET
 IP_D = "100.65.181.2"   # IMSI_IAPN_A → APN_IMS
 IP_E = "100.65.181.3"   # IMSI_IAPN_B → APN_INTERNET
 IP_F = "100.65.181.4"   # IMSI_IAPN_B → APN_IMS
+
+# ── iccid-mode suspend test card ─────────────────────────────────────────
+ICCID_IC      = make_iccid(MODULE, 21)
+IMSI_ICCID_A  = make_imsi(MODULE, 21)
+IMSI_ICCID_B  = make_imsi(MODULE, 22)
+IP_CARD_IC    = "100.65.182.1"
+
+# ── iccid_apn-mode suspend test card ─────────────────────────────────────
+ICCID_ICAPN     = make_iccid(MODULE, 31)
+IMSI_ICAPN_A    = make_imsi(MODULE, 31)
+IMSI_ICAPN_B    = make_imsi(MODULE, 32)
+IP_CARD_INET    = "100.65.183.1"
+IP_CARD_IMS     = "100.65.183.2"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -444,3 +459,277 @@ class TestSimSuspendImsiApnMode:
             f"Expected (200, {IP_E}), got {results[(IMSI_IAPN_B, APN_INTERNET)]}"
         assert results[(IMSI_IAPN_B, APN_IMS)] == (200, IP_F), \
             f"Expected (200, {IP_F}), got {results[(IMSI_IAPN_B, APN_IMS)]}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SIM-level and per-IMSI suspend in iccid mode
+# Single card-level IP; both IMSIs share it. APN parameter is ignored.
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestSimSuspendIccidMode:
+    """iccid mode: card-level IP shared across all IMSIs; APN ignored."""
+
+    pool_id: str | None = None
+    sim_id:  str | None = None
+
+    @classmethod
+    def setup_class(cls):
+        with httpx.Client(base_url=PROVISION_BASE,
+                          headers={"Authorization": f"Bearer {JWT_TOKEN}"},
+                          timeout=30.0) as c:
+            cleanup_stale_profiles(c, f"27877{MODULE:02d}")
+        _force_clear_range_profiles(IMSI_ICCID_A, IMSI_ICCID_B)
+        with httpx.Client(base_url=PROVISION_BASE,
+                          headers={"Authorization": f"Bearer {JWT_TOKEN}"},
+                          timeout=30.0) as c:
+            p = create_pool(c, subnet="100.65.182.0/24",
+                            pool_name="pool-fp16-iccid", account_name="TestAccount",
+                            replace_on_conflict=True)
+            cls.pool_id = p["pool_id"]
+            b = create_profile_iccid(
+                c,
+                iccid=ICCID_IC,
+                account_name="TestAccount",
+                imsis=[IMSI_ICCID_A, IMSI_ICCID_B],
+                static_ip=IP_CARD_IC,
+                pool_id=cls.pool_id,
+            )
+            cls.sim_id = b["sim_id"]
+
+    @classmethod
+    def teardown_class(cls):
+        with httpx.Client(base_url=PROVISION_BASE,
+                          headers={"Authorization": f"Bearer {JWT_TOKEN}"},
+                          timeout=30.0) as c:
+            if cls.sim_id:
+                delete_profile(c, cls.sim_id)
+            if cls.pool_id:
+                delete_pool(c, cls.pool_id)
+
+    # 16.14 ───────────────────────────────────────────────────────────────────
+    def test_14_both_imsis_return_same_card_ip(self, lookup_http: httpx.Client):
+        """Baseline: both IMSIs on the card return the same card-level IP."""
+        for imsi in (IMSI_ICCID_A, IMSI_ICCID_B):
+            r = lookup_http.get("/lookup",
+                                params={"imsi": imsi, "apn": APN_INTERNET,
+                                        "use_case_id": USE_CASE_ID})
+            assert r.status_code == 200, \
+                f"imsi={imsi}: expected 200, got {r.status_code}: {r.text}"
+            assert r.json()["static_ip"] == IP_CARD_IC
+
+    # 16.15 ───────────────────────────────────────────────────────────────────
+    def test_15_garbage_apn_still_resolves(self, lookup_http: httpx.Client):
+        """APN parameter is ignored in iccid mode — even an unknown APN returns the card IP."""
+        r = lookup_http.get("/lookup",
+                            params={"imsi": IMSI_ICCID_A, "apn": "no.such.apn",
+                                    "use_case_id": USE_CASE_ID})
+        assert r.status_code == 200
+        assert r.json()["static_ip"] == IP_CARD_IC
+
+    # 16.16 — BAD scenario ────────────────────────────────────────────────────
+    def test_16_sim_suspend_blocks_both_imsis(
+            self, http: httpx.Client, lookup_http: httpx.Client):
+        """SIM-level suspend → both IMSIs return 403."""
+        r = http.patch(f"/profiles/{TestSimSuspendIccidMode.sim_id}",
+                       json={"status": "suspended"})
+        assert r.status_code == 200
+
+        for imsi in (IMSI_ICCID_A, IMSI_ICCID_B):
+            r_lkp = lookup_http.get("/lookup",
+                                    params={"imsi": imsi, "apn": APN_INTERNET,
+                                            "use_case_id": USE_CASE_ID})
+            assert r_lkp.status_code == 403
+            assert r_lkp.json()["error"] == "suspended"
+
+    # 16.17 ───────────────────────────────────────────────────────────────────
+    def test_17_reactivate_sim_restores_card_ip(
+            self, http: httpx.Client, lookup_http: httpx.Client):
+        """Reactivate the SIM — both IMSIs return the original card IP."""
+        r = http.patch(f"/profiles/{TestSimSuspendIccidMode.sim_id}",
+                       json={"status": "active"})
+        assert r.status_code == 200
+
+        for imsi in (IMSI_ICCID_A, IMSI_ICCID_B):
+            r_lkp = lookup_http.get("/lookup",
+                                    params={"imsi": imsi, "apn": APN_INTERNET,
+                                            "use_case_id": USE_CASE_ID})
+            assert r_lkp.status_code == 200
+            assert r_lkp.json()["static_ip"] == IP_CARD_IC
+
+    # 16.18 — BAD scenario ────────────────────────────────────────────────────
+    def test_18_per_imsi_suspend_in_iccid_mode(
+            self, http: httpx.Client, lookup_http: httpx.Client):
+        """Per-IMSI suspend in iccid mode — IMSI_A blocked; IMSI_B still resolves to the same IP."""
+        r = http.patch(
+            f"/profiles/{TestSimSuspendIccidMode.sim_id}/imsis/{IMSI_ICCID_A}",
+            json={"status": "suspended"},
+        )
+        assert r.status_code == 200
+
+        r_a = lookup_http.get("/lookup",
+                              params={"imsi": IMSI_ICCID_A, "apn": APN_INTERNET,
+                                      "use_case_id": USE_CASE_ID})
+        assert r_a.status_code == 403
+        assert r_a.json()["error"] == "suspended"
+
+        r_b = lookup_http.get("/lookup",
+                              params={"imsi": IMSI_ICCID_B, "apn": APN_INTERNET,
+                                      "use_case_id": USE_CASE_ID})
+        assert r_b.status_code == 200
+        assert r_b.json()["static_ip"] == IP_CARD_IC
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SIM-level and per-IMSI suspend in iccid_apn mode
+# Card-level per-APN IPs; both IMSIs share each per-APN IP.
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestSimSuspendIccidApnMode:
+    """iccid_apn mode: card-level per-APN IPs; multiple IMSIs share."""
+
+    pool_id: str | None = None
+    sim_id:  str | None = None
+
+    @classmethod
+    def setup_class(cls):
+        with httpx.Client(base_url=PROVISION_BASE,
+                          headers={"Authorization": f"Bearer {JWT_TOKEN}"},
+                          timeout=30.0) as c:
+            cleanup_stale_profiles(c, f"27877{MODULE:02d}")
+        _force_clear_range_profiles(IMSI_ICAPN_A, IMSI_ICAPN_B)
+        with httpx.Client(base_url=PROVISION_BASE,
+                          headers={"Authorization": f"Bearer {JWT_TOKEN}"},
+                          timeout=30.0) as c:
+            p = create_pool(c, subnet="100.65.183.0/24",
+                            pool_name="pool-fp16-icapn", account_name="TestAccount",
+                            replace_on_conflict=True)
+            cls.pool_id = p["pool_id"]
+            b = create_profile_iccid_apn(
+                c,
+                iccid=ICCID_ICAPN,
+                account_name="TestAccount",
+                imsis=[IMSI_ICAPN_A, IMSI_ICAPN_B],
+                apn_ips=[
+                    {"apn": APN_INTERNET, "static_ip": IP_CARD_INET, "pool_id": cls.pool_id},
+                    {"apn": APN_IMS,      "static_ip": IP_CARD_IMS,  "pool_id": cls.pool_id},
+                ],
+            )
+            cls.sim_id = b["sim_id"]
+
+    @classmethod
+    def teardown_class(cls):
+        with httpx.Client(base_url=PROVISION_BASE,
+                          headers={"Authorization": f"Bearer {JWT_TOKEN}"},
+                          timeout=30.0) as c:
+            if cls.sim_id:
+                delete_profile(c, cls.sim_id)
+            if cls.pool_id:
+                delete_pool(c, cls.pool_id)
+
+    # 16.19 ───────────────────────────────────────────────────────────────────
+    def test_19_all_combos_share_card_apn_ips(self, lookup_http: httpx.Client):
+        """Baseline: both IMSIs × both APNs → each IMSI returns the card-level per-APN IP."""
+        cases = [
+            (IMSI_ICAPN_A, APN_INTERNET, IP_CARD_INET),
+            (IMSI_ICAPN_A, APN_IMS,      IP_CARD_IMS),
+            (IMSI_ICAPN_B, APN_INTERNET, IP_CARD_INET),
+            (IMSI_ICAPN_B, APN_IMS,      IP_CARD_IMS),
+        ]
+        for imsi, apn, expected in cases:
+            r = lookup_http.get("/lookup",
+                                params={"imsi": imsi, "apn": apn,
+                                        "use_case_id": USE_CASE_ID})
+            assert r.status_code == 200, \
+                f"imsi={imsi} apn={apn}: {r.status_code} {r.text}"
+            assert r.json()["static_ip"] == expected
+
+    # 16.20 ───────────────────────────────────────────────────────────────────
+    def test_20_unknown_apn_no_wildcard_returns_404(self, lookup_http: httpx.Client):
+        """No wildcard row → unknown APN → 404 apn_not_found (not generic not_found)."""
+        r = lookup_http.get("/lookup",
+                            params={"imsi": IMSI_ICAPN_A, "apn": "no.such.apn",
+                                    "use_case_id": USE_CASE_ID})
+        assert r.status_code == 404
+        assert r.json()["error"] == "apn_not_found"
+
+    # 16.21 — BAD scenario ────────────────────────────────────────────────────
+    def test_21_sim_suspend_blocks_all_apns(
+            self, http: httpx.Client, lookup_http: httpx.Client):
+        """SIM-level suspend → all IMSI×APN combos return 403."""
+        r = http.patch(f"/profiles/{TestSimSuspendIccidApnMode.sim_id}",
+                       json={"status": "suspended"})
+        assert r.status_code == 200
+
+        for imsi, apn in [
+            (IMSI_ICAPN_A, APN_INTERNET),
+            (IMSI_ICAPN_A, APN_IMS),
+            (IMSI_ICAPN_B, APN_INTERNET),
+            (IMSI_ICAPN_B, APN_IMS),
+        ]:
+            r_lkp = lookup_http.get("/lookup",
+                                    params={"imsi": imsi, "apn": apn,
+                                            "use_case_id": USE_CASE_ID})
+            assert r_lkp.status_code == 403
+            assert r_lkp.json()["error"] == "suspended"
+
+    # 16.22 ───────────────────────────────────────────────────────────────────
+    def test_22_reactivate_sim_restores_all_combos(
+            self, http: httpx.Client, lookup_http: httpx.Client):
+        r = http.patch(f"/profiles/{TestSimSuspendIccidApnMode.sim_id}",
+                       json={"status": "active"})
+        assert r.status_code == 200
+
+        for imsi, apn, expected in [
+            (IMSI_ICAPN_A, APN_INTERNET, IP_CARD_INET),
+            (IMSI_ICAPN_A, APN_IMS,      IP_CARD_IMS),
+            (IMSI_ICAPN_B, APN_INTERNET, IP_CARD_INET),
+            (IMSI_ICAPN_B, APN_IMS,      IP_CARD_IMS),
+        ]:
+            r_lkp = lookup_http.get("/lookup",
+                                    params={"imsi": imsi, "apn": apn,
+                                            "use_case_id": USE_CASE_ID})
+            assert r_lkp.status_code == 200
+            assert r_lkp.json()["static_ip"] == expected
+
+    # 16.23 — BAD scenario ────────────────────────────────────────────────────
+    def test_23_per_imsi_suspend_in_iccid_apn_mode(
+            self, http: httpx.Client, lookup_http: httpx.Client):
+        """Per-IMSI suspend → IMSI_A blocked for all APNs; IMSI_B unaffected on the same card."""
+        r = http.patch(
+            f"/profiles/{TestSimSuspendIccidApnMode.sim_id}/imsis/{IMSI_ICAPN_A}",
+            json={"status": "suspended"},
+        )
+        assert r.status_code == 200
+
+        for apn in (APN_INTERNET, APN_IMS):
+            r_a = lookup_http.get("/lookup",
+                                  params={"imsi": IMSI_ICAPN_A, "apn": apn,
+                                          "use_case_id": USE_CASE_ID})
+            assert r_a.status_code == 403
+            assert r_a.json()["error"] == "suspended"
+
+        for apn, expected in [(APN_INTERNET, IP_CARD_INET), (APN_IMS, IP_CARD_IMS)]:
+            r_b = lookup_http.get("/lookup",
+                                  params={"imsi": IMSI_ICAPN_B, "apn": apn,
+                                          "use_case_id": USE_CASE_ID})
+            assert r_b.status_code == 200
+            assert r_b.json()["static_ip"] == expected
+
+    # 16.24 ───────────────────────────────────────────────────────────────────
+    def test_24_concurrent_lookups_active_imsi(self, lookup_http: httpx.Client):
+        """Concurrent lookups for IMSI_B's two APNs (IMSI_A still suspended) — no cross-talk."""
+        results: dict = {}
+
+        def fetch(imsi: str, apn: str) -> None:
+            r = lookup_http.get("/lookup",
+                                params={"imsi": imsi, "apn": apn,
+                                        "use_case_id": USE_CASE_ID})
+            results[(imsi, apn)] = (r.status_code, r.json().get("static_ip"))
+
+        t1 = threading.Thread(target=fetch, args=(IMSI_ICAPN_B, APN_INTERNET))
+        t2 = threading.Thread(target=fetch, args=(IMSI_ICAPN_B, APN_IMS))
+        t1.start(); t2.start()
+        t1.join();  t2.join()
+
+        assert results[(IMSI_ICAPN_B, APN_INTERNET)] == (200, IP_CARD_INET)
+        assert results[(IMSI_ICAPN_B, APN_IMS)] == (200, IP_CARD_IMS)
