@@ -554,20 +554,106 @@ async def replace_profile(sim_id: uuid.UUID, body: ProfileCreate, conn=Depends(g
     return await _build_profile_response(sim_id, conn)
 
 
+async def _count_ip_resolution_orphans(conn, sim_id: uuid.UUID, current: str, target: str) -> int:
+    """Count rows that would become unreachable for the fast-path resolver after a
+    sim_profiles.ip_resolution change. See plan-02-database.md "ip_resolution
+    conversion safety" — the resolver dispatches on the current ip_resolution and
+    only matches rows that fit that mode's shape, so any leftover rows in the
+    table for the previous mode become orphans (Resolver.cpp:35–106)."""
+    if current == target:
+        return 0
+    cur_table_imsi = current in ("imsi", "imsi_apn")
+    new_table_imsi = target in ("imsi", "imsi_apn")
+    new_uses_apn = target in ("imsi_apn", "iccid_apn")
+    if cur_table_imsi == new_table_imsi:
+        # Same family of tables; orphans only when moving to an APN-agnostic mode
+        # (specific-APN rows can no longer match because the resolver looks for apn IS NULL)
+        if new_uses_apn:
+            return 0
+        if cur_table_imsi:
+            return int(await conn.fetchval(
+                "SELECT COUNT(*) FROM imsi_apn_ips sa "
+                "JOIN imsi2sim si ON si.imsi = sa.imsi "
+                "WHERE si.sim_id = $1::uuid AND sa.apn IS NOT NULL",
+                sim_id,
+            ) or 0)
+        return int(await conn.fetchval(
+            "SELECT COUNT(*) FROM sim_apn_ips "
+            "WHERE sim_id = $1::uuid AND apn IS NOT NULL",
+            sim_id,
+        ) or 0)
+    # Cross-table conversion: every row in the previous table becomes an orphan
+    if cur_table_imsi:
+        return int(await conn.fetchval(
+            "SELECT COUNT(*) FROM imsi_apn_ips sa "
+            "JOIN imsi2sim si ON si.imsi = sa.imsi WHERE si.sim_id = $1::uuid",
+            sim_id,
+        ) or 0)
+    return int(await conn.fetchval(
+        "SELECT COUNT(*) FROM sim_apn_ips WHERE sim_id = $1::uuid",
+        sim_id,
+    ) or 0)
+
+
+async def _delete_ip_resolution_orphans(conn, sim_id: uuid.UUID, current: str, target: str) -> None:
+    """Delete the rows _count_ip_resolution_orphans counted. Caller must already
+    hold an open transaction so the DELETE and the UPDATE land atomically."""
+    if current == target:
+        return
+    cur_table_imsi = current in ("imsi", "imsi_apn")
+    new_table_imsi = target in ("imsi", "imsi_apn")
+    new_uses_apn = target in ("imsi_apn", "iccid_apn")
+    if cur_table_imsi == new_table_imsi:
+        if new_uses_apn:
+            return
+        if cur_table_imsi:
+            await conn.execute(
+                "DELETE FROM imsi_apn_ips "
+                "WHERE imsi IN (SELECT imsi FROM imsi2sim WHERE sim_id = $1::uuid) "
+                "AND apn IS NOT NULL",
+                sim_id,
+            )
+        else:
+            await conn.execute(
+                "DELETE FROM sim_apn_ips WHERE sim_id = $1::uuid AND apn IS NOT NULL",
+                sim_id,
+            )
+        return
+    # Cross-table — wipe everything in the previous table
+    if cur_table_imsi:
+        await conn.execute(
+            "DELETE FROM imsi_apn_ips "
+            "WHERE imsi IN (SELECT imsi FROM imsi2sim WHERE sim_id = $1::uuid)",
+            sim_id,
+        )
+    else:
+        await conn.execute(
+            "DELETE FROM sim_apn_ips WHERE sim_id = $1::uuid",
+            sim_id,
+        )
+
+
 @router.patch("/profiles/{sim_id}", dependencies=[Depends(require_auth)])
-async def patch_profile(sim_id: uuid.UUID, body: ProfilePatch, conn=Depends(get_conn)):
+async def patch_profile(
+    sim_id: uuid.UUID,
+    body: ProfilePatch,
+    force: bool = Query(False, description="Allow ip_resolution change that orphans existing rows; orphans are deleted in the same transaction"),
+    conn=Depends(get_conn),
+):
     existing = await conn.fetchrow(
-        "SELECT sim_id FROM sim_profiles WHERE sim_id = $1::uuid", sim_id
+        "SELECT sim_id, ip_resolution FROM sim_profiles WHERE sim_id = $1::uuid", sim_id
     )
     if not existing:
         raise HTTPException(
             status_code=404,
             detail={"error": "not_found", "resource": "subscriber_profile", "sim_id": str(sim_id)},
         )
+    current_ip_resolution = existing["ip_resolution"]
 
     updates = []
     params = []
     idx = 1
+    orphans_to_clean: Optional[tuple[str, str]] = None
 
     if body.iccid is not None:
         if body.iccid and not ICCID_RE.match(body.iccid):
@@ -602,20 +688,26 @@ async def patch_profile(sim_id: uuid.UUID, body: ProfilePatch, conn=Depends(get_
     if body.ip_resolution is not None:
         if body.ip_resolution not in IP_RES_VALUES:
             _val_err("ip_resolution", f"must be one of {IP_RES_VALUES}")
-        # When switching to APN-sensitive mode, verify existing IMSIs have specific-APN entries
-        if body.ip_resolution in ("imsi_apn",):
-            has_apn = await conn.fetchval(
-                """
-                SELECT EXISTS(
-                    SELECT 1 FROM imsi_apn_ips sa
-                    JOIN imsi2sim si ON si.imsi = sa.imsi
-                    WHERE si.sim_id = $1::uuid AND sa.apn IS NOT NULL
-                )
-                """,
-                sim_id,
+        # Orphan-row guard: changing ip_resolution leaves rows in the previous mode's
+        # table that the fast-path resolver can no longer match (Resolver.cpp:35–106).
+        # See plan-02-database.md "ip_resolution conversion safety".
+        if body.ip_resolution != current_ip_resolution:
+            orphan_count = await _count_ip_resolution_orphans(
+                conn, sim_id, current_ip_resolution, body.ip_resolution
             )
-            if not has_apn:
-                _val_err("ip_resolution", "switching to imsi_apn requires existing APN-specific apn_ips entries")
+            if orphan_count and not force:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "mode_conversion_orphans_rows",
+                        "from": current_ip_resolution,
+                        "to": body.ip_resolution,
+                        "orphaned_count": orphan_count,
+                        "hint": "set ?force=true to proceed; orphaned rows will be deleted in the same transaction",
+                    },
+                )
+            if orphan_count and force:
+                orphans_to_clean = (current_ip_resolution, body.ip_resolution)
         updates.append(f"ip_resolution = ${idx}")
         params.append(body.ip_resolution)
         idx += 1
@@ -628,10 +720,15 @@ async def patch_profile(sim_id: uuid.UUID, body: ProfilePatch, conn=Depends(get_
     if updates:
         updates.append("updated_at = now()")
         params.append(sim_id)
-        await conn.execute(
-            f"UPDATE sim_profiles SET {', '.join(updates)} WHERE sim_id = ${idx}::uuid",
-            *params,
-        )
+        async with conn.transaction():
+            if orphans_to_clean is not None:
+                await _delete_ip_resolution_orphans(
+                    conn, sim_id, orphans_to_clean[0], orphans_to_clean[1]
+                )
+            await conn.execute(
+                f"UPDATE sim_profiles SET {', '.join(updates)} WHERE sim_id = ${idx}::uuid",
+                *params,
+            )
 
     # Handle iccid_ips update
     if body.iccid_ips is not None:

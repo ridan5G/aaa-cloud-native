@@ -252,6 +252,31 @@ This prevents inconsistency where different IMSI slots on the same physical card
 conflicting resolution modes. The API rejects any child slot addition or update whose
 `ip_resolution` differs from its parent `iccid_range_configs` row.
 
+**`ip_resolution` conversion safety (per-profile):**
+
+`sim_profiles.ip_resolution` is set at first-connection from the controlling
+`range_config` and is **never updated by changing the range config afterwards**
+— a `PATCH /range-configs/{id}` only affects future first-connections within
+that range. Existing profiles keep the mode they were born with.
+
+The dangerous mutation is changing `sim_profiles.ip_resolution` directly via
+`PATCH /profiles/{sim_id}`. The fast-path resolver (Resolver.cpp:35–106)
+dispatches on this column and only matches rows that fit the new mode's shape:
+the `imsi`/`iccid` resolvers look for `apn IS NULL`, the `*_apn` resolvers look
+for an exact APN match (with a NULL fallback). Rows that fit the **previous**
+mode become silent orphans — the resolver walks past them and returns
+`NotFound` for live subscribers.
+
+To prevent this, `PATCH /profiles/{sim_id}` rejects an `ip_resolution` change
+that would orphan rows with a 409 `mode_conversion_orphans_rows`. Pass
+`?force=true` to override; the orphaned rows are then deleted in the same
+transaction as the `UPDATE sim_profiles SET ip_resolution = ...` so the
+resolver invariant ("rows in `imsi_apn_ips`/`sim_apn_ips` always fit the
+profile's current mode") holds across the change. Bulk imports via
+`POST /profiles/bulk` use `INSERT ... ON CONFLICT ... SET ip_resolution = EXCLUDED.ip_resolution`
+and bypass this guard — admins must clean up the previous mode's rows
+themselves before re-importing in a new mode.
+
 ```sql
 CREATE TABLE iccid_range_configs (
     id              BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
