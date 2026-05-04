@@ -91,13 +91,18 @@ aaa-lookup-service:
     pullPolicy: Never
   db:
     secretName: aaa-db-credentials
-    poolSize: 25
+    poolSize: 10            # was 25 — 3 replicas × 10 = 30 matches per-PgBouncer-instance default_pool_size (line 70)
     timeoutSec: "2.0"
   jwt:
     skipVerify: "true"
   provisioningUrl: "http://aaa-platform-subscriber-profile-api:8080"
+  tuning:
+    threadCount: 1          # pin one Drogon event loop per pod (was unset → 0 = host logical CPUs, ignores cgroup limit)
   autoscaling:
-    enabled: false
+    enabled: true           # was false — honour priority of horizontal scale-out
+    minReplicas: 3
+    maxReplicas: 6          # 6 × 10 = 60 client conns; 3 PgBouncer instances × 30 absorb cleanly
+    targetCPUUtilizationPercentage: 70
   podDisruptionBudget:
     minAvailable: 2
   affinity:
@@ -107,10 +112,10 @@ aaa-lookup-service:
     enabled: true
   resources:
     requests:
-      cpu: "500m"
+      cpu: "250m"           # was 500m — matches per-pod active CPU when traffic is spread across ≥3 replicas
       memory: "128Mi"
     limits:
-      cpu: "2"
+      cpu: "500m"           # was 2 — 2× burst over request, not 4×; horizontal scale-out absorbs the rest
       memory: "256Mi"
 
 # ── Provisioning API ─────────────────────────────────────────────
@@ -200,11 +205,14 @@ aaa-radius-server:
   radiusSecret:
     secretName: "aaa-radius-secret"
   lookupUrl: "http://aaa-platform-aaa-lookup-service:8081"
-  workerThreads: 64
+  workerThreads: 16    # was 64 — at 600 RPS × 15ms lookup p99 ≈ 9 concurrent; 16 gives ~75% headroom and ~32 MB stacks fit cleanly in 128Mi
   service:
     type: LoadBalancer  # cloud NLB (AWS NLB / GCP UDP LB) or MetalLB on-prem assigns external IP
   autoscaling:
-    enabled: false
+    enabled: true       # was false — honour priority of horizontal scale-out
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
   podDisruptionBudget:
     minAvailable: 1
   affinity:
@@ -214,10 +222,10 @@ aaa-radius-server:
     enabled: true
   resources:
     requests:
-      cpu: "250m"
+      cpu: "100m"           # was 250m — workers mostly block on lookup HTTP, very little active CPU per pod
       memory: "64Mi"
     limits:
-      cpu: "1"
+      cpu: "250m"           # was 1 — 2.5× burst over request, not 4×; horizontal scale-out absorbs the rest
       memory: "128Mi"
 
 # ── Prometheus + Grafana (kube-prometheus-stack) ──────────────────

@@ -65,30 +65,35 @@ aaa-database:
 # ── AAA Lookup Service ────────────────────────────────────────────
 aaa-lookup-service:
   enabled: true
-  replicaCount: 1
+  replicaCount: 3        # was 1 — multi-replica baseline; HPA scales up from here
   image:
     repository: aaa/aaa-lookup-service
     tag: "dev"
     pullPolicy: Never
   db:
     secretName: aaa-db-credentials
-    poolSize: 25          # was 8 — at 600 RPS × 5ms/query = 3 needed; 25 gives headroom for bursts
+    poolSize: 10          # was 25 — 3 replicas × 10 = 30 matches PgBouncer default_pool_size (line 48)
     timeoutSec: "2.0"     # slightly more generous under load
   jwt:
     skipVerify: "true"   # no JWT enforcement in dev
   provisioningUrl: "http://aaa-platform-subscriber-profile-api:8080"
+  tuning:
+    threadCount: 1       # pin one Drogon event loop per pod (was unset → 0 = host logical CPUs, ignores cgroup limit)
   autoscaling:
-    enabled: false       # fixed 1 replica
+    enabled: true        # was false — honour priority of horizontal scale-out
+    minReplicas: 3
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
   podDisruptionBudget:
-    minAvailable: 0      # allow full eviction on single replica
+    minAvailable: 1      # was 0 — keep ≥1 pod up during voluntary evictions
   monitoring:
     enabled: true
   resources:
     requests:
-      cpu: "500m"
+      cpu: "250m"        # was 500m — matches per-pod active CPU when traffic is spread across ≥3 replicas
       memory: "128Mi"
     limits:
-      cpu: "2"           # was 500m — Drogon is async/multi-threaded; needs headroom for 600 RPS
+      cpu: "500m"        # was 2 — 2× burst over request, not 4×; horizontal scale-out absorbs the rest
       memory: "256Mi"
 
 # ── Provisioning API ─────────────────────────────────────────────
@@ -164,9 +169,9 @@ aaa-management-ui:
 # ── RADIUS Server ────────────────────────────────────────────────
 aaa-radius-server:
   enabled: true
-  replicaCount: 1
+  replicaCount: 2        # was 1 — multi-replica baseline
   podDisruptionBudget:
-    minAvailable: 0      # allow full eviction on single replica
+    minAvailable: 1      # was 0 — keep ≥1 pod up during voluntary evictions
   image:
     repository: aaa/aaa-radius-server
     tag: "dev"
@@ -175,9 +180,12 @@ aaa-radius-server:
     secretName: "aaa-radius-secret"   # created by: make radius-secret (called automatically by make deploy)
   lookupUrl: "http://aaa-platform-aaa-lookup-service:8081"
   # lookupUrlSecondary: ""   # set to secondary-region URL to enable failover
-  workerThreads: 64    # was 16 — at 600 RPS × 10ms expected RTT = 6 in-flight; 64 gives 10× headroom
+  workerThreads: 16    # was 64 — at 600 RPS × 15ms lookup p99 ≈ 9 concurrent; 16 gives ~75% headroom and ~32 MB stacks fit cleanly in 128Mi
   autoscaling:
-    enabled: false
+    enabled: true      # was false — honour priority of horizontal scale-out
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
   monitoring:
     enabled: true
   service:
@@ -185,10 +193,10 @@ aaa-radius-server:
     nodePort: 31812     # UDP 1812 → localhost:31812 on Docker Desktop; from WSL: <windows-host-ip>:31812
   resources:
     requests:
-      cpu: "250m"
+      cpu: "100m"        # was 250m — workers mostly block on lookup HTTP, very little active CPU per pod
       memory: "64Mi"
     limits:
-      cpu: "1"           # was 300m — 4 workers on 0.3 cores was the primary saturation point
+      cpu: "250m"        # was 1 — 2.5× burst over request, not 4×; horizontal scale-out absorbs the rest
       memory: "128Mi"
 
 # ── Prometheus + Grafana (kube-prometheus-stack) ──────────────────
