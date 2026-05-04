@@ -1,0 +1,148 @@
+{{/*
+  alertmanager-zabbix-webhook.yaml
+  ─────────────────────────────────────────────────────────────────────────────
+  Bridge that receives Alertmanager webhooks and forwards them to an external
+  Zabbix server via the zabbix_sender protocol (TCP/10051 by default).
+
+  Wired by `kube-prometheus-stack.alertmanager.config.receivers[zabbix]` in
+  values.yaml. Alertmanager POSTs to http://aaa-zabbix-bridge:<port>/alerts.
+
+  Operator prerequisites (out-of-band — not templated):
+    1. Create the Secret with target Zabbix coordinates:
+         kubectl create secret generic aaa-zabbix-bridge-credentials \
+           --from-literal=ZABBIX_SERVER_HOST=zabbix.ops.example.com \
+           --from-literal=ZABBIX_SERVER_PORT=10051 \
+           --from-literal=ZABBIX_TARGET_HOST=aaa-cloud-native-prod \
+           -n <release-namespace>
+    2. In Zabbix UI, create one trapper item per alertname on the target host.
+       Default key format:  prometheus.alert[<AlertName>]
+       Type: Zabbix trapper, Type of information: Text.
+
+  Disabled by default — enabled in production via values.yaml override.
+*/}}
+{{- if .Values.alertmanagerZabbixWebhook.enabled }}
+{{- $svcName := "aaa-zabbix-bridge" -}}
+{{- $port := .Values.alertmanagerZabbixWebhook.service.port | int -}}
+{{- $secretName := .Values.alertmanagerZabbixWebhook.secretName -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $svcName }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ $svcName }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+data:
+  zabbix.yaml: |
+    # gmauleon/alertmanager-zabbix-webhook config schema.
+    # Server address is injected at runtime from the Secret via env-var
+    # substitution in the entrypoint; listen address is fixed.
+    listen_address: 0.0.0.0:{{ $port }}
+    queue_capacity: 500
+    zabbix_keys_prefix: {{ .Values.alertmanagerZabbixWebhook.config.keysPrefix | quote }}
+    # host_annotation lets a PrometheusRule override the Zabbix host per-alert
+    # by adding `annotations: { zabbix_host: <host> }`. Otherwise host_default
+    # (sourced from the Secret as ZABBIX_TARGET_HOST) is used.
+    host_annotation: zabbix_host
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $svcName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ $svcName }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ $svcName }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: webhook
+      port: {{ $port }}
+      targetPort: webhook
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $svcName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ $svcName }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $svcName }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ $svcName }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+      annotations:
+        # Force pod restart when bridge config (and thus the ConfigMap) changes.
+        # Hashing the values block avoids recursion that would occur if we
+        # tried to `include` this same template (Deployment + ConfigMap live
+        # in the same file).
+        checksum/config: {{ .Values.alertmanagerZabbixWebhook | toYaml | sha256sum }}
+    spec:
+      containers:
+        - name: webhook
+          image: "{{ .Values.alertmanagerZabbixWebhook.image.repository }}:{{ .Values.alertmanagerZabbixWebhook.image.tag }}"
+          imagePullPolicy: {{ .Values.alertmanagerZabbixWebhook.image.pullPolicy | default "IfNotPresent" }}
+          args:
+            - --config=/config/zabbix.yaml
+          env:
+            - name: ZABBIX_SERVER_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: ZABBIX_SERVER_HOST
+            - name: ZABBIX_SERVER_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: ZABBIX_SERVER_PORT
+            - name: ZABBIX_TARGET_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: ZABBIX_TARGET_HOST
+            # Bridge reads these in addition to the config file (gmauleon image
+            # supports env-var overrides for connection coords).
+            - name: ZABBIX_SERVER
+              value: "$(ZABBIX_SERVER_HOST):$(ZABBIX_SERVER_PORT)"
+            - name: HOST_DEFAULT
+              value: "$(ZABBIX_TARGET_HOST)"
+          ports:
+            - name: webhook
+              containerPort: {{ $port }}
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: webhook
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: webhook
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.alertmanagerZabbixWebhook.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $svcName }}-config
+{{- end }}
