@@ -307,6 +307,22 @@ kube-prometheus-stack:
     enabled: false
   kubeStateMetrics:
     enabled: true
+  prometheusOperator:
+    resources:
+      requests:
+        cpu: "25m"
+        memory: "64Mi"
+      limits:
+        cpu: "100m"
+        memory: "128Mi"
+  kube-state-metrics:
+    resources:
+      requests:
+        cpu: "25m"
+        memory: "64Mi"
+      limits:
+        cpu: "100m"
+        memory: "128Mi"
 
 # ── Prometheus Pushgateway ─────────────────────────────────────────
 prometheus-pushgateway:
