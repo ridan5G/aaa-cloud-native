@@ -65,14 +65,14 @@ aaa-database:
 # ── AAA Lookup Service ────────────────────────────────────────────
 aaa-lookup-service:
   enabled: true
-  replicaCount: 3        # was 1 — multi-replica baseline; HPA scales up from here
+  replicaCount: 1        # single-replica local dev
   image:
     repository: aaa/aaa-lookup-service
     tag: "dev"
     pullPolicy: Never
   db:
     secretName: aaa-db-credentials
-    poolSize: 10          # was 25 — 3 replicas × 10 = 30 matches PgBouncer default_pool_size (line 48)
+    poolSize: 25          # at 600 RPS × 5ms/query = 3 needed; 25 gives headroom for bursts on a single replica
     timeoutSec: "2.0"     # slightly more generous under load
   jwt:
     skipVerify: "true"   # no JWT enforcement in dev
@@ -80,20 +80,17 @@ aaa-lookup-service:
   tuning:
     threadCount: 1       # pin one Drogon event loop per pod (was unset → 0 = host logical CPUs, ignores cgroup limit)
   autoscaling:
-    enabled: true        # was false — honour priority of horizontal scale-out
-    minReplicas: 3
-    maxReplicas: 6
-    targetCPUUtilizationPercentage: 70
+    enabled: false       # fixed 1 replica in dev
   podDisruptionBudget:
-    minAvailable: 1      # was 0 — keep ≥1 pod up during voluntary evictions
+    minAvailable: 0      # allow full eviction on single replica
   monitoring:
     enabled: true
   resources:
     requests:
-      cpu: "250m"        # was 500m — matches per-pod active CPU when traffic is spread across ≥3 replicas
+      cpu: "250m"        # was 500m — matches active CPU on the I/O-bound lookup path
       memory: "128Mi"
     limits:
-      cpu: "500m"        # was 2 — 2× burst over request, not 4×; horizontal scale-out absorbs the rest
+      cpu: "500m"        # was 2 — 2× burst over request; one async event loop saturates well under 500m
       memory: "256Mi"
 
 # ── Provisioning API ─────────────────────────────────────────────
@@ -169,9 +166,9 @@ aaa-management-ui:
 # ── RADIUS Server ────────────────────────────────────────────────
 aaa-radius-server:
   enabled: true
-  replicaCount: 2        # was 1 — multi-replica baseline
+  replicaCount: 1        # single-replica local dev
   podDisruptionBudget:
-    minAvailable: 1      # was 0 — keep ≥1 pod up during voluntary evictions
+    minAvailable: 0      # allow full eviction on single replica
   image:
     repository: aaa/aaa-radius-server
     tag: "dev"
@@ -182,10 +179,7 @@ aaa-radius-server:
   # lookupUrlSecondary: ""   # set to secondary-region URL to enable failover
   workerThreads: 16    # was 64 — at 600 RPS × 15ms lookup p99 ≈ 9 concurrent; 16 gives ~75% headroom and ~32 MB stacks fit cleanly in 128Mi
   autoscaling:
-    enabled: true      # was false — honour priority of horizontal scale-out
-    minReplicas: 2
-    maxReplicas: 4
-    targetCPUUtilizationPercentage: 70
+    enabled: false     # fixed 1 replica in dev
   monitoring:
     enabled: true
   service:
@@ -196,7 +190,7 @@ aaa-radius-server:
       cpu: "100m"        # was 250m — workers mostly block on lookup HTTP, very little active CPU per pod
       memory: "64Mi"
     limits:
-      cpu: "250m"        # was 1 — 2.5× burst over request, not 4×; horizontal scale-out absorbs the rest
+      cpu: "250m"        # was 1 — 2.5× burst over request; matches actual concurrency need at 16 workers
       memory: "128Mi"
 
 # ── Prometheus + Grafana (kube-prometheus-stack) ──────────────────
