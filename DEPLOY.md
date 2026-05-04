@@ -168,6 +168,135 @@ kubectl cp aaa-platform/$POD:/app/results ./results
 
 ---
 
+## Alerting → Zabbix
+
+Production deployments forward all Prometheus alerts to an **external Zabbix
+server** via an in-cluster bridge. The 26 PrometheusRule alerts in
+[`charts/aaa-platform/templates/prometheus-rules.yaml`](charts/aaa-platform/templates/prometheus-rules.yaml)
+remain the source of truth; Zabbix handles notification, dedup, and
+escalation downstream.
+
+### Flow
+
+```
+PrometheusRule  ──►  Alertmanager  ──►  aaa-zabbix-bridge (Deployment)
+                       (in-cluster)        │  zabbix_sender protocol
+                                           ▼  TCP/10051
+                                       External Zabbix server
+                                           │  trapper item
+                                           ▼  prometheus.alert[<AlertName>]
+                                       Zabbix triggers / actions
+```
+
+The bridge is a small webhook receiver
+(`gmauleon/alertmanager-zabbix-webhook`) that translates Alertmanager JSON
+payloads into Zabbix trapper protocol packets.
+
+### Step 1 — Create the credentials Secret
+
+Connection coordinates are passed via a Secret (not committed). Set the
+hostname and target Zabbix host appropriately:
+
+```bash
+kubectl create secret generic aaa-zabbix-bridge-credentials \
+  --from-literal=ZABBIX_SERVER_HOST=zabbix.ops.example.com \
+  --from-literal=ZABBIX_SERVER_PORT=10051 \
+  --from-literal=ZABBIX_TARGET_HOST=aaa-cloud-native-prod \
+  -n aaa-platform
+```
+
+`ZABBIX_TARGET_HOST` must match the hostname of an existing host entity in
+the Zabbix UI — the bridge does not create hosts.
+
+### Step 2 — Create trapper items in Zabbix
+
+For each alertname expected to fire, create a trapper item on the target
+host:
+
+| Field | Value |
+|---|---|
+| Type | Zabbix trapper |
+| Key | `prometheus.alert[<AlertName>]` (e.g. `prometheus.alert[PoolExhausted]`) |
+| Type of information | Text |
+| History storage period | as per site policy (e.g. 31d) |
+
+Define triggers/actions in Zabbix using these items. The 26 alertnames
+shipped with this chart are listed in `prometheus-rules.yaml` (groups
+`aaa.pool`, `aaa.first_connection`, `aaa.lookup`, `aaa.radius`, `aaa.ui`,
+`aaa.postgres`).
+
+### Step 3 — Enable in production
+
+Already enabled by default in [`values.yaml`](charts/aaa-platform/values.yaml):
+
+```yaml
+alertmanagerZabbixWebhook:
+  enabled: true
+```
+
+`make deploy` (with the prod values file) will roll out the bridge
+Deployment, Service, and ConfigMap into the release namespace.
+
+### Step 4 — Verify
+
+```bash
+# 1. Bridge pod up and reachable
+kubectl get deploy aaa-zabbix-bridge -n aaa-platform
+kubectl logs -n aaa-platform deploy/aaa-zabbix-bridge -f
+#   expect: listening on :10052 ; zabbix server reachable
+
+# 2. Alertmanager has the receiver wired
+kubectl port-forward -n aaa-platform svc/alertmanager-operated 9093:9093
+#   browse http://localhost:9093 → Status → check the `zabbix` receiver
+
+# 3. Force an alert (easy: scale lookup-service to 0, wait 10m for
+#    LookupServiceNoTraffic). Watch the bridge logs and confirm the
+#    matching trapper item updates in Zabbix → Latest data.
+
+# 4. Resolve path: scale back up → Alertmanager sends a `resolved`
+#    payload (send_resolved: true) → bridge writes the resolved value
+#    to the same Zabbix item.
+```
+
+### Per-alert host override
+
+To route a specific alert to a non-default Zabbix host, add a
+`zabbix_host` annotation to the rule:
+
+```yaml
+- alert: PostgresPrimaryDown
+  expr: ...
+  labels:
+    severity: critical
+  annotations:
+    summary: ...
+    zabbix_host: aaa-postgres-prod   # overrides ZABBIX_TARGET_HOST
+```
+
+### Disabling
+
+Per-environment override — already disabled in dev/HA. To disable in prod:
+
+```yaml
+# values.yaml
+alertmanagerZabbixWebhook:
+  enabled: false
+```
+
+The bridge resources are entirely removed; alerts continue to fire inside
+Prometheus but are not forwarded.
+
+### Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| Bridge pod CrashLoop on start | Config schema mismatch with image revision — drop `--config` arg and rely on `ZABBIX_SERVER`/`HOST_DEFAULT` env vars (both set by the Deployment) |
+| Alerts visible in Alertmanager UI but never reach Zabbix | Trapper item not created in Zabbix (key mismatch), or NetworkPolicy blocking egress on TCP/10051 |
+| `host_default` errors in bridge logs | Target host string in Secret does not match a host entity in Zabbix — host names are case-sensitive |
+| Alerts fire but never resolve in Zabbix | `send_resolved: true` missing on receiver, or trapper item value type can't represent both states — use Text |
+
+---
+
 ## Day-2 operations
 
 ### Redeploy a single service after a code change
@@ -227,6 +356,7 @@ kubectl delete pvc -n aaa-platform --all
 | `aaa-db-credentials` | `aaa-database` chart | `username`, `password`, `database`, `host-rw`, `host-ro`, `port`, `uri-rw`, `uri-ro` | `aaa-lookup-service`, `subscriber-profile-api` |
 | `aaa-test-jwt` | `make test-secret` | `token` | `aaa-regression-tester` |
 | `aaa-postgres-app` | CloudNativePG (auto-generated) | `uri`, `host`, `port`, `user`, `password` | internal |
+| `aaa-zabbix-bridge-credentials` | manual `kubectl create secret` (prod only) | `ZABBIX_SERVER_HOST`, `ZABBIX_SERVER_PORT`, `ZABBIX_TARGET_HOST` | `aaa-zabbix-bridge` (Alertmanager → Zabbix forwarder) |
 
 ---
 
