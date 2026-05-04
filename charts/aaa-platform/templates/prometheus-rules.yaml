@@ -23,6 +23,8 @@ metadata:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
     # Must match kube-prometheus-stack Prometheus ruleSelector
     release: {{ .Release.Name }}
+{{- /* Management UI host — used to deep-link from pool alerts. Empty when ingress is disabled, in which case the link line is omitted. */}}
+{{- $uiHost := (index .Values "aaa-management-ui" "ingress" "host") | default "" }}
 spec:
   groups:
 
@@ -50,6 +52,9 @@ spec:
               New SIM connections to this pool are rejected with 503 until
               capacity is added. Expand by adding a subnet:
               POST /v1/pools/{{ "{{ $labels.pool_id }}" }}/subnets
+              {{- if $uiHost }}
+              See pool details: http://{{ $uiHost }}/pools/{{ "{{ $labels.pool_id }}" }}
+              {{- end }}
 
         - alert: PoolUtilizationWarning
           expr: |
@@ -67,6 +72,9 @@ spec:
               is at {{ "{{ $value | humanizePercentage }}" }} utilization. Plan to
               expand soon by adding a subnet:
               POST /v1/pools/{{ "{{ $labels.pool_id }}" }}/subnets
+              {{- if $uiHost }}
+              See pool details: http://{{ $uiHost }}/pools/{{ "{{ $labels.pool_id }}" }}
+              {{- end }}
 
         - alert: PoolUtilizationCritical
           expr: |
@@ -84,6 +92,9 @@ spec:
               is at {{ "{{ $value | humanizePercentage }}" }} utilization and will
               be exhausted soon. Add a subnet now:
               POST /v1/pools/{{ "{{ $labels.pool_id }}" }}/subnets
+              {{- if $uiHost }}
+              See pool details: http://{{ $uiHost }}/pools/{{ "{{ $labels.pool_id }}" }}
+              {{- end }}
 
         - alert: PoolMetricsStale
           expr: |
