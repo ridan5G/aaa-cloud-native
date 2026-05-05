@@ -1,0 +1,2767 @@
+openapi: 3.1.0
+info:
+  title: subscriber-profile-api
+  description: 'Provisioning REST API for the AAA cloud-native platform. Manages SIM profiles,
+
+    IMSIs, IP pools, routing domains, and IMSI/ICCID range configurations, and
+
+    exposes async bulk import/release/delete jobs. Used by operators, BSS/OSS
+
+    systems, the management UI, and `aaa-radius-server` (first-connection
+
+    fallback). Auth is OAuth 2.0 client_credentials Bearer JWT.'
+  contact:
+    name: AAA Platform Team
+  version: 1.0.0
+paths:
+  /health:
+    get:
+      tags:
+      - health
+      summary: Liveness
+      operationId: liveness_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /health/db:
+    get:
+      tags:
+      - health
+      summary: Readiness
+      operationId: readiness_health_db_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /v1/routing-domains:
+    post:
+      tags:
+      - routing-domains
+      summary: Create Routing Domain
+      operationId: create_routing_domain_v1_routing_domains_post
+      parameters:
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoutingDomainCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    get:
+      tags:
+      - routing-domains
+      summary: List Routing Domains
+      operationId: list_routing_domains_v1_routing_domains_get
+      parameters:
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          default: 1
+          title: Page
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 1000
+          minimum: 1
+          default: 100
+          title: Limit
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/routing-domains/{domain_id}:
+    get:
+      tags:
+      - routing-domains
+      summary: Get Routing Domain
+      operationId: get_routing_domain_v1_routing_domains__domain_id__get
+      parameters:
+      - name: domain_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Domain Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      tags:
+      - routing-domains
+      summary: Patch Routing Domain
+      operationId: patch_routing_domain_v1_routing_domains__domain_id__patch
+      parameters:
+      - name: domain_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Domain Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoutingDomainPatch'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - routing-domains
+      summary: Delete Routing Domain
+      operationId: delete_routing_domain_v1_routing_domains__domain_id__delete
+      parameters:
+      - name: domain_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Domain Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/routing-domains/{domain_id}/suggest-cidr:
+    get:
+      tags:
+      - routing-domains
+      summary: Suggest Cidr
+      description: 'Find the smallest available CIDR block in this routing domain that provides
+
+        at least `size` usable host IPs and does not overlap any existing pool.
+
+
+        Requires at least one entry in the domain''s `allowed_prefixes` to define
+
+        the search space (returns 422 if allowed_prefixes is empty).'
+      operationId: suggest_cidr_v1_routing_domains__domain_id__suggest_cidr_get
+      parameters:
+      - name: domain_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Domain Id
+      - name: size
+        in: query
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+          description: Minimum number of usable host IPs required
+          title: Size
+        description: Minimum number of usable host IPs required
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/pools:
+    post:
+      tags:
+      - pools
+      summary: Create Pool
+      operationId: create_pool_v1_pools_post
+      parameters:
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PoolCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    get:
+      tags:
+      - pools
+      summary: List Pools
+      operationId: list_pools_v1_pools_get
+      parameters:
+      - name: account_name
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Account Name
+      - name: routing_domain
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Routing Domain
+      - name: routing_domain_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Routing Domain Id
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          default: 1
+          title: Page
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 1000
+          minimum: 1
+          default: 100
+          title: Limit
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/pools/{pool_id}/subnets:
+    post:
+      tags:
+      - pools
+      summary: Add Pool Subnet
+      operationId: add_pool_subnet_v1_pools__pool_id__subnets_post
+      parameters:
+      - name: pool_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Pool Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PoolSubnetCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    get:
+      tags:
+      - pools
+      summary: List Pool Subnets
+      operationId: list_pool_subnets_v1_pools__pool_id__subnets_get
+      parameters:
+      - name: pool_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Pool Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/pools/{pool_id}/subnets/{subnet_id}:
+    delete:
+      tags:
+      - pools
+      summary: Delete Pool Subnet
+      operationId: delete_pool_subnet_v1_pools__pool_id__subnets__subnet_id__delete
+      parameters:
+      - name: pool_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Pool Id
+      - name: subnet_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Subnet Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/pools/{pool_id}:
+    get:
+      tags:
+      - pools
+      summary: Get Pool
+      operationId: get_pool_v1_pools__pool_id__get
+      parameters:
+      - name: pool_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Pool Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      tags:
+      - pools
+      summary: Patch Pool
+      operationId: patch_pool_v1_pools__pool_id__patch
+      parameters:
+      - name: pool_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Pool Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PoolPatch'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - pools
+      summary: Delete Pool
+      operationId: delete_pool_v1_pools__pool_id__delete
+      parameters:
+      - name: pool_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Pool Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/pools/{pool_id}/stats:
+    get:
+      tags:
+      - pools
+      summary: Get Pool Stats
+      operationId: get_pool_stats_v1_pools__pool_id__stats_get
+      parameters:
+      - name: pool_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Pool Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/range-configs:
+    post:
+      tags:
+      - range-configs
+      summary: Create Range Config
+      operationId: create_range_config_v1_range_configs_post
+      parameters:
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RangeConfigCreate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    get:
+      tags:
+      - range-configs
+      summary: List Range Configs
+      operationId: list_range_configs_v1_range_configs_get
+      parameters:
+      - name: account_name
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Account Name
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+      - name: pool_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Pool Id
+      - name: ip_resolution
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ip Resolution
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/range-configs/{config_id}:
+    get:
+      tags:
+      - range-configs
+      summary: Get Range Config
+      operationId: get_range_config_v1_range_configs__config_id__get
+      parameters:
+      - name: config_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Config Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      tags:
+      - range-configs
+      summary: Patch Range Config
+      operationId: patch_range_config_v1_range_configs__config_id__patch
+      parameters:
+      - name: config_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Config Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RangeConfigPatch'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - range-configs
+      summary: Delete Range Config
+      operationId: delete_range_config_v1_range_configs__config_id__delete
+      parameters:
+      - name: config_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Config Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/range-configs/{config_id}/apn-pools:
+    get:
+      tags:
+      - range-configs
+      summary: List Apn Pools
+      operationId: list_apn_pools_v1_range_configs__config_id__apn_pools_get
+      parameters:
+      - name: config_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Config Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - range-configs
+      summary: Create Apn Pool
+      operationId: create_apn_pool_v1_range_configs__config_id__apn_pools_post
+      parameters:
+      - name: config_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Config Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApnPoolCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/range-configs/{config_id}/apn-pools/{apn}:
+    delete:
+      tags:
+      - range-configs
+      summary: Delete Apn Pool
+      operationId: delete_apn_pool_v1_range_configs__config_id__apn_pools__apn__delete
+      parameters:
+      - name: config_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Config Id
+      - name: apn
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Apn
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/iccid-range-configs:
+    post:
+      tags:
+      - iccid-range-configs
+      summary: Create Iccid Range Config
+      operationId: create_iccid_range_config_v1_iccid_range_configs_post
+      parameters:
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IccidRangeCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    get:
+      tags:
+      - iccid-range-configs
+      summary: List Iccid Range Configs
+      operationId: list_iccid_range_configs_v1_iccid_range_configs_get
+      parameters:
+      - name: account_name
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Account Name
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+      - name: pool_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Pool Id
+      - name: ip_resolution
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ip Resolution
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/iccid-range-configs/{config_id}:
+    get:
+      tags:
+      - iccid-range-configs
+      summary: Get Iccid Range Config
+      operationId: get_iccid_range_config_v1_iccid_range_configs__config_id__get
+      parameters:
+      - name: config_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Config Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      tags:
+      - iccid-range-configs
+      summary: Patch Iccid Range Config
+      operationId: patch_iccid_range_config_v1_iccid_range_configs__config_id__patch
+      parameters:
+      - name: config_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Config Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IccidRangePatch'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - iccid-range-configs
+      summary: Delete Iccid Range Config
+      operationId: delete_iccid_range_config_v1_iccid_range_configs__config_id__delete
+      parameters:
+      - name: config_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Config Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/iccid-range-configs/{config_id}/imsi-slots:
+    get:
+      tags:
+      - iccid-range-configs
+      summary: List Imsi Slots
+      operationId: list_imsi_slots_v1_iccid_range_configs__config_id__imsi_slots_get
+      parameters:
+      - name: config_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Config Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - iccid-range-configs
+      summary: Add Imsi Slot
+      operationId: add_imsi_slot_v1_iccid_range_configs__config_id__imsi_slots_post
+      parameters:
+      - name: config_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Config Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImsiSlotCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/iccid-range-configs/{config_id}/imsi-slots/{slot}:
+    patch:
+      tags:
+      - iccid-range-configs
+      summary: Patch Imsi Slot
+      operationId: patch_imsi_slot_v1_iccid_range_configs__config_id__imsi_slots__slot__patch
+      parameters:
+      - name: config_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Config Id
+      - name: slot
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Slot
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImsiSlotPatch'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - iccid-range-configs
+      summary: Delete Imsi Slot
+      operationId: delete_imsi_slot_v1_iccid_range_configs__config_id__imsi_slots__slot__delete
+      parameters:
+      - name: config_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Config Id
+      - name: slot
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Slot
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/iccid-range-configs/{config_id}/imsi-slots/{slot}/apn-pools:
+    get:
+      tags:
+      - iccid-range-configs
+      summary: List Slot Apn Pools
+      operationId: list_slot_apn_pools_v1_iccid_range_configs__config_id__imsi_slots__slot__apn_pools_get
+      parameters:
+      - name: config_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Config Id
+      - name: slot
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Slot
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - iccid-range-configs
+      summary: Create Slot Apn Pool
+      operationId: create_slot_apn_pool_v1_iccid_range_configs__config_id__imsi_slots__slot__apn_pools_post
+      parameters:
+      - name: config_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Config Id
+      - name: slot
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Slot
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApnPoolCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/iccid-range-configs/{config_id}/imsi-slots/{slot}/apn-pools/{apn}:
+    delete:
+      tags:
+      - iccid-range-configs
+      summary: Delete Slot Apn Pool
+      operationId: delete_slot_apn_pool_v1_iccid_range_configs__config_id__imsi_slots__slot__apn_pools__apn__delete
+      parameters:
+      - name: config_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Config Id
+      - name: slot
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Slot
+      - name: apn
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Apn
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/profiles:
+    post:
+      tags:
+      - profiles
+      summary: Create Profile
+      operationId: create_profile_v1_profiles_post
+      parameters:
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfileCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    get:
+      tags:
+      - profiles
+      summary: List Profiles
+      operationId: list_profiles_v1_profiles_get
+      parameters:
+      - name: iccid
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Iccid
+      - name: imsi
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Imsi
+      - name: account_name
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Account Name
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+      - name: ip_resolution
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ip Resolution
+      - name: pool_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Pool Id
+      - name: imsi_prefix
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Imsi Prefix
+      - name: iccid_prefix
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Iccid Prefix
+      - name: ip
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ip
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          default: 1
+          title: Page
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 1000
+          minimum: 1
+          default: 100
+          title: Limit
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/profiles/accounts:
+    get:
+      tags:
+      - profiles
+      summary: List Profile Accounts
+      description: Return distinct non-null account names, sorted alphabetically.
+      operationId: list_profile_accounts_v1_profiles_accounts_get
+      parameters:
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/profiles/export:
+    get:
+      tags:
+      - profiles
+      summary: Export Profiles
+      description: Return all profiles with per-IMSI/APN rows in the bulk-import format.
+      operationId: export_profiles_v1_profiles_export_get
+      parameters:
+      - name: account_name
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Account Name
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+      - name: ip_resolution
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ip Resolution
+      - name: imsi_prefix
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Imsi Prefix
+      - name: iccid_prefix
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Iccid Prefix
+      - name: ip
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ip
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/profiles/{sim_id}:
+    get:
+      tags:
+      - profiles
+      summary: Get Profile
+      operationId: get_profile_v1_profiles__sim_id__get
+      parameters:
+      - name: sim_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Sim Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      tags:
+      - profiles
+      summary: Replace Profile
+      operationId: replace_profile_v1_profiles__sim_id__put
+      parameters:
+      - name: sim_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Sim Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfileCreate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      tags:
+      - profiles
+      summary: Patch Profile
+      operationId: patch_profile_v1_profiles__sim_id__patch
+      parameters:
+      - name: sim_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Sim Id
+      - name: force
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: Allow ip_resolution change that orphans existing rows; orphans are deleted in the same transaction
+          default: false
+          title: Force
+        description: Allow ip_resolution change that orphans existing rows; orphans are deleted in the same transaction
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfilePatch'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - profiles
+      summary: Delete Profile
+      operationId: delete_profile_v1_profiles__sim_id__delete
+      parameters:
+      - name: sim_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Sim Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/profiles/{sim_id}/release-ips:
+    post:
+      tags:
+      - profiles
+      summary: Release Ips
+      operationId: release_ips_v1_profiles__sim_id__release_ips_post
+      parameters:
+      - name: sim_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Sim Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/profiles/{sim_id}/imsis:
+    get:
+      tags:
+      - imsis
+      summary: List Imsis
+      operationId: list_imsis_v1_profiles__sim_id__imsis_get
+      parameters:
+      - name: sim_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Sim Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - imsis
+      summary: Add Imsi
+      operationId: add_imsi_v1_profiles__sim_id__imsis_post
+      parameters:
+      - name: sim_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Sim Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImsiCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/profiles/{sim_id}/imsis/{imsi}:
+    get:
+      tags:
+      - imsis
+      summary: Get Imsi
+      operationId: get_imsi_v1_profiles__sim_id__imsis__imsi__get
+      parameters:
+      - name: sim_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Sim Id
+      - name: imsi
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Imsi
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      tags:
+      - imsis
+      summary: Patch Imsi
+      operationId: patch_imsi_v1_profiles__sim_id__imsis__imsi__patch
+      parameters:
+      - name: sim_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Sim Id
+      - name: imsi
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Imsi
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImsiPatch'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - imsis
+      summary: Delete Imsi
+      operationId: delete_imsi_v1_profiles__sim_id__imsis__imsi__delete
+      parameters:
+      - name: sim_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Sim Id
+      - name: imsi
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Imsi
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/profiles/first-connection:
+    post:
+      tags:
+      - first-connection
+      summary: First Connection
+      operationId: first_connection_v1_profiles_first_connection_post
+      parameters:
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FirstConnectionRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/first-connection:
+    post:
+      tags:
+      - first-connection
+      summary: First Connection
+      operationId: first_connection_v1_first_connection_post
+      parameters:
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FirstConnectionRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/profiles/bulk-release-ips:
+    post:
+      tags:
+      - bulk
+      summary: Bulk Release Ips
+      operationId: bulk_release_ips_v1_profiles_bulk_release_ips_post
+      parameters:
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/imsis/bulk-delete:
+    post:
+      tags:
+      - bulk
+      summary: Bulk Delete Imsis
+      operationId: bulk_delete_imsis_v1_imsis_bulk_delete_post
+      parameters:
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/profiles/bulk:
+    post:
+      tags:
+      - bulk
+      summary: Bulk Upsert
+      operationId: bulk_upsert_v1_profiles_bulk_post
+      parameters:
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/jobs:
+    get:
+      tags:
+      - bulk
+      summary: List Jobs
+      operationId: list_jobs_v1_jobs_get
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 100
+          title: Limit
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/jobs/{job_id}:
+    get:
+      tags:
+      - bulk
+      summary: Get Job
+      operationId: get_job_v1_jobs__job_id__get
+      parameters:
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+          title: Job Id
+      - name: authorization
+        in: header
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Authorization
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+components:
+  schemas:
+    ApnIpEntry:
+      properties:
+        apn:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Apn
+        static_ip:
+          type: string
+          title: Static Ip
+        pool_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Pool Id
+        pool_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Pool Name
+      type: object
+      required:
+      - static_ip
+      title: ApnIpEntry
+    ApnPoolCreate:
+      properties:
+        apn:
+          type: string
+          title: Apn
+        pool_id:
+          type: string
+          title: Pool Id
+      type: object
+      required:
+      - apn
+      - pool_id
+      title: ApnPoolCreate
+    FirstConnectionRequest:
+      properties:
+        imsi:
+          type: string
+          title: Imsi
+        apn:
+          type: string
+          title: Apn
+        imei:
+          type: string
+          title: Imei
+          default: ''
+        use_case_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Use Case Id
+      type: object
+      required:
+      - imsi
+      - apn
+      title: FirstConnectionRequest
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    IccidIpEntry:
+      properties:
+        apn:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Apn
+        static_ip:
+          type: string
+          title: Static Ip
+        pool_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Pool Id
+        pool_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Pool Name
+      type: object
+      required:
+      - static_ip
+      title: IccidIpEntry
+    IccidRangeCreate:
+      properties:
+        account_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Account Name
+        f_iccid:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: F Iccid
+        t_iccid:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: T Iccid
+        pool_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Pool Id
+        ip_resolution:
+          type: string
+          title: Ip Resolution
+          default: imsi
+        imsi_count:
+          type: integer
+          title: Imsi Count
+          default: 1
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Description
+        status:
+          type: string
+          title: Status
+          default: active
+        provisioning_mode:
+          type: string
+          title: Provisioning Mode
+          default: first_connect
+      type: object
+      title: IccidRangeCreate
+    IccidRangePatch:
+      properties:
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Description
+        status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+        pool_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Pool Id
+      type: object
+      title: IccidRangePatch
+    ImsiCreate:
+      properties:
+        imsi:
+          type: string
+          title: Imsi
+        priority:
+          type: integer
+          title: Priority
+          default: 1
+        apn_ips:
+          items:
+            $ref: '#/components/schemas/ApnIpEntry'
+          type: array
+          title: Apn Ips
+          default: []
+      type: object
+      required:
+      - imsi
+      title: ImsiCreate
+    ImsiEntry:
+      properties:
+        imsi:
+          type: string
+          title: Imsi
+        priority:
+          type: integer
+          title: Priority
+          default: 1
+        apn_ips:
+          items:
+            $ref: '#/components/schemas/ApnIpEntry'
+          type: array
+          title: Apn Ips
+          default: []
+      type: object
+      required:
+      - imsi
+      title: ImsiEntry
+    ImsiPatch:
+      properties:
+        status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+        priority:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Priority
+        static_ip:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Static Ip
+        pool_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Pool Id
+        apn_ips:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/ApnIpEntry'
+            type: array
+          - type: 'null'
+          title: Apn Ips
+      type: object
+      title: ImsiPatch
+    ImsiSlotCreate:
+      properties:
+        f_imsi:
+          type: string
+          title: F Imsi
+        t_imsi:
+          type: string
+          title: T Imsi
+        pool_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Pool Id
+        ip_resolution:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ip Resolution
+        imsi_slot:
+          type: integer
+          title: Imsi Slot
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Description
+        status:
+          type: string
+          title: Status
+          default: active
+      type: object
+      required:
+      - f_imsi
+      - t_imsi
+      - imsi_slot
+      title: ImsiSlotCreate
+    ImsiSlotPatch:
+      properties:
+        f_imsi:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: F Imsi
+        t_imsi:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: T Imsi
+        pool_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Pool Id
+        ip_resolution:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ip Resolution
+        status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Description
+      type: object
+      title: ImsiSlotPatch
+    PoolCreate:
+      properties:
+        name:
+          type: string
+          title: Name
+        account_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Account Name
+        routing_domain:
+          type: string
+          title: Routing Domain
+          default: default
+        routing_domain_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Routing Domain Id
+        subnet:
+          type: string
+          title: Subnet
+        start_ip:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Start Ip
+        end_ip:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: End Ip
+      type: object
+      required:
+      - name
+      - subnet
+      title: PoolCreate
+    PoolPatch:
+      properties:
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+      type: object
+      title: PoolPatch
+    PoolSubnetCreate:
+      properties:
+        subnet:
+          type: string
+          title: Subnet
+        start_ip:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Start Ip
+        end_ip:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: End Ip
+      type: object
+      required:
+      - subnet
+      title: PoolSubnetCreate
+    ProfileCreate:
+      properties:
+        iccid:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Iccid
+        account_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Account Name
+        status:
+          type: string
+          title: Status
+          default: active
+        ip_resolution:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ip Resolution
+        imsis:
+          items:
+            $ref: '#/components/schemas/ImsiEntry'
+          type: array
+          title: Imsis
+          default: []
+        iccid_ips:
+          items:
+            $ref: '#/components/schemas/IccidIpEntry'
+          type: array
+          title: Iccid Ips
+          default: []
+        metadata:
+          anyOf:
+          - {}
+          - type: 'null'
+          title: Metadata
+      type: object
+      title: ProfileCreate
+    ProfilePatch:
+      properties:
+        iccid:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Iccid
+        account_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Account Name
+        status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+        ip_resolution:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ip Resolution
+        iccid_ips:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/IccidIpEntry'
+            type: array
+          - type: 'null'
+          title: Iccid Ips
+        metadata:
+          anyOf:
+          - {}
+          - type: 'null'
+          title: Metadata
+      type: object
+      title: ProfilePatch
+    RangeConfigCreate:
+      properties:
+        account_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Account Name
+        f_imsi:
+          type: string
+          title: F Imsi
+        t_imsi:
+          type: string
+          title: T Imsi
+        pool_id:
+          type: string
+          title: Pool Id
+        ip_resolution:
+          type: string
+          title: Ip Resolution
+          default: imsi
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Description
+        status:
+          type: string
+          title: Status
+          default: active
+        provisioning_mode:
+          type: string
+          title: Provisioning Mode
+          default: first_connect
+      type: object
+      required:
+      - f_imsi
+      - t_imsi
+      - pool_id
+      title: RangeConfigCreate
+    RangeConfigPatch:
+      properties:
+        pool_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Pool Id
+        ip_resolution:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ip Resolution
+        status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Description
+      type: object
+      title: RangeConfigPatch
+    RoutingDomainCreate:
+      properties:
+        name:
+          type: string
+          title: Name
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Description
+        allowed_prefixes:
+          items:
+            type: string
+          type: array
+          title: Allowed Prefixes
+          default: []
+      type: object
+      required:
+      - name
+      title: RoutingDomainCreate
+    RoutingDomainPatch:
+      properties:
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Description
+        allowed_prefixes:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Allowed Prefixes
+      type: object
+      title: RoutingDomainPatch
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+tags:
+- name: health
+  description: Liveness and DB readiness probes.
+- name: profiles
+  description: SIM profile CRUD, listing, export, and IP release.
+- name: imsis
+  description: IMSI operations on an existing SIM profile.
+- name: pools
+  description: IP pool and pool-subnet management.
+- name: routing-domains
+  description: Routing domain CRUD and CIDR suggestions.
+- name: range-configs
+  description: IMSI range configurations and per-APN pool overrides.
+- name: iccid-range-configs
+  description: Multi-IMSI SIM (ICCID range) configurations and IMSI slots.
+- name: first-connection
+  description: First-connection IP allocation (aaa-radius-server fallback).
+- name: bulk
+  description: Async bulk upsert / release-ips / delete-imsis jobs.

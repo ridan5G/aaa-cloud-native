@@ -48,6 +48,24 @@ AAA hot path — no latency SLA applies, but it must be correct and consistent.
 
 ---
 
+## OpenAPI Spec
+
+A static OpenAPI 3.1 document is committed at [`openapi.yaml`](openapi.yaml).
+It is the same schema served live at `/openapi.json` and rendered by `/docs`
+(Swagger UI) and `/redoc` when the service is running.
+
+To regenerate after API changes:
+
+```bash
+cd subscriber-profile-api
+pip install pyyaml          # one-time, dev-only (not in requirements.txt)
+python scripts/export_openapi.py
+```
+
+Use `--output PATH` to write elsewhere. The script never opens a DB connection.
+
+---
+
 ## Complete Endpoint Reference
 
 ### SIM Profiles
