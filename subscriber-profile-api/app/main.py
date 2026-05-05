@@ -48,9 +48,32 @@ async def lifespan(app: FastAPI):
     logger.info('"subscriber-profile-api stopped"')
 
 
+API_DESCRIPTION = """
+Provisioning REST API for the AAA cloud-native platform. Manages SIM profiles,
+IMSIs, IP pools, routing domains, and IMSI/ICCID range configurations, and
+exposes async bulk import/release/delete jobs. Used by operators, BSS/OSS
+systems, the management UI, and `aaa-radius-server` (first-connection
+fallback). Auth is OAuth 2.0 client_credentials Bearer JWT.
+""".strip()
+
+OPENAPI_TAGS = [
+    {"name": "health", "description": "Liveness and DB readiness probes."},
+    {"name": "profiles", "description": "SIM profile CRUD, listing, export, and IP release."},
+    {"name": "imsis", "description": "IMSI operations on an existing SIM profile."},
+    {"name": "pools", "description": "IP pool and pool-subnet management."},
+    {"name": "routing-domains", "description": "Routing domain CRUD and CIDR suggestions."},
+    {"name": "range-configs", "description": "IMSI range configurations and per-APN pool overrides."},
+    {"name": "iccid-range-configs", "description": "Multi-IMSI SIM (ICCID range) configurations and IMSI slots."},
+    {"name": "first-connection", "description": "First-connection IP allocation (aaa-radius-server fallback)."},
+    {"name": "bulk", "description": "Async bulk upsert / release-ips / delete-imsis jobs."},
+]
+
 app = FastAPI(
     title="subscriber-profile-api",
     version="1.0.0",
+    description=API_DESCRIPTION,
+    contact={"name": "AAA Platform Team"},
+    openapi_tags=OPENAPI_TAGS,
     lifespan=lifespan,
 )
 
