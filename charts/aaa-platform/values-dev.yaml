@@ -65,32 +65,30 @@ aaa-database:
 # ── AAA Lookup Service ────────────────────────────────────────────
 aaa-lookup-service:
   enabled: true
-  replicaCount: 1        # single-replica local dev
+  replicaCount: 1
   image:
     repository: aaa/aaa-lookup-service
     tag: "dev"
     pullPolicy: Never
   db:
     secretName: aaa-db-credentials
-    poolSize: 25          # at 600 RPS × 5ms/query = 3 needed; 25 gives headroom for bursts on a single replica
+    poolSize: 25          # was 8 — at 600 RPS × 5ms/query = 3 needed; 25 gives headroom for bursts
     timeoutSec: "2.0"     # slightly more generous under load
   jwt:
     skipVerify: "true"   # no JWT enforcement in dev
   provisioningUrl: "http://aaa-platform-subscriber-profile-api:8080"
-  tuning:
-    threadCount: 1       # pin one Drogon event loop per pod (was unset → 0 = host logical CPUs, ignores cgroup limit)
   autoscaling:
-    enabled: false       # fixed 1 replica in dev
+    enabled: false       # fixed 1 replica
   podDisruptionBudget:
     minAvailable: 0      # allow full eviction on single replica
   monitoring:
     enabled: true
   resources:
     requests:
-      cpu: "250m"        # was 500m — matches active CPU on the I/O-bound lookup path
+      cpu: "500m"
       memory: "128Mi"
     limits:
-      cpu: "500m"        # was 2 — 2× burst over request; one async event loop saturates well under 500m
+      cpu: "2"           # was 500m — Drogon is async/multi-threaded; needs headroom for 600 RPS
       memory: "256Mi"
 
 # ── Provisioning API ─────────────────────────────────────────────
@@ -166,7 +164,7 @@ aaa-management-ui:
 # ── RADIUS Server ────────────────────────────────────────────────
 aaa-radius-server:
   enabled: true
-  replicaCount: 1        # single-replica local dev
+  replicaCount: 1
   podDisruptionBudget:
     minAvailable: 0      # allow full eviction on single replica
   image:
@@ -177,9 +175,9 @@ aaa-radius-server:
     secretName: "aaa-radius-secret"   # created by: make radius-secret (called automatically by make deploy)
   lookupUrl: "http://aaa-platform-aaa-lookup-service:8081"
   # lookupUrlSecondary: ""   # set to secondary-region URL to enable failover
-  workerThreads: 16    # was 64 — at 600 RPS × 15ms lookup p99 ≈ 9 concurrent; 16 gives ~75% headroom and ~32 MB stacks fit cleanly in 128Mi
+  workerThreads: 64    # was 16 — at 600 RPS × 10ms expected RTT = 6 in-flight; 64 gives 10× headroom
   autoscaling:
-    enabled: false     # fixed 1 replica in dev
+    enabled: false
   monitoring:
     enabled: true
   service:
@@ -187,10 +185,10 @@ aaa-radius-server:
     nodePort: 31812     # UDP 1812 → localhost:31812 on Docker Desktop; from WSL: <windows-host-ip>:31812
   resources:
     requests:
-      cpu: "100m"        # was 250m — workers mostly block on lookup HTTP, very little active CPU per pod
+      cpu: "250m"
       memory: "64Mi"
     limits:
-      cpu: "250m"        # was 1 — 2.5× burst over request; matches actual concurrency need at 16 workers
+      cpu: "1"           # was 300m — 4 workers on 0.3 cores was the primary saturation point
       memory: "128Mi"
 
 # ── Prometheus + Grafana (kube-prometheus-stack) ──────────────────
@@ -275,22 +273,12 @@ kube-prometheus-stack:
     enabled: false        # Docker Desktop restricts /proc and /sys host paths
   kubeStateMetrics:
     enabled: true
-  prometheusOperator:
-    resources:
-      requests:
-        cpu: "25m"
-        memory: "64Mi"
-      limits:
-        cpu: "100m"
-        memory: "128Mi"
-  kube-state-metrics:
-    resources:
-      requests:
-        cpu: "25m"
-        memory: "64Mi"
-      limits:
-        cpu: "100m"
-        memory: "128Mi"
+
+# ── Alertmanager → Zabbix bridge ──────────────────────────────────────
+# Disabled in dev: alertmanager itself is off, and we don't want test
+# environments to chatter at a real Zabbix server.
+alertmanagerZabbixWebhook:
+  enabled: false
 
 # ── Prometheus Pushgateway ─────────────────────────────────────────
 prometheus-pushgateway:
