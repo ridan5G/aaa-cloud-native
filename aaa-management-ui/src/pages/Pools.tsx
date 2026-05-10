@@ -6,9 +6,9 @@ import { useToasts } from '../stores/toast'
 import type { Pool, PoolStats, RoutingDomain, SuggestCidrResult } from '../types'
 
 function poolBarColor(pct: number) {
-  if (pct > 90) return '#E53E3E'
-  if (pct > 75) return '#E07B39'
-  return '#F5A623'
+  if (pct > 90) return 'rgb(var(--color-status-terminated))'
+  if (pct > 75) return 'rgb(var(--color-primary-hover))'
+  return 'rgb(var(--color-primary))'
 }
 
 // ─── Domain Combo Box ─────────────────────────────────────────────────────────

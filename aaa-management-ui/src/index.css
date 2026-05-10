@@ -2,37 +2,173 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ─── Skin palettes ─────────────────────────────────────────────────────── */
+:root,
+:root[data-skin="dark"] {
+  --color-page:              10 14 26;
+  --color-surface:            17 23 41;
+  --color-surface-2:          26 33 54;
+  --color-border:             38 47 73;
+  --color-text:              237 242 247;
+  --color-text-muted:        136 146 176;
+  --color-primary:           245 166  35;
+  --color-primary-hover:     224 149  24;
+  --color-primary-soft:       60  40  12;
+  --color-accent:              0 194 255;
+  --color-sidebar-bg:          8  12  22;
+  --color-sidebar-text:      255 255 255;
+  --color-sidebar-muted:     136 146 176;
+  --color-sidebar-hover:      26  33  54;
+  --color-sidebar-active:    245 166  35;
+  --color-status-active:      56 161 105;
+  --color-status-suspended:  245 166  35;
+  --color-status-terminated: 229  62  62;
+  --color-status-running:     49 130 206;
+  --color-status-inactive:   160 174 192;
+}
+
+:root[data-skin="light"] {
+  --color-page:              255 255 255;
+  --color-surface:           255 255 255;
+  --color-surface-2:         247 248 252;
+  --color-border:            225 230 240;
+  --color-text:               30  41  75;
+  --color-text-muted:        109 122 153;
+  --color-primary:            75  85  99;  /* gray-600 */
+  --color-primary-hover:      55  65  81;  /* gray-700 */
+  --color-primary-soft:      243 244 246;  /* gray-100 */
+  --color-accent:             38  79 162;
+  --color-sidebar-bg:        247 249 252;
+  --color-sidebar-text:       30  41  75;
+  --color-sidebar-muted:     109 122 153;
+  --color-sidebar-hover:     233 238 246;
+  --color-sidebar-active:     75  85  99;  /* gray-600 */
+  --color-status-active:      56 161 105;
+  --color-status-suspended:  245 166  35;
+  --color-status-terminated: 229  62  62;
+  --color-status-running:     49 130 206;
+  --color-status-inactive:   160 174 192;
+}
+
+:root[data-skin="cmp"] {
+  --color-page:              244 246 249;
+  --color-surface:           255 255 255;
+  --color-surface-2:         244 246 249;
+  --color-border:            226 232 240;
+  --color-text:               17  24  39;
+  --color-text-muted:        107 114 128;
+  --color-primary:           245 166  35;
+  --color-primary-hover:     224 149  24;
+  --color-primary-soft:      254 243 220;
+  --color-accent:             49 130 206;
+  --color-sidebar-bg:         28  35  64;
+  --color-sidebar-text:      255 255 255;
+  --color-sidebar-muted:     136 146 176;
+  --color-sidebar-hover:      37  45  74;
+  --color-sidebar-active:    245 166  35;
+  --color-status-active:      56 161 105;
+  --color-status-suspended:  245 166  35;
+  --color-status-terminated: 229  62  62;
+  --color-status-running:     49 130 206;
+  --color-status-inactive:   160 174 192;
+}
+
 @layer base {
   * { box-sizing: border-box; }
   body {
     font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    @apply bg-page text-gray-900;
+    background-color: rgb(var(--color-page));
+    color: rgb(var(--color-text));
   }
 }
 
 @layer components {
   .btn-primary  { @apply px-4 py-2 bg-primary hover:bg-primary-hover text-white text-sm font-medium rounded-md transition-colors inline-flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed; }
   .btn-outline  { @apply px-4 py-2 border border-primary text-primary text-sm font-medium rounded-md hover:bg-primary-light transition-colors inline-flex items-center gap-1.5; }
-  .btn-ghost    { @apply px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-md transition-colors; }
+  .btn-ghost    { @apply px-3 py-1.5 text-sm rounded-md transition-colors; color: rgb(var(--color-text-muted)); }
+  .btn-ghost:hover { background-color: rgb(var(--color-surface-2)); color: rgb(var(--color-text)); }
   .btn-danger   { @apply px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-md transition-colors; }
-  .btn-icon     { @apply w-7 h-7 flex items-center justify-center rounded-md text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors; }
+  .btn-icon     { @apply w-7 h-7 flex items-center justify-center rounded-md transition-colors; color: rgb(var(--color-text-muted)); }
+  .btn-icon:hover { background-color: rgb(var(--color-surface-2)); color: rgb(var(--color-text)); }
 
-  .input  { @apply w-full px-3 py-2 text-sm border border-border rounded-md focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 bg-white; }
-  .select { @apply w-full px-3 py-2 text-sm border border-border rounded-md focus:outline-none focus:border-primary bg-white; }
-  .label  { @apply block text-xs font-medium text-gray-600 mb-1; }
+  .input  { @apply w-full px-3 py-2 text-sm border border-border rounded-md bg-surface focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20; color: rgb(var(--color-text)); }
+  .select { @apply w-full px-3 py-2 text-sm border border-border rounded-md bg-surface focus:outline-none focus:border-primary; color: rgb(var(--color-text)); }
+  .label  { @apply block text-xs font-medium mb-1; color: rgb(var(--color-text-muted)); }
 
-  .card        { @apply bg-white rounded-card shadow-card; }
-  .page-title  { @apply text-xl font-bold text-gray-900; }
+  .card        { @apply bg-surface rounded-card shadow-card; }
+  .page-title  { @apply text-xl font-bold; color: rgb(var(--color-text)); }
 
   /* Table */
-  .tbl-wrap  { @apply bg-white rounded-card shadow-card overflow-hidden; }
+  .tbl-wrap  { @apply bg-surface rounded-card shadow-card overflow-hidden; }
   .tbl       { @apply w-full text-sm; }
   .tbl thead { @apply bg-page border-b border-border; }
-  .tbl th    { @apply px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide; }
-  .tbl td    { @apply px-4 py-3 text-sm text-gray-900; }
-  .tbl tbody tr { @apply border-b border-border hover:bg-page transition-colors; }
+  .tbl th    { @apply px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide; color: rgb(var(--color-text-muted)); }
+  .tbl td    { @apply px-4 py-3 text-sm; color: rgb(var(--color-text)); }
+  .tbl tbody tr { @apply border-b border-border transition-colors; }
+  .tbl tbody tr:hover { background-color: rgb(var(--color-surface-2)); }
   .tbl tbody tr:last-child { @apply border-b-0; }
 
   /* Form field group */
   .field { @apply space-y-1; }
 }
+
+/* ─── light-skin-only knobs (matches image_default.png) ───────────────── */
+[data-skin="light"] .btn-primary,
+[data-skin="light"] .btn-outline {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+[data-skin="light"] .input,
+[data-skin="light"] .select {
+  border: 0;
+  border-bottom: 1px solid rgb(var(--color-border));
+  border-radius: 0;
+  padding-left: 0;
+  padding-right: 0;
+  background-color: transparent;
+}
+[data-skin="light"] .input:focus,
+[data-skin="light"] .select:focus {
+  border-bottom-color: rgb(var(--color-primary));
+  box-shadow: 0 1px 0 0 rgb(var(--color-primary));
+  --tw-ring-shadow: 0 0 #0000;
+}
+
+/* ─── dark-skin compatibility shim ──────────────────────────────────────── */
+/* Pages use Tailwind gray-/white utilities directly. Remap them under the
+   dark skin so we don't have to rewrite every page. light & cmp keep
+   Tailwind's defaults. */
+[data-skin="dark"] .bg-white          { background-color: rgb(var(--color-surface)); }
+[data-skin="dark"] .bg-gray-50        { background-color: rgb(var(--color-surface-2)); }
+[data-skin="dark"] .bg-gray-100       { background-color: rgb(var(--color-surface-2)); }
+[data-skin="dark"] .hover\:bg-gray-50:hover  { background-color: rgb(var(--color-surface-2)); }
+[data-skin="dark"] .hover\:bg-gray-100:hover { background-color: rgb(var(--color-surface-2)); }
+
+[data-skin="dark"] .text-gray-900     { color: rgb(var(--color-text)); }
+[data-skin="dark"] .text-gray-800     { color: rgb(var(--color-text)); }
+[data-skin="dark"] .text-gray-700     { color: rgb(var(--color-text)); }
+[data-skin="dark"] .text-gray-600     { color: rgb(var(--color-text-muted)); }
+[data-skin="dark"] .text-gray-500     { color: rgb(var(--color-text-muted)); }
+[data-skin="dark"] .text-gray-400     { color: rgb(var(--color-text-muted) / 0.85); }
+[data-skin="dark"] .text-gray-300     { color: rgb(var(--color-text-muted) / 0.55); }
+[data-skin="dark"] .hover\:text-gray-700:hover { color: rgb(var(--color-text)); }
+[data-skin="dark"] .hover\:text-gray-600:hover { color: rgb(var(--color-text)); }
+
+[data-skin="dark"] .border-gray-100   { border-color: rgb(var(--color-border)); }
+[data-skin="dark"] .border-gray-200   { border-color: rgb(var(--color-border)); }
+[data-skin="dark"] .border-gray-300   { border-color: rgb(var(--color-border)); }
+
+/* Tinted info backgrounds (red-50, blue-50, amber-50, green-50, purple-50)
+   are used for inline status callouts. On dark we want them readable but not
+   pure tailwind pastels. Slightly darken with /20 alpha overlay. */
+[data-skin="dark"] .bg-red-50    { background-color: rgb(229 62 62 / 0.15); }
+[data-skin="dark"] .bg-blue-50   { background-color: rgb(49 130 206 / 0.15); }
+[data-skin="dark"] .bg-amber-50  { background-color: rgb(245 166 35 / 0.15); }
+[data-skin="dark"] .bg-green-50  { background-color: rgb(56 161 105 / 0.15); }
+[data-skin="dark"] .bg-purple-50 { background-color: rgb(168 85 247 / 0.15); }
+[data-skin="dark"] .bg-red-50\/50    { background-color: rgb(229 62 62 / 0.10); }
+[data-skin="dark"] .bg-blue-50\/50   { background-color: rgb(49 130 206 / 0.10); }
+[data-skin="dark"] .bg-amber-50\/50  { background-color: rgb(245 166 35 / 0.10); }
+[data-skin="dark"] .bg-green-50\/50  { background-color: rgb(56 161 105 / 0.10); }
+[data-skin="dark"] .bg-purple-50\/50 { background-color: rgb(168 85 247 / 0.10); }

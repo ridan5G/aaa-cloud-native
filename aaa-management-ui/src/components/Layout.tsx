@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useToasts } from '../stores/toast'
+import { SKINS, SKIN_LABEL, getSkin, setSkin, type Skin } from '../skin'
 
 // ─── SVG Icons ───────────────────────────────────────────────────────────────
 function DashboardIcon({ c = 'w-4 h-4' }: { c?: string }) {
@@ -101,6 +102,16 @@ function HelpIcon() {
     </svg>
   )
 }
+function PaletteIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-4 h-4">
+      <path d="M10 2.5a7.5 7.5 0 100 15 1.5 1.5 0 001.5-1.5c0-.4-.15-.78-.44-1.06a1.5 1.5 0 011.06-2.56h1.13a4.25 4.25 0 004.25-4.25C17.5 4.95 14.14 2.5 10 2.5z" />
+      <circle cx="6" cy="9" r="0.9" fill="currentColor" />
+      <circle cx="9" cy="6" r="0.9" fill="currentColor" />
+      <circle cx="13" cy="7" r="0.9" fill="currentColor" />
+    </svg>
+  )
+}
 function HamburgerIcon() {
   return (
     <svg viewBox="0 0 18 14" fill="currentColor" className="w-4 h-4">
@@ -108,6 +119,26 @@ function HamburgerIcon() {
       <rect x="0" y="6"  width="18" height="2" rx="1" />
       <rect x="0" y="12" width="18" height="2" rx="1" />
     </svg>
+  )
+}
+
+// ─── Skin Picker ──────────────────────────────────────────────────────────────
+function SkinPicker() {
+  const current = getSkin()
+  return (
+    <label className="flex items-center gap-1.5 pl-2 pr-1 h-8 rounded-md hover:bg-surface2 transition-colors cursor-pointer text-[rgb(var(--color-text-muted))] hover:text-[rgb(var(--color-text))]">
+      <PaletteIcon />
+      <select
+        aria-label="UI skin"
+        value={current}
+        onChange={e => { setSkin(e.target.value as Skin); window.location.reload() }}
+        className="bg-transparent text-sm font-medium pr-1 focus:outline-none cursor-pointer text-[rgb(var(--color-text))]"
+      >
+        {SKINS.map(s => (
+          <option key={s} value={s} className="bg-surface text-[rgb(var(--color-text))]">{SKIN_LABEL[s]}</option>
+        ))}
+      </select>
+    </label>
   )
 }
 
@@ -120,16 +151,19 @@ function ToastContainer() {
       {toasts.map(t => (
         <div
           key={t.id}
-          className={`flex items-start gap-3 px-4 py-3 bg-white rounded-lg shadow-lg border-l-4 pointer-events-auto min-w-72 max-w-sm ${
+          className={`flex items-start gap-3 px-4 py-3 bg-surface rounded-lg shadow-lg border-l-4 pointer-events-auto min-w-72 max-w-sm ${
             t.type === 'success' ? 'border-green-500' :
             t.type === 'error'   ? 'border-red-500'   : 'border-primary'
           }`}
         >
-          <span className="text-sm shrink-0 mt-0.5 font-bold">
+          <span className="text-sm shrink-0 mt-0.5 font-bold text-[rgb(var(--color-text))]">
             {t.type === 'success' ? '✓' : t.type === 'error' ? '✕' : 'ℹ'}
           </span>
-          <p className="text-sm text-gray-700 flex-1">{t.message}</p>
-          <button onClick={() => dismiss(t.id)} className="shrink-0 text-gray-400 hover:text-gray-600 leading-none text-lg">×</button>
+          <p className="text-sm flex-1 text-[rgb(var(--color-text))]">{t.message}</p>
+          <button
+            onClick={() => dismiss(t.id)}
+            className="shrink-0 leading-none text-lg text-[rgb(var(--color-text-muted))] hover:text-[rgb(var(--color-text))]"
+          >×</button>
         </div>
       ))}
     </div>
@@ -212,30 +246,31 @@ export default function Layout() {
         {/* Main: top-bar + content */}
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           {/* Top bar */}
-          <header className="h-14 shrink-0 bg-white border-b border-border flex items-center px-6 gap-4">
+          <header className="h-14 shrink-0 bg-surface border-b border-border flex items-center px-6 gap-4">
             <div className="flex-1 max-w-xs">
               <label className="relative flex items-center">
                 <span className="absolute left-3 pointer-events-none"><SearchIcon /></span>
                 <input
                   type="text"
                   placeholder="Search SIM or ICCID…"
-                  className="w-full pl-9 pr-3 py-1.5 text-sm border border-border rounded-md bg-page focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  className="w-full pl-9 pr-3 py-1.5 text-sm border border-border rounded-md bg-page focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 text-[rgb(var(--color-text))] placeholder:text-[rgb(var(--color-text-muted))]"
                 />
               </label>
             </div>
             <div className="flex items-center gap-2 ml-auto">
-              <button className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100">
+              <SkinPicker />
+              <button className="w-8 h-8 flex items-center justify-center rounded-full text-[rgb(var(--color-text-muted))] hover:text-[rgb(var(--color-text))] hover:bg-surface2">
                 <BellIcon />
               </button>
-              <button className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100">
+              <button className="w-8 h-8 flex items-center justify-center rounded-full text-[rgb(var(--color-text-muted))] hover:text-[rgb(var(--color-text))] hover:bg-surface2">
                 <HelpIcon />
               </button>
               <div className="flex items-center gap-2 pl-3 border-l border-border cursor-pointer select-none">
                 <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary font-semibold text-sm shrink-0">
                   A
                 </div>
-                <span className="text-sm font-medium text-gray-700 hidden lg:block">Admin</span>
-                <svg viewBox="0 0 10 6" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-2.5 h-2.5 text-gray-400">
+                <span className="text-sm font-medium hidden lg:block text-[rgb(var(--color-text))]">Admin</span>
+                <svg viewBox="0 0 10 6" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-2.5 h-2.5 text-[rgb(var(--color-text-muted))]">
                   <path d="M1 1l4 4 4-4" />
                 </svg>
               </div>

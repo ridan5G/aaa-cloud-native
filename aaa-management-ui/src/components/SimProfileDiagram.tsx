@@ -18,7 +18,7 @@ function trunc(s: string | null | undefined, head = 6, tail = 3): string {
 type NodeColor = 'navy' | 'blue' | 'amber' | 'green' | 'purple'
 
 const NODE_STYLE: Record<NodeColor, string> = {
-  navy:   'bg-[#1C2340] text-white border-[#1C2340]',
+  navy:   'bg-sidebar-bg text-sidebar-text border-sidebar-bg',
   blue:   'bg-blue-50 text-blue-700 border-blue-300',
   amber:  'bg-amber-50 text-amber-700 border-amber-300',
   green:  'bg-green-50 text-green-700 border-green-300',

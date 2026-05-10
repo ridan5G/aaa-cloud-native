@@ -7,9 +7,9 @@ import type { BulkJob } from '../types'
 interface PoolStat { pool_id: string; name: string; total: number; allocated: number; available: number }
 
 function poolBarColor(pct: number) {
-  if (pct > 90) return '#E53E3E'
-  if (pct > 75) return '#E07B39'
-  return '#F5A623'
+  if (pct > 90) return 'rgb(var(--color-status-terminated))'
+  if (pct > 75) return 'rgb(var(--color-primary-hover))'
+  return 'rgb(var(--color-primary))'
 }
 
 function StatCard({ label, value, sub, icon }: { label: string; value: string; sub?: string; icon: React.ReactNode }) {

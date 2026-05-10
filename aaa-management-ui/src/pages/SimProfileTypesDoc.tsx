@@ -43,7 +43,7 @@ function ComparisonTable() {
 type TableAccent = 'navy' | 'blue' | 'green' | 'amber' | 'purple'
 
 const TABLE_ACCENT: Record<TableAccent, string> = {
-  navy:   'border-t-[#1C2340] bg-[#1C2340]/5',
+  navy:   'border-t-sidebar-bg bg-sidebar-bg/5',
   blue:   'border-t-blue-400 bg-blue-50/50',
   green:  'border-t-green-400 bg-green-50/50',
   amber:  'border-t-amber-400 bg-amber-50/50',

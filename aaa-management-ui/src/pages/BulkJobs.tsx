@@ -84,7 +84,7 @@ function JobDrawer({ job, onClose }: { job: BulkJob; onClose: () => void }) {
                 className="h-full rounded-full transition-all"
                 style={{
                   width: `${pct}%`,
-                  backgroundColor: job.status === 'failed' ? '#E53E3E' : '#F5A623',
+                  backgroundColor: job.status === 'failed' ? 'rgb(var(--color-status-terminated))' : 'rgb(var(--color-primary))',
                 }}
               />
             </div>

@@ -9,6 +9,21 @@
       It sets window.APP_CONFIG = { apiBaseUrl, oidcAuthority, oidcClientId }.
       Falls back to defaults when running locally via Vite.
     -->
+    <script>
+      // Apply UI skin before paint to avoid a flash of the wrong skin.
+      // Mirrors src/skin.ts. Keys: ?skin=dark|light|cmp -> localStorage 'aaa.skin'.
+      (function () {
+        try {
+          var SKINS = ['dark', 'light', 'cmp'];
+          var url = new URLSearchParams(location.search).get('skin');
+          var key = 'aaa.skin';
+          var skin;
+          if (url && SKINS.indexOf(url) >= 0) { localStorage.setItem(key, url); skin = url; }
+          else { var s = localStorage.getItem(key); skin = SKINS.indexOf(s) >= 0 ? s : 'dark'; }
+          document.documentElement.setAttribute('data-skin', skin);
+        } catch (e) { document.documentElement.setAttribute('data-skin', 'dark'); }
+      })();
+    </script>
     <script src="/config.js" onerror="console.warn('config.js not found — using Vite env defaults')"></script>
   </head>
   <body>
